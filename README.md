@@ -117,4 +117,3 @@ Paul Nankervis / Hunter Goatley / crwolff — original C implementation and
 subsequent forks. See the C reference at
 [https://github.com/DaveShepperd/ods2](https://github.com/DaveShepperd/ods2)
 which is derived from several predecessor versions of the original forks.
-
