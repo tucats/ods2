@@ -1,14 +1,13 @@
 package volume
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/tucats/ods2/ondisk"
+)
 
 func TestMountSingleDevice(t *testing.T) {
-	c := newMemContainer(10)
-	c.putBlock(1, buildHomeBlockBytes(t, homeBlockFixture{
-		homeLBN:     1,
-		rvn:         1,
-		clusterSize: 4,
-	}))
+	c := newMountableContainer(t, 20, homeBlockFixture{rvn: 1, clusterSize: 4})
 
 	vol, err := Mount(c)
 	if err != nil {
@@ -24,14 +23,18 @@ func TestMountSingleDevice(t *testing.T) {
 	if vol.Devices[0].Home.ClusterSize != 4 {
 		t.Errorf("Devices[0].Home.ClusterSize = %d, want 4", vol.Devices[0].Home.ClusterSize)
 	}
+	if vol.Devices[0].IndexFile == nil {
+		t.Error("Devices[0].IndexFile is nil, want a bootstrapped index file")
+	}
 }
 
 func TestMountHomeBlockNotAtFirstBlock(t *testing.T) {
 	// The home block doesn't have to be at LBN 1 — Mount must keep
 	// scanning until it finds one that is both well-formed and
 	// self-consistent (HomeLBN equals the LBN it was read from).
-	c := newMemContainer(10)
+	c := newMemContainer(20)
 	c.putBlock(5, buildHomeBlockBytes(t, homeBlockFixture{homeLBN: 5, rvn: 1}))
+	c.putBlock(0, buildFileHeaderBytes(t, fileHeaderFixture{fid: ondisk.IndexFileFid})) // idxBitmapLBN=idxBitmapSize=0
 
 	vol, err := Mount(c)
 	if err != nil {
@@ -72,11 +75,8 @@ func TestMountRequiresAtLeastOneContainer(t *testing.T) {
 }
 
 func TestMountVolumeSet(t *testing.T) {
-	dev1 := newMemContainer(10)
-	dev1.putBlock(1, buildHomeBlockBytes(t, homeBlockFixture{homeLBN: 1, rvn: 1}))
-
-	dev2 := newMemContainer(10)
-	dev2.putBlock(1, buildHomeBlockBytes(t, homeBlockFixture{homeLBN: 1, rvn: 2}))
+	dev1 := newMountableContainer(t, 20, homeBlockFixture{rvn: 1})
+	dev2 := newMountableContainer(t, 20, homeBlockFixture{rvn: 2})
 
 	vol, err := Mount(dev1, dev2)
 	if err != nil {
@@ -95,11 +95,8 @@ func TestMountRejectsVolumeSetOutOfOrder(t *testing.T) {
 	// — as if the caller passed the volume set's second member first, or
 	// mixed up two unrelated single-disk volumes — should be rejected
 	// rather than silently mounted with an inconsistent Rvn assignment.
-	dev1 := newMemContainer(10)
-	dev1.putBlock(1, buildHomeBlockBytes(t, homeBlockFixture{homeLBN: 1, rvn: 1}))
-
-	dev2 := newMemContainer(10)
-	dev2.putBlock(1, buildHomeBlockBytes(t, homeBlockFixture{homeLBN: 1, rvn: 1}))
+	dev1 := newMountableContainer(t, 20, homeBlockFixture{rvn: 1})
+	dev2 := newMountableContainer(t, 20, homeBlockFixture{rvn: 1})
 
 	if _, err := Mount(dev1, dev2); err == nil {
 		t.Fatal("Mount with an out-of-order volume set: want error, got nil")

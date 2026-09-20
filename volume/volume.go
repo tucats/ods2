@@ -25,6 +25,13 @@ type Device struct {
 	// within the volume set. An ordinary single-disk volume's one Device
 	// has Rvn 1.
 	Rvn uint8
+
+	// IndexFile is this device's own index file, INDEXF.SYS — the file
+	// whose data (a sequence of file headers, one per file number) is
+	// consulted to locate every other file's header. Mount bootstraps it
+	// once per device (see mountDevice); every subsequent file lookup on
+	// this device goes through it.
+	IndexFile *File
 }
 
 // Volume is a mounted ODS-2 volume, spanning one or more member Devices.
@@ -73,14 +80,97 @@ func Mount(containers ...diskimage.Container) (*Volume, error) {
 			}
 		}
 
-		vol.Devices = append(vol.Devices, &Device{
+		dev := &Device{
 			Container: c,
 			Home:      home,
 			Rvn:       rvn,
-		})
+		}
+
+		if err := bootstrapIndexFile(dev); err != nil {
+			return nil, fmt.Errorf("volume: bootstrapping index file for device %d: %w", i, err)
+		}
+
+		vol.Devices = append(vol.Devices, dev)
 	}
 
 	return vol, nil
+}
+
+// bootstrapIndexFile reads and validates a device's own index file header
+// and resolves its complete Extents, storing the result on dev.IndexFile.
+//
+// Every other file's header is located by treating INDEXF.SYS as an
+// ordinary file and consulting ITS retrieval pointers — but that requires
+// already having INDEXF.SYS's own header and retrieval pointers in hand,
+// which obviously can't be obtained by looking them up in INDEXF.SYS
+// (there is nothing else to consult yet). The on-disk format breaks this
+// chicken-and-egg problem with a guarantee: INDEXF.SYS's own header is
+// always located at a fixed, directly-computable absolute logical block,
+// immediately following the volume's index bitmap (the region home block
+// fields IndexBitmapLBN/IndexBitmapSize describe). Reading that one block
+// directly — with no retrieval-pointer indirection at all — is enough to
+// get started; from there, buildFile can resolve the rest of INDEXF.SYS's
+// own extents (and any further file's header) the ordinary way.
+func bootstrapIndexFile(dev *Device) error {
+	lbn := dev.Home.IndexBitmapLBN + uint32(dev.Home.IndexBitmapSize)
+
+	buf := make([]byte, ondisk.BlockSize)
+	if err := dev.Container.ReadBlock(lbn, buf); err != nil {
+		return fmt.Errorf("reading index file header at LBN %d: %w", lbn, err)
+	}
+
+	header, err := ondisk.DecodeFileHeader(buf)
+	if err != nil {
+		return fmt.Errorf("decoding index file header at LBN %d: %w", lbn, err)
+	}
+	if header.Fid.Number() != ondisk.IndexFileFid.Number() || header.Fid.Seq != ondisk.IndexFileFid.Seq {
+		return fmt.Errorf("index file header at LBN %d has unexpected file ID %v", lbn, header.Fid)
+	}
+
+	indexFile, err := buildFile(dev, header)
+	if err != nil {
+		return fmt.Errorf("resolving index file's own data extents: %w", err)
+	}
+
+	dev.IndexFile = indexFile
+	return nil
+}
+
+// deviceByRvn returns the mounted Device with the given relative volume
+// number. Rvn 0 is treated the same as Rvn 1: several on-disk fields
+// (directory backlinks, for instance) conventionally leave a reference's
+// relative volume number as 0 to mean "the volume's first member", rather
+// than always writing 1 explicitly.
+func (vol *Volume) deviceByRvn(rvn uint8) (*Device, error) {
+	target := rvn
+	if target == 0 {
+		target = 1
+	}
+	for _, d := range vol.Devices {
+		if d.Rvn == target {
+			return d, nil
+		}
+	}
+	return nil, fmt.Errorf("volume: no device with relative volume number %d is mounted", target)
+}
+
+// OpenFID opens the file identified by fid.
+func (vol *Volume) OpenFID(fid ondisk.Fid) (*File, error) {
+	dev, err := vol.deviceByRvn(fid.Rvn)
+	if err != nil {
+		return nil, fmt.Errorf("volume: opening file %v: %w", fid, err)
+	}
+
+	header, err := readFileHeaderViaIndex(dev, dev.IndexFile.Extents, fid)
+	if err != nil {
+		return nil, fmt.Errorf("volume: opening file %v: %w", fid, err)
+	}
+
+	f, err := buildFile(dev, header)
+	if err != nil {
+		return nil, fmt.Errorf("volume: opening file %v: %w", fid, err)
+	}
+	return f, nil
 }
 
 // findHomeBlock searches a container's first homeBlockScanLimit logical
