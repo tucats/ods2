@@ -104,6 +104,18 @@ func (r *Reader) Next() ([]byte, error) {
 }
 
 func (r *Reader) nextFixed() ([]byte, error) {
+	if r.fixedSize <= 0 {
+		// A zero (or nonsensical negative) fixed record size can never
+		// be satisfied by a real record, but blockStream.ReadFull(0)
+		// trivially "succeeds" with an empty read every time — with no
+		// way to ever detect end of file, that would make Next() loop
+		// forever producing empty records instead of terminating. This
+		// happens in practice for a file whose header was never fully
+		// populated (RecordAttributes.MaxRecordSize left at its zero
+		// value), which in turn means it has no data to read anyway.
+		return nil, io.EOF
+	}
+
 	data, err := r.stream.ReadFull(r.fixedSize)
 	if err != nil {
 		if err == io.EOF {

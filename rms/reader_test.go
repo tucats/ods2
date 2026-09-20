@@ -53,6 +53,28 @@ func TestReaderFixed(t *testing.T) {
 	}
 }
 
+func TestReaderFixedZeroSizeDoesNotLoopForever(t *testing.T) {
+	// A file whose header was never fully populated (MaxRecordSize left
+	// at its zero value) must not cause Next() to spin forever: reading
+	// zero bytes at a time can never naturally reach end of file, since
+	// blockStream.ReadFull(0) trivially "succeeds" on every call. This
+	// test has an implicit timeout via `go test`'s own test timeout —
+	// if the fix regresses, this test hangs rather than failing cleanly.
+	f := newTestFile(t, odstest.FileHeaderFixture{
+		Format: ondisk.RecordFormatFixed,
+		// MaxRecordSize, EndOfFileBlock, FirstFreeByte all left at 0.
+	}, nil)
+
+	r, err := NewReader(f)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	if _, err := r.Next(); err != io.EOF {
+		t.Fatalf("Next() with a zero fixed record size: err = %v, want io.EOF", err)
+	}
+}
+
 func TestReaderFixedTruncated(t *testing.T) {
 	// 4-byte fixed records, but only 6 bytes of data: one whole record
 	// plus 2 dangling bytes of a second, incomplete one.
