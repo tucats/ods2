@@ -57,20 +57,25 @@ func NewReader(f *volume.File) (*Reader, error) {
 	}
 
 	return &Reader{
-		stream:    newBlockStream(f, fileByteLength(attr)),
+		stream:    newBlockStream(f, FileByteLength(attr)),
 		format:    attr.Format,
 		fixedSize: int(attr.MaxRecordSize),
 	}, nil
 }
 
-// fileByteLength computes a file's exact valid length in bytes from its
+// FileByteLength computes a file's exact valid length in bytes from its
 // record attributes. EndOfFileBlock is the (1-based) virtual block number
 // of the last block containing real data, and FirstFreeByte is how far
 // into that block the real data extends; a file with EndOfFileBlock 0 has
 // no data at all. This is generally shorter than the file's full
-// allocated size in whole blocks (File.Blocks()), since the last
+// allocated size in whole blocks (volume.File.Blocks()), since the last
 // allocated block is typically only partly used.
-func fileByteLength(attr ondisk.RecAttr) int64 {
+//
+// Exported for callers that need a file's exact byte length without
+// going through per-format record parsing at all — a raw/binary copy
+// mode, for instance, which reads a file's bytes directly via
+// volume.File.ReadBlock rather than via this package's Reader.
+func FileByteLength(attr ondisk.RecAttr) int64 {
 	if attr.EndOfFileBlock == 0 {
 		return 0
 	}
