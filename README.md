@@ -115,4 +115,6 @@ ODS-5 support, raw physical device mounting.
 
 Paul Nankervis / Hunter Goatley / crwolff — original C implementation and
 subsequent forks. See the C reference at
-[github.com/tucats/ods2](https://github.com/tucats/ods2) (C).
+[https://github.com/DaveShepperd/ods2](https://github.com/DaveShepperd/ods2)
+which is derived from several predecessor versions of the original forks.
+
