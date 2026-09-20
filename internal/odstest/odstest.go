@@ -151,6 +151,18 @@ type FileHeaderFixture struct {
 	// that needs to set it to match how much data MapBytes describes.
 	HighestBlock uint32
 
+	// The remaining fields become the rest of RecordAttributes, needed by
+	// package rms's tests to control a file's record format: Format is
+	// the record format (Fixed/Variable/VFC/Stream*); EndOfFileBlock and
+	// FirstFreeByte together give the file's exact valid length in bytes
+	// (see ondisk.RecAttr's documentation); MaxRecordSize matters for
+	// RecordFormatFixed; VfcSize matters for RecordFormatVFC.
+	Format         ondisk.RecordFormat
+	EndOfFileBlock uint32
+	FirstFreeByte  uint16
+	MaxRecordSize  uint16
+	VfcSize        uint8
+
 	// MapOffsetWords/MapBytes place a retrieval-pointer map area (as raw,
 	// already-encoded bytes -- see EncodeExtentFormat2) at a word offset
 	// within the header. Leave both zero for a header with no data
@@ -210,7 +222,19 @@ func BuildFileHeaderBytes(t testing.TB, f FileHeaderFixture) []byte {
 
 	binary.LittleEndian.PutUint32(b[fhOffFileChar:], f.FileChar)
 	binary.LittleEndian.PutUint32(b[fhOffHighwater:], f.HighWaterMark)
+
+	// The RecAttr sub-structure begins at fhOffRecAttr; offsets below are
+	// relative to it (see ondisk.RecAttr's own field-by-field byte
+	// layout, which this mirrors): byte 0 is Format, bytes 4-7 are
+	// HighestBlock (swapped-longword), bytes 8-11 are EndOfFileBlock
+	// (also swapped-longword), bytes 12-13 are FirstFreeByte, byte 15 is
+	// VfcSize, and bytes 16-17 are MaxRecordSize.
+	b[fhOffRecAttr] = byte(f.Format)
 	putSwappedLongword(b[fhOffRecAttr+4:], f.HighestBlock)
+	putSwappedLongword(b[fhOffRecAttr+8:], f.EndOfFileBlock)
+	binary.LittleEndian.PutUint16(b[fhOffRecAttr+12:], f.FirstFreeByte)
+	b[fhOffRecAttr+15] = f.VfcSize
+	binary.LittleEndian.PutUint16(b[fhOffRecAttr+16:], f.MaxRecordSize)
 
 	if f.MapBytes != nil {
 		start := int(f.MapOffsetWords) * 2
