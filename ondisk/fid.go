@@ -37,6 +37,14 @@ type Fid struct {
 // number of whichever disk they're bootstrapping.)
 var IndexFileFid = Fid{Num: 1, Seq: 1}
 
+// MasterFileDirectoryFid is the fixed file ID of the volume's master file
+// directory, conventionally written "[000000]" — the top-level directory
+// every other directory on the volume nests under. Like IndexFileFid,
+// every ODS-2 volume dedicates the same reserved header slot (file number
+// 4) to it, so a lookup starting from the root of a volume's directory
+// tree can use this constant directly rather than needing to be told it.
+var MasterFileDirectoryFid = Fid{Num: 4, Seq: 4}
+
 // Number combines Num and Nmx into the full file number: Nmx supplies the
 // high-order bits for volumes large enough to need file numbers beyond
 // 65535, the range a plain 16-bit Num can express on its own.

@@ -25,6 +25,12 @@ type Spec struct {
 	// cases are told apart while parsing).
 	Dirs []string
 
+	// Recursive is true when the directory spec ended in VMS's "..."
+	// wildcard, e.g. "[FOO...]" or "[-.SYS*...]" — meaning "Dirs, and
+	// every subdirectory beneath it, to any depth". It has no effect on
+	// its own; it's Glob's wildcard expansion that acts on it.
+	Recursive bool
+
 	Name string
 	Type string
 

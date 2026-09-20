@@ -165,6 +165,61 @@ func TestParseInvalidRelativeDirectorySyntax(t *testing.T) {
 	}
 }
 
+func TestParseRecursiveAbsolute(t *testing.T) {
+	got, err := Parse("[FOO...]BAR.TXT", Spec{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !got.Recursive {
+		t.Error("Recursive = false, want true")
+	}
+	if !reflect.DeepEqual(got.Dirs, []string{"FOO"}) {
+		t.Errorf("Dirs = %v, want [FOO]", got.Dirs)
+	}
+}
+
+func TestParseRecursiveRelative(t *testing.T) {
+	// The sample from the reference project's own usage docs:
+	// "dir [-.sys*...].%"
+	def := Spec{Dirs: []string{"A", "B"}}
+	got, err := Parse("[-.SYS*...]BAR.TXT", def)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !got.Recursive {
+		t.Error("Recursive = false, want true")
+	}
+	if !reflect.DeepEqual(got.Dirs, []string{"A", "SYS*"}) {
+		t.Errorf("Dirs = %v, want [A SYS*]", got.Dirs)
+	}
+}
+
+func TestParseRecursiveBareDots(t *testing.T) {
+	// "[...]" alone means "the default directory and everything beneath
+	// it", not "the root and everything beneath it".
+	def := Spec{Dirs: []string{"A", "B"}}
+	got, err := Parse("[...]BAR.TXT", def)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !got.Recursive {
+		t.Error("Recursive = false, want true")
+	}
+	if !reflect.DeepEqual(got.Dirs, []string{"A", "B"}) {
+		t.Errorf("Dirs = %v, want [A B] (inherited from the default)", got.Dirs)
+	}
+}
+
+func TestParseNonRecursiveDefaultsFalse(t *testing.T) {
+	got, err := Parse("[FOO]BAR.TXT", Spec{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got.Recursive {
+		t.Error("Recursive = true, want false")
+	}
+}
+
 func TestParseDeviceOnly(t *testing.T) {
 	def := Spec{Dirs: []string{"A"}, Name: "OLD", Type: "OLD", Version: "1"}
 	got, err := Parse("DUB1:", def)

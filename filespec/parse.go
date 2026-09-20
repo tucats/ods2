@@ -64,11 +64,12 @@ func Parse(raw string, def Spec) (Spec, error) {
 		// does above.
 		spec.Dirs = def.Dirs
 	} else {
-		dirs, err := resolveDirectory(dirText, def.Dirs)
+		dirs, recursive, err := resolveDirectory(dirText, def.Dirs)
 		if err != nil {
 			return Spec{}, err
 		}
 		spec.Dirs = dirs
+		spec.Recursive = recursive
 	}
 
 	return spec, nil
@@ -137,15 +138,33 @@ func splitNameTypeVersion(rest string) (name, typ, version string) {
 // resolveDirectory interprets a directory spec's text (the part between
 // the brackets) against a default directory path, applying VMS's
 // relative-directory rules (see Parse's documentation) when dirText
-// starts with '.' or '-'.
-func resolveDirectory(dirText string, defDirs []string) ([]string, error) {
-	if dirText == "" || dirText == "000000" {
-		return nil, nil
+// starts with '.' or '-', and recognizing a trailing "..." (VMS's
+// recursive-descent wildcard, e.g. "[FOO...]" or "[-.SYS*...]") regardless
+// of which other form the rest of the text takes.
+func resolveDirectory(dirText string, defDirs []string) (dirs []string, recursive bool, err error) {
+	recursive = strings.HasSuffix(dirText, "...")
+	if recursive {
+		dirText = dirText[:len(dirText)-3]
+	}
+
+	if dirText == "" {
+		if recursive {
+			// "[...]" on its own means "the default directory and
+			// everything beneath it", not "the root and everything
+			// beneath it" — so, unlike a truly empty/unwritten
+			// directory spec, this inherits def's directory rather than
+			// resetting to the master file directory.
+			return defDirs, true, nil
+		}
+		return nil, false, nil
+	}
+	if dirText == "000000" {
+		return nil, recursive, nil
 	}
 
 	if dirText[0] != '.' && dirText[0] != '-' {
 		// An absolute path: replaces the default directory entirely.
-		return strings.Split(dirText, "."), nil
+		return strings.Split(dirText, "."), recursive, nil
 	}
 
 	ups := 0
@@ -155,7 +174,7 @@ func resolveDirectory(dirText string, defDirs []string) ([]string, error) {
 		i++
 	}
 	if ups > len(defDirs) {
-		return nil, fmt.Errorf("filespec: directory spec %q goes above the master file directory", dirText)
+		return nil, false, fmt.Errorf("filespec: directory spec %q goes above the master file directory", dirText)
 	}
 	base := append([]string{}, defDirs[:len(defDirs)-ups]...)
 
@@ -163,11 +182,11 @@ func resolveDirectory(dirText string, defDirs []string) ([]string, error) {
 	switch {
 	case remainder == "":
 		// Just "-", "--", etc.: move up and stop there.
-		return base, nil
+		return base, recursive, nil
 	case remainder[0] == '.' && len(remainder) > 1:
 		// "-.BAR" or ".BAR": move up (0 or more levels), then descend.
-		return append(base, strings.Split(remainder[1:], ".")...), nil
+		return append(base, strings.Split(remainder[1:], ".")...), recursive, nil
 	default:
-		return nil, fmt.Errorf("filespec: invalid directory spec %q", dirText)
+		return nil, false, fmt.Errorf("filespec: invalid directory spec %q", dirText)
 	}
 }
