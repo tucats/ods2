@@ -125,13 +125,20 @@ type fileHeaderFixture struct {
 	extensionFid ondisk.Fid
 
 	// identOffset must be > 39 for File.ReadBlock to honor highWaterMark
-	// at all (see ondisk.FileHeader.IdentOffset's documentation); tests
-	// that don't care about high-water behavior can leave this 0, in
-	// which case buildFileHeaderBytes fills in 40.
+	// at all (see ondisk.FileHeader.IdentOffset's documentation); leave
+	// this 0 (the default) for a fixture that doesn't care about
+	// high-water behavior, which disables the check entirely.
 	identOffset uint8
 
 	fileChar      uint32
 	highWaterMark uint32
+
+	// highestBlock becomes RecordAttributes.HighestBlock, i.e. File.
+	// Blocks() — the file's length in virtual blocks. Directory.List
+	// relies on this to know how many blocks to read, so any fixture
+	// representing a directory (or otherwise exercising Blocks()) needs
+	// to set it to match how much data mapBytes actually describes.
+	highestBlock uint32
 
 	// mapOffsetWords/mapBytes place a retrieval-pointer map area (as
 	// raw, already-encoded bytes — see encodeExtentFormat2) at a word
@@ -202,6 +209,11 @@ func buildFileHeaderBytes(t *testing.T, f fileHeaderFixture) []byte {
 	binary.LittleEndian.PutUint32(b[testFhOffFileChar:], f.fileChar)
 	binary.LittleEndian.PutUint32(b[testFhOffHighwater:], f.highWaterMark)
 
+	// RecordAttributes.HighestBlock lives at byte offset 4 within the
+	// embedded RecAttr (itself at testFhOffRecAttr), swapped-longword
+	// encoded — see putSwappedLongword.
+	putSwappedLongword(b[testFhOffRecAttr+4:], f.highestBlock)
+
 	if f.mapBytes != nil {
 		start := int(f.mapOffsetWords) * 2
 		copy(b[start:start+len(f.mapBytes)], f.mapBytes)
@@ -234,4 +246,48 @@ func newMountableContainer(t *testing.T, numBlocks int, home homeBlockFixture) *
 	}))
 
 	return c
+}
+
+// Sizes of the two fixed-format pieces of a directory record, matching
+// ondisk's own (private) dirRecHeaderSize/dirEntSize constants — see that
+// package's directory.go for the full explanation of the on-disk layout
+// this reproduces.
+const (
+	testDirRecHeaderSize = 6
+	testDirEntSize       = 8
+)
+
+// buildDirRecordBytes assembles one directory name record (header, name
+// text, padding, and version entries), the same on-disk shape
+// ondisk.DecodeDirectoryBlock expects to parse.
+func buildDirRecordBytes(name string, versions []uint16, fids []ondisk.Fid) []byte {
+	nameBytes := []byte(name)
+	paddedNameLen := (len(nameBytes) + 1) &^ 1 // round up to even, same as ondisk's roundUpToEven
+	entriesStart := testDirRecHeaderSize + paddedNameLen
+	totalLen := entriesStart + len(versions)*testDirEntSize
+
+	b := make([]byte, totalLen)
+	binary.LittleEndian.PutUint16(b[0:2], uint16(totalLen-2)) // dir$size = total record length - 2
+	b[5] = byte(len(nameBytes))                               // dir$namecount
+	copy(b[testDirRecHeaderSize:testDirRecHeaderSize+len(nameBytes)], nameBytes)
+
+	for i, v := range versions {
+		off := entriesStart + i*testDirEntSize
+		binary.LittleEndian.PutUint16(b[off:off+2], v)
+		putFidAt(b, off+2, fids[i])
+	}
+	return b
+}
+
+// buildDirBlock assembles a full 512-byte directory data block out of the
+// given records, followed by the 0xFFFF end-of-data sentinel.
+func buildDirBlock(records ...[]byte) []byte {
+	block := make([]byte, ondisk.BlockSize)
+	offset := 0
+	for _, r := range records {
+		copy(block[offset:], r)
+		offset += len(r)
+	}
+	binary.LittleEndian.PutUint16(block[offset:offset+2], 0xFFFF)
+	return block
 }
