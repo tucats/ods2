@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/tucats/ods2/internal/odstest"
 	"github.com/tucats/ods2/ondisk"
 )
 
@@ -11,7 +12,7 @@ func TestDirectoryRejectsNonDirectoryFile(t *testing.T) {
 	vol, c := newTestVolume(t)
 
 	fid := ondisk.Fid{Num: 30, Seq: 1}
-	c.putBlock(fileHeaderLBN(fid.Num), buildFileHeaderBytes(t, fileHeaderFixture{fid: fid}))
+	c.PutBlock(fileHeaderLBN(fid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{Fid: fid}))
 
 	f, err := vol.OpenFID(fid)
 	if err != nil {
@@ -29,19 +30,19 @@ func TestDirectoryListAndLookup(t *testing.T) {
 	readmeFid2 := ondisk.Fid{Num: 40, Seq: 2}
 	dataFid := ondisk.Fid{Num: 41, Seq: 1}
 
-	block := buildDirBlock(
-		buildDirRecordBytes("README.TXT", []uint16{1, 2}, []ondisk.Fid{readmeFid1, readmeFid2}),
-		buildDirRecordBytes("DATA.DAT", []uint16{1}, []ondisk.Fid{dataFid}),
+	block := odstest.BuildDirBlock(
+		odstest.BuildDirRecordBytes("README.TXT", []uint16{1, 2}, []ondisk.Fid{readmeFid1, readmeFid2}),
+		odstest.BuildDirRecordBytes("DATA.DAT", []uint16{1}, []ondisk.Fid{dataFid}),
 	)
-	c.putBlock(260, block)
+	c.PutBlock(260, block)
 
 	dirFid := ondisk.Fid{Num: 31, Seq: 1}
-	c.putBlock(fileHeaderLBN(dirFid.Num), buildFileHeaderBytes(t, fileHeaderFixture{
-		fid:            dirFid,
-		fileChar:       ondisk.FchDirectory,
-		highestBlock:   1,
-		mapOffsetWords: 55,
-		mapBytes:       encodeExtentFormat2(1, 260),
+	c.PutBlock(fileHeaderLBN(dirFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:            dirFid,
+		FileChar:       ondisk.FchDirectory,
+		HighestBlock:   1,
+		MapOffsetWords: 55,
+		MapBytes:       odstest.EncodeExtentFormat2(1, 260),
 	}))
 
 	dir, err := vol.OpenDirectory(dirFid)

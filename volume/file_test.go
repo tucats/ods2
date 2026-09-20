@@ -4,21 +4,22 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/tucats/ods2/internal/odstest"
 	"github.com/tucats/ods2/ondisk"
 )
 
-// testVolumeLayout is a small, consistent set of numbers used across this
-// file's tests to lay out a synthetic volume:
+// This file's tests share a small, consistent layout for a synthetic
+// volume:
 //
-//	LBN 1              home block
-//	LBN indexBitmapLBN  (=5) start of the (empty, for these tests) index bitmap
-//	LBN 8               INDEXF.SYS's own header (indexBitmapLBN + indexBitmapSize)
-//	LBN 5..             the file header area, one 512-byte slot per file
-//	                    number, addressed as file N's header living at
-//	                    LBN 5 + (N - 1) -- see the comment on
-//	                    readFileHeaderViaIndex for why this arithmetic
-//	                    lines up with the bootstrap LBN above when N=1.
-//	LBN 100+            a data area used by individual test files
+//	LBN 1                    home block
+//	LBN testIndexBitmapLBN   (=5) start of the (empty, for these tests) index bitmap
+//	LBN 8                    INDEXF.SYS's own header (IndexBitmapLBN + IndexBitmapSize)
+//	LBN 5..                  the file header area, one 512-byte slot per file
+//	                         number, addressed as file N's header living at
+//	                         LBN 5 + (N - 1) -- see the comment on
+//	                         readFileHeaderViaIndex for why this arithmetic
+//	                         lines up with the bootstrap LBN above when N=1.
+//	LBN 100+                 a data area used by individual test files
 const (
 	testIndexBitmapLBN  = 5
 	testIndexBitmapVBN  = 1
@@ -35,25 +36,25 @@ func fileHeaderLBN(fileNum uint16) uint32 {
 	return testIndexBitmapLBN + (idxblk - 1)
 }
 
-// newTestVolume builds a mountable memContainer whose INDEXF.SYS describes
-// one large extent covering the whole header area (and beyond, into the
-// data area used by individual tests), then mounts it.
-func newTestVolume(t *testing.T) (*Volume, *memContainer) {
+// newTestVolume builds a mountable in-memory container whose INDEXF.SYS
+// describes one large extent covering the whole header area (and beyond,
+// into the data area used by individual tests), then mounts it.
+func newTestVolume(t *testing.T) (*Volume, *odstest.MemContainer) {
 	t.Helper()
 
-	c := newMemContainer(300)
-	c.putBlock(1, buildHomeBlockBytes(t, homeBlockFixture{
-		homeLBN:       1,
-		rvn:           1,
-		idxBitmapVBN:  testIndexBitmapVBN,
-		idxBitmapLBN:  testIndexBitmapLBN,
-		idxBitmapSize: testIndexBitmapSize,
+	c := odstest.NewMemContainer(300)
+	c.PutBlock(1, odstest.BuildHomeBlockBytes(t, odstest.HomeBlockFixture{
+		HomeLBN:       1,
+		Rvn:           1,
+		IdxBitmapVBN:  testIndexBitmapVBN,
+		IdxBitmapLBN:  testIndexBitmapLBN,
+		IdxBitmapSize: testIndexBitmapSize,
 	}))
 
-	c.putBlock(testIndexBitmapLBN+testIndexBitmapSize, buildFileHeaderBytes(t, fileHeaderFixture{
-		fid:            ondisk.IndexFileFid,
-		mapOffsetWords: 55,
-		mapBytes:       encodeExtentFormat2(250, testIndexBitmapLBN),
+	c.PutBlock(testIndexBitmapLBN+testIndexBitmapSize, odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:            ondisk.IndexFileFid,
+		MapOffsetWords: 55,
+		MapBytes:       odstest.EncodeExtentFormat2(250, testIndexBitmapLBN),
 	}))
 
 	vol, err := Mount(c)
@@ -67,14 +68,14 @@ func TestOpenFIDReadsFileData(t *testing.T) {
 	vol, c := newTestVolume(t)
 
 	fid := ondisk.Fid{Num: 10, Seq: 1}
-	c.putBlock(fileHeaderLBN(fid.Num), buildFileHeaderBytes(t, fileHeaderFixture{
-		fid:            fid,
-		mapOffsetWords: 55,
-		mapBytes:       encodeExtentFormat2(5, 100), // file's data: VBN 1-5 -> LBN 100-104
+	c.PutBlock(fileHeaderLBN(fid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:            fid,
+		MapOffsetWords: 55,
+		MapBytes:       odstest.EncodeExtentFormat2(5, 100), // file's data: VBN 1-5 -> LBN 100-104
 	}))
 
 	wantData := bytes.Repeat([]byte{0xAB}, ondisk.BlockSize)
-	c.putBlock(100, wantData) // VBN 1 of the file
+	c.PutBlock(100, wantData) // VBN 1 of the file
 
 	f, err := vol.OpenFID(fid)
 	if err != nil {
@@ -99,8 +100,8 @@ func TestOpenFIDRejectsStaleFid(t *testing.T) {
 	// The header slot for file 10 actually holds Seq=2 (as if file 10;1
 	// was deleted and its slot reused by a newer file), but the caller
 	// asks for Seq=1 -- a stale Fid it obtained before the deletion.
-	c.putBlock(fileHeaderLBN(10), buildFileHeaderBytes(t, fileHeaderFixture{
-		fid: ondisk.Fid{Num: 10, Seq: 2},
+	c.PutBlock(fileHeaderLBN(10), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid: ondisk.Fid{Num: 10, Seq: 2},
 	}))
 
 	if _, err := vol.OpenFID(ondisk.Fid{Num: 10, Seq: 1}); err == nil {
@@ -112,17 +113,17 @@ func TestFileReadBlockZeroFillsBeyondHighWaterMark(t *testing.T) {
 	vol, c := newTestVolume(t)
 
 	fid := ondisk.Fid{Num: 11, Seq: 1}
-	c.putBlock(fileHeaderLBN(fid.Num), buildFileHeaderBytes(t, fileHeaderFixture{
-		fid:            fid,
-		identOffset:    40, // > 39: enables the high-water-mark check
-		highWaterMark:  3,  // VBNs 1-2 are real data; VBN 3 onward has never been written
-		mapOffsetWords: 55,
-		mapBytes:       encodeExtentFormat2(5, 200),
+	c.PutBlock(fileHeaderLBN(fid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:            fid,
+		IdentOffset:    40, // > 39: enables the high-water-mark check
+		HighWaterMark:  3,  // VBNs 1-2 are real data; VBN 3 onward has never been written
+		MapOffsetWords: 55,
+		MapBytes:       odstest.EncodeExtentFormat2(5, 200),
 	}))
 
 	// Leftover, previously-deleted-file garbage sitting at VBN 3's
 	// physical location (LBN 202) -- ReadBlock must never expose this.
-	c.putBlock(202, bytes.Repeat([]byte{0xFF}, ondisk.BlockSize))
+	c.PutBlock(202, bytes.Repeat([]byte{0xFF}, ondisk.BlockSize))
 
 	f, err := vol.OpenFID(fid)
 	if err != nil {
@@ -146,15 +147,15 @@ func TestFileReadBlockIgnoresHighWaterMarkWhenAbsent(t *testing.T) {
 	vol, c := newTestVolume(t)
 
 	fid := ondisk.Fid{Num: 12, Seq: 1}
-	c.putBlock(fileHeaderLBN(fid.Num), buildFileHeaderBytes(t, fileHeaderFixture{
-		fid:            fid,
-		identOffset:    30, // <= 39: no high-water-mark field present
-		mapOffsetWords: 55,
-		mapBytes:       encodeExtentFormat2(2, 210),
+	c.PutBlock(fileHeaderLBN(fid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:            fid,
+		IdentOffset:    30, // <= 39: no high-water-mark field present
+		MapOffsetWords: 55,
+		MapBytes:       odstest.EncodeExtentFormat2(2, 210),
 	}))
 
 	wantData := bytes.Repeat([]byte{0x42}, ondisk.BlockSize)
-	c.putBlock(210, wantData)
+	c.PutBlock(210, wantData)
 
 	f, err := vol.OpenFID(fid)
 	if err != nil {
@@ -178,18 +179,18 @@ func TestOpenFIDFollowsExtensionHeaderChain(t *testing.T) {
 
 	// The primary header describes no data of its own -- everything is
 	// in the extension segment.
-	c.putBlock(fileHeaderLBN(primaryFid.Num), buildFileHeaderBytes(t, fileHeaderFixture{
-		fid:          primaryFid,
-		extensionFid: extensionFid,
+	c.PutBlock(fileHeaderLBN(primaryFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:          primaryFid,
+		ExtensionFid: extensionFid,
 	}))
-	c.putBlock(fileHeaderLBN(extensionFid.Num), buildFileHeaderBytes(t, fileHeaderFixture{
-		fid:            extensionFid,
-		mapOffsetWords: 55,
-		mapBytes:       encodeExtentFormat2(2, 220),
+	c.PutBlock(fileHeaderLBN(extensionFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:            extensionFid,
+		MapOffsetWords: 55,
+		MapBytes:       odstest.EncodeExtentFormat2(2, 220),
 	}))
 
 	wantData := bytes.Repeat([]byte{0x99}, ondisk.BlockSize)
-	c.putBlock(220, wantData)
+	c.PutBlock(220, wantData)
 
 	f, err := vol.OpenFID(primaryFid)
 	if err != nil {
