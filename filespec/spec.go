@@ -1,5 +1,7 @@
 package filespec
 
+import "strings"
+
 // Spec is a parsed VMS file specification:
 //
 //	device:[dir.subdir]name.type;version
@@ -41,4 +43,42 @@ type Spec struct {
 	// a wildcard-matching concern for a different part of this package,
 	// not something Spec itself needs to know.
 	Version string
+}
+
+// String renders spec back into VMS file-specification text, e.g.
+// "DUA0:[FOO.BAR]NAME.TYP;5" — the inverse of Parse, for displaying a
+// spec to a user (a "show default" command, say). Components left at
+// their zero value are simply omitted, the same as when they're left
+// unwritten in typed input; Dirs is the one exception, since an empty
+// Dirs is itself a complete, valid value (the master file directory) —
+// see Spec.Dirs's own documentation.
+func (s Spec) String() string {
+	var b strings.Builder
+
+	if s.Device != "" {
+		b.WriteString(s.Device)
+		b.WriteByte(':')
+	}
+
+	b.WriteByte('[')
+	b.WriteString(strings.Join(s.Dirs, "."))
+	if len(s.Dirs) == 0 {
+		b.WriteString("000000")
+	}
+	if s.Recursive {
+		b.WriteString("...")
+	}
+	b.WriteByte(']')
+
+	b.WriteString(s.Name)
+	if s.Type != "" {
+		b.WriteByte('.')
+		b.WriteString(s.Type)
+	}
+	if s.Version != "" {
+		b.WriteByte(';')
+		b.WriteString(s.Version)
+	}
+
+	return b.String()
 }
