@@ -44,6 +44,15 @@ func (f Fid) Number() uint32 {
 	return uint32(f.Nmx)<<16 | uint32(f.Num)
 }
 
+// IsZero reports whether f is the null/zero file ID, used on disk as a
+// sentinel meaning "there is no such file" — for example, a FileHeader's
+// ExtensionFid is the zero Fid when that header has no further extension
+// segment. Only the file-number fields (Num, Nmx) are significant for this
+// check, matching the on-disk convention (Seq and Rvn are ignored).
+func (f Fid) IsZero() bool {
+	return f.Num == 0 && f.Nmx == 0
+}
+
 // Equal reports whether f and other identify the same file. Two Fids are
 // considered the same file if their file numbers, sequence numbers, and
 // relative volume numbers all match; a difference in Seq means one of them
