@@ -1,9 +1,6 @@
 package session
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
 // Qualifiers holds the "/name" or "/name:value" (or "/name=value")
 // switches parsed from a command line, keyed by qualifier name in lower
@@ -27,34 +24,45 @@ func (q Qualifiers) Value(name string) string {
 }
 
 // tokenize splits a command line's arguments (everything after the
-// command name itself) into positional arguments and qualifiers.
+// command name itself) into positional arguments and qualifiers, given
+// the command's own list of recognized qualifier names (see Command.
+// Qualifiers).
 //
 // This replaces the original implementation's hand-rolled cmdsplit
-// function with the same basic shape: whitespace-separated fields, where
-// any field starting with '/' is a qualifier (optionally carrying a value
-// after a ':' or '=') rather than a positional argument. Unlike the
-// original, this project doesn't impose a fixed maximum count on either —
-// a Go slice/map has no such limit to begin with.
-func tokenize(rest string) ([]string, Qualifiers, error) {
+// function with a similar shape: whitespace-separated fields, where a
+// field starting with '/' is a qualifier (optionally carrying a value
+// after a ':' or '=') rather than a positional argument. It deliberately
+// diverges from the original in one way that matters a great deal for
+// this port: a VMS file spec can never contain '/', so the original never
+// had to worry about a positional argument starting with one — but this
+// project's `copy` and `difference` commands take a plain HOST file path
+// as one argument, and an absolute Unix-style path commonly starts with
+// '/' too. So a "/..." token is only treated as a qualifier if its name
+// (before any ':'/'=') actually matches one of validQualifiers; anything
+// else starting with '/' is passed through as an ordinary positional
+// argument instead. The tradeoff is a less specific error for a genuinely
+// mistyped qualifier name (it becomes an "unexpected extra argument"
+// rather than an "unrecognized qualifier" — Execute still catches it,
+// just less precisely) in exchange for absolute paths simply working,
+// which matters far more often in practice.
+func tokenize(rest string, validQualifiers []string) ([]string, Qualifiers, error) {
 	fields := strings.Fields(rest)
 
 	var args []string
 	quals := make(Qualifiers)
 
 	for _, f := range fields {
-		if !strings.HasPrefix(f, "/") {
-			args = append(args, f)
-			continue
+		if strings.HasPrefix(f, "/") {
+			name, value := f[1:], ""
+			if idx := strings.IndexAny(name, ":="); idx != -1 {
+				name, value = name[:idx], name[idx+1:]
+			}
+			if name != "" && containsFold(validQualifiers, name) {
+				quals[strings.ToLower(name)] = value
+				continue
+			}
 		}
-
-		name, value := f[1:], ""
-		if idx := strings.IndexAny(name, ":="); idx != -1 {
-			name, value = name[:idx], name[idx+1:]
-		}
-		if name == "" {
-			return nil, nil, fmt.Errorf("session: empty qualifier in %q", f)
-		}
-		quals[strings.ToLower(name)] = value
+		args = append(args, f)
 	}
 
 	return args, quals, nil

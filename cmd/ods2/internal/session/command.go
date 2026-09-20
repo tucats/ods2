@@ -107,18 +107,13 @@ func (s *Session) Execute(line string) (keepGoing bool, err error) {
 		return false, nil
 	}
 
-	args, quals, err := tokenize(rest)
+	args, quals, err := tokenize(rest, cmd.Qualifiers)
 	if err != nil {
 		return true, err
 	}
 
 	if len(args) < cmd.MinArgs || (cmd.MaxArgs >= 0 && len(args) > cmd.MaxArgs) {
 		return true, fmt.Errorf("session: %s requires between %d and %d argument(s), got %d", cmd.Name, cmd.MinArgs, cmd.MaxArgs, len(args))
-	}
-	for q := range quals {
-		if !containsFold(cmd.Qualifiers, q) {
-			return true, fmt.Errorf("session: %s does not support the /%s qualifier", cmd.Name, q)
-		}
 	}
 
 	return true, cmd.Run(s, args, quals)

@@ -6,7 +6,7 @@ import (
 )
 
 func TestTokenize(t *testing.T) {
-	args, quals, err := tokenize("FOO.TXT BAR.TXT /full /before:today")
+	args, quals, err := tokenize("FOO.TXT BAR.TXT /full /before:today", []string{"full", "before"})
 	if err != nil {
 		t.Fatalf("tokenize: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestTokenize(t *testing.T) {
 }
 
 func TestTokenizeEqualsAsValueSeparator(t *testing.T) {
-	_, quals, err := tokenize("/before=today")
+	_, quals, err := tokenize("/before=today", []string{"before"})
 	if err != nil {
 		t.Fatalf("tokenize: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestTokenizeEqualsAsValueSeparator(t *testing.T) {
 }
 
 func TestTokenizeQualifierNameIsCaseInsensitive(t *testing.T) {
-	_, quals, err := tokenize("/FULL")
+	_, quals, err := tokenize("/FULL", []string{"full"})
 	if err != nil {
 		t.Fatalf("tokenize: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestTokenizeQualifierNameIsCaseInsensitive(t *testing.T) {
 }
 
 func TestTokenizeNoArgs(t *testing.T) {
-	args, quals, err := tokenize("")
+	args, quals, err := tokenize("", nil)
 	if err != nil {
 		t.Fatalf("tokenize: %v", err)
 	}
@@ -60,9 +60,32 @@ func TestTokenizeNoArgs(t *testing.T) {
 	}
 }
 
-func TestTokenizeRejectsEmptyQualifier(t *testing.T) {
-	if _, _, err := tokenize("FOO.TXT /"); err == nil {
-		t.Fatal("tokenize with a bare '/': want error, got nil")
+func TestTokenizeUnrecognizedSlashTokenIsPositional(t *testing.T) {
+	// This is the behavior that makes absolute Unix paths work as
+	// ordinary positional arguments (see tokenize's own documentation):
+	// a "/..." token that doesn't match one of the command's own
+	// recognized qualifiers is passed through as a plain argument rather
+	// than rejected or silently swallowed as a qualifier.
+	args, quals, err := tokenize("/tmp/some/file.txt", []string{"full"})
+	if err != nil {
+		t.Fatalf("tokenize: %v", err)
+	}
+	if len(args) != 1 || args[0] != "/tmp/some/file.txt" {
+		t.Errorf("args = %v, want [/tmp/some/file.txt]", args)
+	}
+	if len(quals) != 0 {
+		t.Errorf("quals = %v, want empty", quals)
+	}
+}
+
+func TestTokenizeBareSlashIsPositional(t *testing.T) {
+	args, _, err := tokenize("FOO.TXT /", []string{"full"})
+	if err != nil {
+		t.Fatalf("tokenize: %v", err)
+	}
+	want := []string{"FOO.TXT", "/"}
+	if !reflect.DeepEqual(args, want) {
+		t.Errorf("args = %v, want %v", args, want)
 	}
 }
 

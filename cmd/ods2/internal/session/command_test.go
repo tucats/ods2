@@ -107,16 +107,22 @@ func TestExecuteArgumentCountValidation(t *testing.T) {
 	}
 }
 
-func TestExecuteUnsupportedQualifier(t *testing.T) {
+func TestExecuteUnsupportedQualifierBecomesExtraArgument(t *testing.T) {
+	// An unrecognized "/..." token isn't rejected outright as a bad
+	// qualifier -- see tokenize's own documentation for why (absolute
+	// Unix paths). It becomes an ordinary positional argument instead,
+	// so it still surfaces as an error here, just via the argument-count
+	// check rather than a qualifier-specific one, since this command
+	// accepts none.
 	saved := Table
 	defer func() { Table = saved }()
 	Table = []Command{
-		{Name: "foo", MinAbbrev: 3, Qualifiers: []string{"full"}, Run: func(*Session, []string, Qualifiers) error { return nil }},
+		{Name: "foo", MinAbbrev: 3, MaxArgs: 0, Qualifiers: []string{"full"}, Run: func(*Session, []string, Qualifiers) error { return nil }},
 	}
 
 	s := New()
 	if _, err := s.Execute("foo /nosuchqualifier"); err == nil {
-		t.Fatal("Execute with an unsupported qualifier: want error, got nil")
+		t.Fatal("Execute with an unrecognized /qualifier and no room for an extra argument: want error, got nil")
 	}
 	if _, err := s.Execute("foo /full"); err != nil {
 		t.Fatalf("Execute with a supported qualifier: %v", err)
