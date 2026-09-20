@@ -6,8 +6,12 @@ architecture and file-format knowledge in the C [ods2](https://github.com/tucats
 project (itself descended from Paul Nankervis's original, via Hunter
 Goatley and crwolff) — not a line-by-line translation.
 
-**Status: early development.** Package skeletons exist; the on-disk decoding
-and volume-access logic is being built out per the plan below.
+**Status: library complete, CLI not yet started.** The public library
+surface — `vmstime`, `diskimage`, `ondisk`, `volume`, `filespec`, `rms` — is
+fully implemented and unit-tested per the plan below (mount a volume, open
+files by ID, list/look up/wildcard-glob directories, read records in any
+supported format). `cmd/ods2` (the interactive REPL and one-shot CLI) is
+next.
 
 ## Goals
 
