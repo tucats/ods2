@@ -2,7 +2,7 @@
 
 A native Go implementation of ODS2, a tool for reading VAX/VMS "Files-11"
 (ODS-2) disk volumes and images. This is a from-scratch Go port of the
-architecture and file-format knowledge in the C [ods2](https://github.com/tucats/ods2)
+architecture and file-format knowledge in the C [ods2](https://github.com/DaveShepperd/ods2)
 project (itself descended from Paul Nankervis's original, via Hunter
 Goatley and crwolff) — not a line-by-line translation.
 
