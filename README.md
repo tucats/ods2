@@ -6,12 +6,14 @@ architecture and file-format knowledge in the C [ods2](https://github.com/DaveSh
 project (itself descended from Paul Nankervis's original, via Hunter
 Goatley and crwolff) — not a line-by-line translation.
 
-**Status: library complete, CLI not yet started.** The public library
-surface — `vmstime`, `diskimage`, `ondisk`, `volume`, `filespec`, `rms` — is
-fully implemented and unit-tested per the plan below (mount a volume, open
-files by ID, list/look up/wildcard-glob directories, read records in any
-supported format). `cmd/ods2` (the interactive REPL and one-shot CLI) is
-next.
+**Status: feature-complete for read access.** The public library surface —
+`vmstime`, `diskimage`, `ondisk`, `volume`, `filespec`, `rms` — and the
+`cmd/ods2` CLI (interactive REPL and one-shot subcommands) are both
+implemented, unit-tested, and verified end to end against a real compiled
+binary: `mount`, `dismount`, `directory`/`dir`, `copy`, `search`, `type`,
+`difference`, `set default`, `show`, `help`, `exit`/`quit`. Remaining polish
+(golden-file tests against real ODS-2 images, some of `copy`'s less-common
+qualifiers) is tracked below.
 
 ## Goals
 
@@ -97,20 +99,24 @@ de-frames both supported container kinds transparently:
 
 ## Development plan
 
-See the architecture section above for the package layout. Implementation
-proceeds in this order:
+See the architecture section above for the package layout.
 
-1. Scaffolding (this commit): `go.mod`, package skeletons, CI.
-2. `diskimage`: plain + raw-CD container support.
-3. `ondisk`: on-disk structure decode + checksum validation.
-4. `volume`: mount, index file bootstrap, file header access, virtual-to-
-   logical block mapping, non-wildcard directory list/lookup.
-5. `filespec`: VMS spec parsing + wildcard/recursive glob.
-6. `rms`: record-format reading, VFC decode, corrupt-record fallback.
-7. `cmd/ods2`: full command set (`mount`, `dismount`, `directory`/`dir`,
+1. ✅ Scaffolding: `go.mod`, package skeletons, CI.
+2. ✅ `diskimage`: plain + raw-CD container support.
+3. ✅ `ondisk`: on-disk structure decode + checksum validation.
+4. ✅ `volume`: mount, index file bootstrap, file header access, virtual-to-
+   logical block mapping, directory list/lookup.
+5. ✅ `filespec`: VMS spec parsing + wildcard/recursive glob.
+6. ✅ `rms`: record-format reading, VFC decode.
+7. ✅ `cmd/ods2`: full command set (`mount`, `dismount`, `directory`/`dir`,
    `copy`, `search`, `type`, `difference`, `set default`, `show`, `help`,
-   `exit`), REPL and one-shot CLI parity.
-8. Polish: documentation, golden-file/integration tests, cross-platform CI.
+   `exit`/`quit`), REPL (via `github.com/chzyer/readline`) and one-shot CLI
+   (via `github.com/spf13/cobra`) sharing the same command implementations.
+8. ⬜ Polish: golden-file/integration tests against real ODS-2 images,
+   cross-platform CI verification, `copy`'s remaining qualifiers (`/dirs`,
+   `/stream`, `/vfc`, `/ignore`, `/time`, `/crlf`, `/lf`) — text-mode copying
+   already handles the common VFC/Stream/Variable cases correctly via
+   package `rms`, just without those specific overrides yet.
 
 Explicitly out of scope for now (future work): write/create support,
 ODS-5 support, raw physical device mounting.
