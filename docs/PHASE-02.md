@@ -81,7 +81,7 @@ expose.
 | 3 | `ondisk`: retrieval-pointer encoder | Done |
 | 4 | `ondisk`: storage-bitmap bit-packing + SCB encoder | Done |
 | 5 | `ondisk`: directory-block encoder | Done |
-| 6 | `volume`: storage-bitmap cache & allocator (BITMAP.SYS) | Not started |
+| 6 | `volume`: storage-bitmap cache & allocator (BITMAP.SYS) | Done |
 | 7 | `volume`: index-file header-slot cache & allocator (INDEXF.SYS) | Not started |
 | 8 | `volume`: file-header writer (new headers, extension segments, HighWaterMark) | Not started |
 | 9 | `volume`: directory mutation (insert + auto-extend + version assignment) | Not started |
@@ -637,6 +637,66 @@ hand-constructed bitmap with known free runs; `Flush` followed by
 re-reading the bitmap from the container reflects the mutations; an
 unflushed `Bitmap` doesn't affect the on-disk bytes at all (confirms the
 cache is genuinely deferred, not accidentally write-through).
+
+**Shipped.** `OpenBitmap(dev *Device) (*Bitmap, error)` opens `BITMAP.SYS`
+(`ondisk.BitmapFileFid`, reserved file 2) the same way any other file is
+opened internally — `readFileHeaderViaIndex` + `buildFile` against
+`dev.IndexFile.Extents` — rather than going through `Volume.OpenFID`,
+since that resolves its target device from `Fid.Rvn`, and this type is
+explicitly handed the device it should operate on already. It fails
+immediately, before reading anything, if `dev.Container` doesn't type-
+assert to `diskimage.WritableContainer`, so a read-only mount fails with a
+clear error rather than succeeding and only failing later on `Flush`. It
+also cross-checks the decoded `StorageControlBlock.ClusterSize` against
+`HomeBlock.ClusterSize` and rejects a mismatch outright — the two are
+supposed to always agree (`StorageControlBlock`'s own doc comment already
+noted this), and catching a disagreement here is cheap insurance against
+ever computing a cluster's LBN range with the wrong stride.
+
+`FindFree`/`MarkAllocated`/`MarkFree` all work in terms of `ondisk.Extent`
+(blocks, matching every other package's vocabulary) and convert to/from
+cluster numbers internally via a shared `clusterRange` helper, which
+doubles as the alignment/bounds check: `MarkAllocated`/`MarkFree` reject
+an extent that isn't a whole, cluster-aligned run within the volume's
+actual cluster count, on the theory that such an extent could never have
+come from this bitmap's own `FindFree` and almost certainly indicates a
+caller bug worth surfacing immediately rather than silently corrupting a
+neighboring cluster's bit.
+
+`Flush` writes each dirty bitmap block directly via
+`WritableContainer.WriteBlock` at the LBN a new, small `resolveExtentLBN`
+helper (factored out of `file.go`'s existing `readExtents`, which now
+calls it) resolves from the bitmap file's own extents — deliberately not
+going through a not-yet-existent `File.WriteBlock` (that's subtask 10,
+which depends on this one, not the other way around). Dirty tracking is a
+single whole-bitmap flag rather than per-block, matching this phase's
+stated preference for the simplest design that satisfies the actual
+requirement (see [Caching strategy](#caching-strategy)) — a volume's
+bitmap is small enough that rewriting all of it on a dirty `Flush` is
+cheap, and per-block tracking would be complexity with no measured benefit
+here. `Flush` never rewrites the `StorageControlBlock` itself (VBN 1):
+this package's decoded `ondisk.StorageControlBlock` has no modeled
+running free-cluster count for a mutation to update (the reference
+implementation computes one on demand rather than persisting it), so
+there is nothing in that block a bitmap mutation would ever need to
+change.
+
+Tests build their fixture as the subtask's own test plan asked —
+`diskimage.Create`, not `odstest.MemContainer` — since a `WritableContainer`
+is a hard requirement here and `MemContainer` (Phase 1's read-only in-
+memory fixture) doesn't implement it. `internal/odstest`'s existing
+byte-level builders (`BuildHomeBlockBytes`, `BuildFileHeaderBytes`,
+`EncodeExtentFormat2`) still do the encoding; the difference from Phase
+1's fixtures is only which `diskimage.Container` the resulting bytes get
+written into. Coverage: first-fit run selection (deliberately using two
+differently-sized free runs to distinguish first-fit from best-fit);
+no-match and zero-cluster error paths; `MarkAllocated`/`MarkFree` each
+observably changing what a later `FindFree` returns; misaligned and
+out-of-range extents rejected; the read-only-device and cluster-size-
+mismatch rejections at `OpenBitmap` time; and the deferred-flush behavior
+the subtask's test plan specifically called out, via two independently-
+opened `Bitmap`s over the same device confirming an unflushed mutation is
+invisible until `Flush` is called.
 
 ### 7. `volume`: index-file header-slot cache & allocator (INDEXF.SYS)
 

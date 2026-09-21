@@ -124,29 +124,42 @@ func (f *File) ReadBlock(vbn uint32, buf []byte) error {
 	return nil
 }
 
-// readExtents locates and reads virtual block vbn (1-based — see
-// File.ReadBlock) from the given ordered list of Extents, each of which
-// covers a contiguous run of virtual blocks immediately following the one
-// before it.
-func readExtents(dev *Device, extents []ExtentLocation, vbn uint32) ([]byte, error) {
+// resolveExtentLBN locates the absolute logical block number that virtual
+// block vbn (1-based — see File.ReadBlock) resolves to within the given
+// ordered list of Extents, each of which covers a contiguous run of
+// virtual blocks immediately following the one before it. Unlike
+// readExtents, this performs no I/O of its own — it's the pure address-
+// translation step, shared by readExtents (which reads the resolved
+// block) and Bitmap.Flush (which needs the LBN to write to, not read).
+func resolveExtentLBN(extents []ExtentLocation, vbn uint32) (uint32, error) {
 	if vbn == 0 {
-		return nil, fmt.Errorf("virtual block numbers are 1-based; 0 is not a valid VBN")
+		return 0, fmt.Errorf("virtual block numbers are 1-based; 0 is not a valid VBN")
 	}
 
 	remaining := vbn
 	for _, e := range extents {
 		if remaining <= e.Count {
-			lbn := e.StartLBN + (remaining - 1)
-			buf := make([]byte, ondisk.BlockSize)
-			if err := dev.Container.ReadBlock(lbn, buf); err != nil {
-				return nil, fmt.Errorf("reading LBN %d: %w", lbn, err)
-			}
-			return buf, nil
+			return e.StartLBN + (remaining - 1), nil
 		}
 		remaining -= e.Count
 	}
 
-	return nil, fmt.Errorf("virtual block %d is beyond the end of the file", vbn)
+	return 0, fmt.Errorf("virtual block %d is beyond the end of the file", vbn)
+}
+
+// readExtents locates and reads virtual block vbn (1-based — see
+// File.ReadBlock) from the given ordered list of Extents.
+func readExtents(dev *Device, extents []ExtentLocation, vbn uint32) ([]byte, error) {
+	lbn, err := resolveExtentLBN(extents, vbn)
+	if err != nil {
+		return nil, err
+	}
+
+	buf := make([]byte, ondisk.BlockSize)
+	if err := dev.Container.ReadBlock(lbn, buf); err != nil {
+		return nil, fmt.Errorf("reading LBN %d: %w", lbn, err)
+	}
+	return buf, nil
 }
 
 // buildFile resolves a file's complete Extents list starting from its
