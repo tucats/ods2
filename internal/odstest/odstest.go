@@ -98,6 +98,7 @@ type HomeBlockFixture struct {
 	IdxBitmapLBN  uint32
 	IdxBitmapSize uint16
 	MaxFiles      uint32
+	ReservedFiles uint16
 }
 
 // BuildHomeBlockBytes assembles a syntactically valid, correctly
@@ -116,6 +117,7 @@ func BuildHomeBlockBytes(t testing.TB, f HomeBlockFixture) []byte {
 		IndexBitmapLBN:       f.IdxBitmapLBN,
 		MaxFiles:             f.MaxFiles,
 		IndexBitmapSize:      f.IdxBitmapSize,
+		ReservedFiles:        f.ReservedFiles,
 		RelativeVolumeNumber: f.Rvn,
 		Format:               ondisk.HomeBlockFormatID,
 	})

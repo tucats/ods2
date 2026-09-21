@@ -82,7 +82,7 @@ expose.
 | 4 | `ondisk`: storage-bitmap bit-packing + SCB encoder | Done |
 | 5 | `ondisk`: directory-block encoder | Done |
 | 6 | `volume`: storage-bitmap cache & allocator (BITMAP.SYS) | Done |
-| 7 | `volume`: index-file header-slot cache & allocator (INDEXF.SYS) | Not started |
+| 7 | `volume`: index-file header-slot cache & allocator (INDEXF.SYS) | Done |
 | 8 | `volume`: file-header writer (new headers, extension segments, HighWaterMark) | Not started |
 | 9 | `volume`: directory mutation (insert + auto-extend + version assignment) | Not started |
 | 10 | `volume`: file write API (open-for-write, CreateFile, WriteBlock) | Not started |
@@ -720,6 +720,72 @@ whole-volume level.
 
 **Tests:** analogous to subtask 6's, against the index-file bitmap region
 instead.
+
+**Shipped.** `OpenIndexBitmap(dev *Device) (*IndexBitmap, error)` reads
+`HomeBlock.IndexBitmapVBN`/`IndexBitmapSize` blocks straight out of
+`dev.IndexFile` (already resolved by `Mount`/`bootstrapIndexFile` — unlike
+subtask 6's `Bitmap`, there's no separate file to open here, since this
+bitmap lives *inside* `INDEXF.SYS` itself), rejecting a read-only device
+and a zero/oversized `HomeBlock.MaxFiles` up front the same way `OpenBitmap`
+does for a mismatched cluster size.
+
+The one real surprise: **this bitmap's free/allocated polarity is the
+opposite of `BITMAP.SYS`'s.** Subtask 4's `BitmapTest`/`BitmapSet`/
+`BitmapClear` document "1 = free" for the storage bitmap, and this
+subtask's write-up above assumed the same convention would carry over —
+but it doesn't. Checked empirically against `testdata/rq0-ra92.dsk` (read
+every one of its 38900 header slots directly, classified each as
+"looks unused" by the same zero-checksum/zero-file-number test
+`FindFreeSlot` uses below, and compared against this region's actual
+bits): a set bit means the slot is **in use**, a clear bit means free —
+zero mismatches under that polarity, thousands under the reverse. This
+also matches the reference implementation's own `headmap_clear()`
+(`update.c:230`, clearing a bit to free a slot) and `update_findhead()`
+(`update.c:264`, treating a clear bit as a free candidate) — unlike most
+of `update.c` (see [What we're deliberately not
+porting](#what-were-deliberately-not-porting-from-the-c-reference)), this
+one bit's meaning is genuine on-disk data, not a reference artifact, so it
+has to be reproduced exactly rather than "corrected" for consistency with
+`BITMAP.SYS`. `ondisk.BitmapTest`/`BitmapSet`/`BitmapClear` are still
+reused as pure bit-position mechanics; only the interpretation at each
+call site in `IndexBitmap` is reversed, documented at length on the type
+itself so the discrepancy isn't rediscovered by surprise again later.
+
+`FindFreeSlot() (uint32, error)` scans bit indices from
+`HomeBlock.ReservedFiles` (always read from the home block, never a
+hardcoded constant — matching the table entry above about
+`headmap_clear`'s own hardcoded `10`) up to `MaxFiles`, and, matching the
+reference's own worthwhile safety check in `update_findhead()`, reads the
+candidate slot's actual on-disk header before trusting a clear bit:
+`ondisk.DecodeFileHeader` is called directly on it (its returned struct is
+usable even when the checksum doesn't validate, per its own doc comment),
+and a slot only counts as genuinely free if both `Checksum` and
+`Fid.Number()` come back zero. A mismatch — a clear bit over a slot whose
+header looks real — is treated as a bitmap/reality inconsistency and
+fails loudly with an error rather than silently skipping to the next
+candidate, on the theory that silently working around it would risk
+eventually handing out a slot that still holds live data; surfacing it
+clearly is also exactly the kind of check `ANALYZE/DISK` (subtask 15) is
+designed to run at a whole-volume level later. `MarkAllocated`/`MarkFree`
+take a file number directly (not an `Extent` — a header slot isn't a
+block range) and validate it against `MaxFiles`, mutating the in-memory
+bits and marking the cache dirty; `Flush` writes every bitmap block back
+via `resolveExtentLBN(dev.IndexFile.Extents, vbn)` + `WriteBlock`, the same
+deferred, whole-bitmap-dirty design as subtask 6's `Bitmap.Flush`.
+
+`internal/odstest.HomeBlockFixture` gained a `ReservedFiles` field
+(plumbed through to `ondisk.EncodeHomeBlock`) since no existing test
+needed to control it before this subtask's `FindFreeSlot` tests did.
+Coverage: reserved-slot skipping combined with an additionally-marked-in-
+use slot (distinguishing "skipped because reserved" from "skipped because
+the bit says in use"); the bitmap/header consistency check catching a
+deliberately-corrupted fixture (a clear bit over a real-looking header);
+`MarkAllocated`/`MarkFree` each observably changing what a later
+`FindFreeSlot` returns; file number 0 and beyond-`MaxFiles` rejected; the
+read-only-device and zero-`MaxFiles` rejections at `OpenIndexBitmap` time;
+and the same deferred-flush proof subtask 6's tests used (two
+independently-opened `IndexBitmap`s over the same device confirming an
+unflushed mutation is invisible until `Flush`).
 
 ### 8. `volume`: file-header writer
 
