@@ -145,6 +145,8 @@ func TestDirectoryListSkipsUnwrittenTrailingBlocks(t *testing.T) {
 		IdentOffset:    40, // required for HighWaterMark to take effect at all
 		HighWaterMark:  2,  // only VBN 1 is guaranteed written
 		HighestBlock:   3,  // but 3 blocks are allocated (pre-extended slack)
+		EndOfFileBlock: 2,  // and only 1 block's worth of data is real --
+		FirstFreeByte:  0,  // matching this test's real-world source exactly (see above), not relying on BuildFileHeaderBytes' own EndOfFileBlock default
 		MapOffsetWords: 55,
 		MapBytes:       odstest.EncodeExtentFormat2(3, 260),
 	}))

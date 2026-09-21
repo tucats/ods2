@@ -283,26 +283,59 @@ used range; existing `directory_test.go`/`realimage_test.go` coverage
 continues to pass unchanged; `dir [000000]*.*` against
 `testdata/rq0-ra92.dsk` succeeds.
 
-**Shipped:** a shared `(*File) isUnwritten(vbn) bool` helper
-(`volume/file.go`) factors the high-water-mark check out of `ReadBlock`
-(unchanged behavior) and into `Directory.List`, which now stops as soon as
-it reaches an unwritten block instead of trying to decode it —
-`volume/directory.go`. Regression test
-`TestDirectoryListSkipsUnwrittenTrailingBlocks`
-(`volume/directory_test.go`) reproduces the exact shape found on
-`testdata/rq0-ra92.dsk` (`HighestBlock` 3, `HighWaterMark`/
-`EndOfFileBlock` 2) against a synthetic fixture, with the two trailing
-blocks filled with non-zero garbage rather than left zeroed — this catches
-a fix that only *happens* to work because unwritten blocks default to
-zero, as distinct from one that genuinely stops reading at the right
-boundary. Confirmed against the real fixture directly:
-`dir [000000]*.*` /`full` now lists all 13 reserved/system entries in
-`testdata/rq0-ra92.dsk`'s root directory cleanly. That listing is also a
-useful preview for subtask 12's reserved-file table: this real, actively-
-used volume's file 10 is `SECURITY.SYS` (not an unused placeholder as
-guessed below), and it has no file 11 at all — worth folding into that
-table's own ground-truth pass when subtask 12 starts, not changed here to
-keep this commit scoped to the bugfix.
+**Shipped, in two passes** — the first (bounding by `HighWaterMark`) turned
+out to be necessary but not sufficient, caught by a second real-world case
+before landing:
+
+1. First pass: a shared `(*File) isUnwritten(vbn) bool` helper
+   (`volume/file.go`) factored the high-water-mark check out of
+   `ReadBlock` and into `Directory.List`, stopping at the first unwritten
+   block instead of trying to decode it. Fixed `[000000]` on
+   `testdata/rq0-ra92.dsk`.
+2. But `[VMS$COMMON.SYSLIB]` still failed the same way, on a *different*
+   block. Root-caused to `HighWaterMark` and `EndOfFileBlock` being looser
+   and tighter bounds respectively, not interchangeable: `SYSLIB.DIR` has
+   `HighWaterMark` 25 (blocks below it are safe to read — either real data
+   or, with VMS's high-water marking, physically pre-zeroed slack) but
+   `EndOfFileBlock`/`FirstFreeByte` 17/0 (real *content* ends at the close
+   of block 16) — blocks 17-24 are genuinely zero on disk, not simulated,
+   yet still outside the directory's logical content, and bounding by
+   `HighWaterMark` alone (too loose) let `List` attempt to decode them
+   anyway. Added `(*File) UsedBlocks() uint32` (`volume/file.go`),
+   deriving the true content boundary from `EndOfFileBlock`/
+   `FirstFreeByte` using the same arithmetic `rms.FileByteLength` already
+   used for a file's exact byte length, and made `List` bound its walk by
+   `UsedBlocks()`, keeping the `isUnwritten` check as a secondary,
+   defensive guard (normally unreachable, given a well-formed header) in
+   case a corrupt header's `EndOfFileBlock` ever claims more than its own
+   `HighWaterMark` backs up.
+
+That second pass broke essentially every synthetic directory fixture in
+the test suite — none of them, across `cmd/ods2`, `filespec`, and
+`volume`, had ever needed to set `EndOfFileBlock` before, so it defaulted
+to 0 ("no data"), which `UsedBlocks` (correctly, now) takes literally.
+Patching each call site individually wasn't practical; instead,
+`internal/odstest.BuildFileHeaderBytes` now defaults a *directory*
+fixture's `EndOfFileBlock` from `HighestBlock` when left unset (treating
+all allocated blocks as real content — what every existing fixture already
+implicitly assumed), scoped to `FchDirectory` specifically so it can't
+interact with `rms`'s legitimate deliberately-empty-file test (a plain
+file fixture with `HighestBlock` > 0 but `EndOfFileBlock` 0 left alone).
+
+Regression test `TestDirectoryListSkipsUnwrittenTrailingBlocks`
+(`volume/directory_test.go`) reproduces the `[000000]` shape exactly
+(`HighestBlock` 3, `HighWaterMark`/`EndOfFileBlock` 2), with the two
+trailing blocks filled with non-zero garbage rather than left zeroed —
+catching a fix that only *happens* to work because unwritten blocks
+default to zero, as distinct from one that genuinely stops at the right
+boundary. Confirmed against the real fixture directly: `dir [000000]*.*`
+and `dir [VMS$COMMON.SYSLIB]` both now list cleanly on
+`testdata/rq0-ra92.dsk` (13 and 198 entries respectively). That listing is
+also a useful preview for subtask 12's reserved-file table: this real,
+actively-used volume's file 10 is `SECURITY.SYS` (not an unused
+placeholder as guessed below), and it has no file 11 at all — worth
+folding into that table's own ground-truth pass when subtask 12 starts,
+not changed here to keep this commit scoped to the bugfix.
 
 ### 1. `diskimage`: writable containers
 

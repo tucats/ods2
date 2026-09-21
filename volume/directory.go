@@ -44,20 +44,26 @@ func (d *Directory) List() ([]ondisk.DirEntry, error) {
 	var all []ondisk.DirEntry
 	buf := make([]byte, ondisk.BlockSize)
 
-	for vbn := uint32(1); vbn <= d.Blocks(); vbn++ {
+	// Bound the walk by UsedBlocks, not Blocks(): a directory routinely
+	// has more blocks allocated than it currently uses (VMS pre-extends
+	// by HomeBlock.DefaultExtendSize at a time), and that trailing slack
+	// — whether it's real, physically-zeroed disk space below the
+	// high-water mark, or still-unwritten space at/beyond it — isn't
+	// directory content and can't be decoded as any. See UsedBlocks'
+	// own doc comment for why Blocks() alone isn't the right bound here.
+	limit := d.Blocks()
+	if used := d.UsedBlocks(); used < limit {
+		limit = used
+	}
+
+	for vbn := uint32(1); vbn <= limit; vbn++ {
 		if d.isUnwritten(vbn) {
-			// VMS routinely pre-extends a directory file by several
-			// blocks at a time (see HomeBlock.DefaultExtendSize) and
-			// leaves the slack unwritten until it's actually needed.
-			// Blocks() reports the directory's full *allocation*, which
-			// can run ahead of how much of it has ever actually been
-			// written; a block at or beyond the high-water mark reads
-			// back as all-zero (see File.ReadBlock) rather than holding
-			// a legitimately empty directory block, so it can't be
-			// decoded as one. Every later VBN is unwritten too (the
-			// high-water mark only ever grows as a file is extended, so
-			// nothing beyond it is written while an earlier block isn't),
-			// so there's nothing more to find past this point.
+			// Should be unreachable given the UsedBlocks-derived limit
+			// above (a well-formed header never records data as "used"
+			// past its own high-water mark) — kept as a defensive
+			// fallback so a header with an internally inconsistent
+			// EndOfFileBlock/HighWaterMark still stops here rather than
+			// trying to decode simulated-zero content as real records.
 			break
 		}
 		if err := d.ReadBlock(vbn, buf); err != nil {

@@ -39,6 +39,39 @@ func (f *File) Blocks() uint32 {
 	return f.Header.RecordAttributes.HighestBlock
 }
 
+// UsedBlocks reports how many of the file's virtual blocks, starting from
+// VBN 1, actually hold data that's part of the file's logical content —
+// as opposed to Blocks(), which reports how many blocks are merely
+// allocated to it. VMS routinely allocates (and, with high-water marking
+// enabled, physically pre-zeroes) more blocks than a file's content
+// currently needs, as slack for future growth without a separate
+// allocation call each time (see HomeBlock.DefaultExtendSize) — such
+// slack blocks read back as real, on-disk zero bytes just like any other
+// block (they're genuinely zeroed, not synthesized the way isUnwritten's
+// blocks are), but they're still not part of the file, and a caller that
+// needs to know "how much of this file is actually there" — Directory.
+// List, in particular — wants this, not Blocks().
+//
+// Derived from RecordAttributes.EndOfFileBlock/FirstFreeByte using the
+// same arithmetic package rms's FileByteLength uses for a file's exact
+// byte length, just rounded to whole blocks instead: EndOfFileBlock is
+// the block containing the last real byte, except that data ending
+// exactly on a block boundary is instead recorded as the FOLLOWING
+// block with FirstFreeByte 0 (rather than the last real block with
+// FirstFreeByte at the block size) — so a FirstFreeByte of 0 shifts the
+// count back by one block. EndOfFileBlock 0 means the file has no data
+// at all yet.
+func (f *File) UsedBlocks() uint32 {
+	eof := f.Header.RecordAttributes.EndOfFileBlock
+	if eof == 0 {
+		return 0
+	}
+	if f.Header.RecordAttributes.FirstFreeByte == 0 {
+		return eof - 1
+	}
+	return eof
+}
+
 // isUnwritten reports whether virtual block vbn is allocated to f but has
 // never actually been written — see Header.HighWaterMark's own doc
 // comment for the guarantee this relies on. Not every file header records

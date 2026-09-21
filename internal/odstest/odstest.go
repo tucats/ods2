@@ -155,18 +155,31 @@ type FileHeaderFixture struct {
 	HighWaterMark uint32
 
 	// HighestBlock becomes RecordAttributes.HighestBlock, i.e. volume.
-	// File.Blocks() -- the file's length in virtual blocks. Anything that
-	// reads a file's full extent (such as volume.Directory.List) relies
-	// on this to know how many blocks to read, so any fixture exercising
-	// that needs to set it to match how much data MapBytes describes.
+	// File.Blocks() -- the file's length in *allocated* virtual blocks.
+	// Anything that reads a file's full extent needs it set to match how
+	// much data MapBytes describes.
 	HighestBlock uint32
 
 	// The remaining fields become the rest of RecordAttributes, needed by
 	// package rms's tests to control a file's record format: Format is
 	// the record format (Fixed/Variable/VFC/Stream*); EndOfFileBlock and
 	// FirstFreeByte together give the file's exact valid length in bytes
-	// (see ondisk.RecAttr's documentation); MaxRecordSize matters for
-	// RecordFormatFixed; VfcSize matters for RecordFormatVFC.
+	// (see ondisk.RecAttr's documentation) -- volume.Directory.List relies
+	// on these, not HighestBlock, to know how much of a directory's
+	// allocation is actually real content (see volume.File.UsedBlocks).
+	// For a directory fixture (FileChar includes ondisk.FchDirectory)
+	// that leaves EndOfFileBlock at its zero default, BuildFileHeaderBytes
+	// fills it in from HighestBlock instead, treating every allocated
+	// block as real, fully-written data -- the assumption every directory
+	// fixture in this codebase already made before List() distinguished
+	// the two. A test that specifically wants a directory with unwritten
+	// trailing allocation (allocated beyond what it actually uses --
+	// see volume's TestDirectoryListSkipsUnwrittenTrailingBlocks) must
+	// set EndOfFileBlock explicitly to opt out of this default; it does
+	// not apply to a non-directory fixture at all, since a real,
+	// deliberately-empty file (EndOfFileBlock 0 despite a nonzero
+	// HighestBlock -- see rms's TestReaderEmptyFile) is a legitimate case
+	// there that this default would otherwise silently break.
 	Format         ondisk.RecordFormat
 	EndOfFileBlock uint32
 	FirstFreeByte  uint16
@@ -232,6 +245,16 @@ func BuildFileHeaderBytes(t testing.TB, f FileHeaderFixture) []byte {
 
 	binary.LittleEndian.PutUint32(b[fhOffFileChar:], f.FileChar)
 	binary.LittleEndian.PutUint32(b[fhOffHighwater:], f.HighWaterMark)
+
+	// See FileHeaderFixture.EndOfFileBlock's doc comment: a directory
+	// fixture that doesn't care about the used-vs-allocated distinction
+	// gets EndOfFileBlock filled in from HighestBlock automatically,
+	// using the same "data ends exactly on a block boundary" on-disk
+	// convention real ODS-2 headers use (the following block, at offset
+	// 0) rather than requiring every call site to compute this by hand.
+	if f.FileChar&ondisk.FchDirectory != 0 && f.EndOfFileBlock == 0 && f.HighestBlock > 0 {
+		f.EndOfFileBlock = f.HighestBlock + 1
+	}
 
 	// The RecAttr sub-structure begins at fhOffRecAttr; offsets below are
 	// relative to it (see ondisk.RecAttr's own field-by-field byte
