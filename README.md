@@ -71,16 +71,24 @@ VMS-quadword time semantics. These are publically available data structure;
 the C reference version was consulted for comfiration but not copied
 directly.
 
-### Disk image containers
+### Feature Set
 
-An extension of the functionality of the reference C project, this ODS2 tool
-can access a raw CD-ROM sector dump file as a standard disk image. The Go
-`diskimage` package detects and de-frames both supported container kinds
-transparently:
+The Go packages in this project (and the CLI that uses them) have the following features
 
-- **Plain images** — raw ODS-2 volume bytes back-to-back (this also covers
-  2048-byte-sector ISO dumps, since 2048 is an exact multiple of the
-  512-byte ODS-2 logical block size).
-- **Raw CD-ROM sector dumps** — 2352 bytes/sector (12-byte sync + 4-byte
-  header + 2048 bytes user data + ECC/EDC), detected by file size and sync
-  pattern, de-framed on the fly per read.
+- Initialize a new empty ODS-2 volume as a container file.
+- Mount a container file. By default, mounted readonly, but can be mounted
+  for read/write.
+- Manager a "default directory" path.
+- Get a directory listing of files
+- Type the contents of a file
+- Copy files within the container
+- Copy container files to the host system, and host system files into
+  the container.
+- Delete files in the container.
+- Set verion limits for files and directories.
+- Purge older versions of files in the container.
+- Analyze the container disk and perform repairs caused by abends
+  that terminated execution without unmounting a volume (which
+  ensures the BITMAP.SYS file in the container is up-to-date).
+- Ability to read and write ODS-2 disk containers, and read CD-ROM containers
+  and raw CD-ROM image files.
