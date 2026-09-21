@@ -383,3 +383,257 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 		t.Errorf("List() after reopen = %+v, want %+v", got, want)
 	}
 }
+
+// TestDirectoryRemoveOnlyEntry removes the single entry from a
+// one-block directory, confirming the result is one empty-but-valid block
+// (packDirectoryBlocks' own "empty entries still produces one block"
+// fallback), not zero blocks.
+func TestDirectoryRemoveOnlyEntry(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "ONE.DIR")
+
+	fid := ondisk.Fid{Num: 50, Seq: 1}
+	if err := dir.Insert("README.TXT", 1, fid, bm, ib); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	if err := dir.Remove("README.TXT", 1, bm, ib); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("List() after removing the only entry = %+v, want empty", entries)
+	}
+
+	// The directory must still be exactly one, well-formed block -- not
+	// zero blocks -- and that block must round-trip through an independent
+	// reopen cleanly (i.e. it decodes as a valid, empty directory block
+	// rather than something List merely tolerates via the same in-memory
+	// Header this test already mutated).
+	vol := &Volume{Devices: []*Device{dev}}
+	reopened, err := vol.OpenDirectory(dir.Header.Fid)
+	if err != nil {
+		t.Fatalf("OpenDirectory: %v", err)
+	}
+	reentries, err := reopened.List()
+	if err != nil {
+		t.Fatalf("List (reopened): %v", err)
+	}
+	if len(reentries) != 0 {
+		t.Errorf("List() after reopen = %+v, want empty", reentries)
+	}
+}
+
+// TestDirectoryRemoveOneOfSeveralVersions confirms Remove takes out exactly
+// the (name, version) it's asked for and leaves every sibling version --
+// and every other name -- completely intact.
+func TestDirectoryRemoveOneOfSeveralVersions(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "VERS.DIR")
+
+	fid1 := ondisk.Fid{Num: 50, Seq: 1}
+	fid2 := ondisk.Fid{Num: 51, Seq: 1}
+	fid3 := ondisk.Fid{Num: 52, Seq: 1}
+	otherFid := ondisk.Fid{Num: 60, Seq: 1}
+	if err := dir.Insert("DATA.DAT", 1, fid1, bm, ib); err != nil {
+		t.Fatalf("Insert v1: %v", err)
+	}
+	if err := dir.Insert("DATA.DAT", 2, fid2, bm, ib); err != nil {
+		t.Fatalf("Insert v2: %v", err)
+	}
+	if err := dir.Insert("DATA.DAT", 3, fid3, bm, ib); err != nil {
+		t.Fatalf("Insert v3: %v", err)
+	}
+	if err := dir.Insert("OTHER.TXT", 1, otherFid, bm, ib); err != nil {
+		t.Fatalf("Insert OTHER.TXT: %v", err)
+	}
+
+	if err := dir.Remove("data.dat", 2, bm, ib); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	want := []ondisk.DirEntry{
+		{Name: "DATA.DAT", Version: 3, Fid: fid3},
+		{Name: "DATA.DAT", Version: 1, Fid: fid1},
+		{Name: "OTHER.TXT", Version: 1, Fid: otherFid},
+	}
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !reflect.DeepEqual(entries, want) {
+		t.Errorf("List() after removing DATA.DAT;2 = %+v, want %+v", entries, want)
+	}
+}
+
+// TestDirectoryRemoveShrinksUsedBlocks inserts enough entries to force the
+// directory across two blocks, then removes enough of them that everything
+// left re-packs into just the first block -- confirming HighWaterMark
+// moves backward (the one case, per recordUsedBlocks' own doc comment,
+// where nothing else in this codebase legitimately shrinks it) and that a
+// subsequent List() correctly stops seeing the second block's now-stale
+// physical content instead of trying to decode it.
+func TestDirectoryRemoveShrinksUsedBlocks(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "SHRINK.DIR")
+
+	// Fill the first block near capacity with one name, then add a second
+	// name that doesn't fit alongside it -- forcing a second block, the
+	// same shape TestDirectoryInsertForcesDirectoryExtension already
+	// relies on.
+	const count = 55
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("FILE%04d.TXT", i)
+		fid := ondisk.Fid{Num: uint16(100 + i), Seq: 1}
+		if err := dir.Insert(name, 1, fid, bm, ib); err != nil {
+			t.Fatalf("Insert(%s) (#%d): %v", name, i, err)
+		}
+	}
+	lastFid := ondisk.Fid{Num: 200, Seq: 1}
+	if err := dir.Insert("LAST.TXT", 1, lastFid, bm, ib); err != nil {
+		t.Fatalf("Insert(LAST.TXT): %v", err)
+	}
+
+	blocksBefore := dir.Blocks()
+	if blocksBefore <= 1 {
+		t.Fatalf("test setup: Blocks() = %d after %d inserts, want more than 1", blocksBefore, count+1)
+	}
+
+	// Removing every FILEnnnn.TXT entry leaves only LAST.TXT, which packs
+	// into a single block by itself.
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("FILE%04d.TXT", i)
+		if err := dir.Remove(name, 1, bm, ib); err != nil {
+			t.Fatalf("Remove(%s) (#%d): %v", name, i, err)
+		}
+	}
+
+	// Blocks() (the directory's allocation) never shrinks -- only the
+	// logical used-block count does. See the non-goal in
+	// docs/PHASE-03.md on directory storage shrink-back.
+	if dir.Blocks() != blocksBefore {
+		t.Errorf("Blocks() after removing down to one name = %d, want unchanged at %d (allocation never shrinks)", dir.Blocks(), blocksBefore)
+	}
+
+	want := []ondisk.DirEntry{{Name: "LAST.TXT", Version: 1, Fid: lastFid}}
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !reflect.DeepEqual(entries, want) {
+		t.Errorf("List() after shrinking = %+v, want %+v", entries, want)
+	}
+
+	// Independent reopen must see the same, smaller content -- proving
+	// HighWaterMark's new, smaller value was actually written to disk, not
+	// just held in the in-memory Header this test already mutated.
+	vol := &Volume{Devices: []*Device{dev}}
+	reopened, err := vol.OpenDirectory(dir.Header.Fid)
+	if err != nil {
+		t.Fatalf("OpenDirectory: %v", err)
+	}
+	reentries, err := reopened.List()
+	if err != nil {
+		t.Fatalf("List (reopened): %v", err)
+	}
+	if !reflect.DeepEqual(reentries, want) {
+		t.Errorf("List() after reopen = %+v, want %+v", reentries, want)
+	}
+}
+
+// TestDirectoryRemoveNonexistentEntryErrors confirms Remove refuses a
+// (name, version) that isn't present, and leaves the directory's on-disk
+// content completely untouched rather than writing back a same-as-before
+// layout.
+func TestDirectoryRemoveNonexistentEntryErrors(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "MISS.DIR")
+
+	fid := ondisk.Fid{Num: 50, Seq: 1}
+	if err := dir.Insert("README.TXT", 1, fid, bm, ib); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	before, err := dir.List()
+	if err != nil {
+		t.Fatalf("List (before): %v", err)
+	}
+
+	t.Run("wrong version", func(t *testing.T) {
+		if err := dir.Remove("README.TXT", 99, bm, ib); err == nil {
+			t.Fatal("Remove of a nonexistent version: want error, got nil")
+		}
+	})
+
+	t.Run("wrong name", func(t *testing.T) {
+		if err := dir.Remove("NOSUCHFILE.TXT", 1, bm, ib); err == nil {
+			t.Fatal("Remove of a nonexistent name: want error, got nil")
+		}
+	})
+
+	t.Run("version zero rejected", func(t *testing.T) {
+		if err := dir.Remove("README.TXT", 0, bm, ib); err == nil {
+			t.Fatal("Remove with version 0: want error, got nil")
+		}
+	})
+
+	after, err := dir.List()
+	if err != nil {
+		t.Fatalf("List (after): %v", err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("List() after failed Remove calls = %+v, want unchanged %+v", after, before)
+	}
+}

@@ -112,7 +112,7 @@ contract — there isn't one yet.
 | # | Subtask | Status |
 |---|---|---|
 | 1 | `volume`: file & header-chain deallocation primitive | Done |
-| 2 | `volume`: `Directory.Remove` | Not started |
+| 2 | `volume`: `Directory.Remove` | Done |
 | 3 | `volume`: `DeleteFile` (ties 1+2 together) | Not started |
 | 4 | `cmd/ods2`: `DELETE` command | Not started |
 | 5 | `volume`: version-limit resolution + create-time enforcement | Not started |
@@ -412,6 +412,30 @@ from N blocks' worth of content to fewer — confirming `HighWaterMark`
 moves backward correctly and a subsequent `List()` doesn't see stale
 trailing content; removing a nonexistent `(name, version)` errors without
 modifying anything on disk.
+
+**Shipped**, as `volume/directory.go`'s `func (d *Directory) Remove(name
+string, version uint16, bm *Bitmap, ib *IndexBitmap) error`, matching the
+sketch above exactly — including the `bm`/`ib` parameters, which `Remove`
+never actually ends up using: removing entries from an already-packed
+layout can only need the same or fewer blocks than before (a strict
+subset of the same content, packed by the same greedy, order-preserving
+`packDirectoryBlocks` algorithm `Insert` already used to lay it out),
+never more, so the `Extend`-if-short-on-space branch `Insert` needs has no
+equivalent here. They're kept in the signature anyway, both to mirror
+`Insert`'s shape and as a hedge against that invariant ever changing.
+
+Tests (`volume/directory_test.go`): `TestDirectoryRemoveOnlyEntry`,
+`TestDirectoryRemoveOneOfSeveralVersions` (including a case-insensitive
+name match, confirming `Remove` follows the same convention as
+`Lookup`/`List`), `TestDirectoryRemoveShrinksUsedBlocks` (inserts 56
+entries to force a second block, then removes every entry but one,
+confirming `Blocks()` — the directory's allocation — stays put per this
+phase's own directory-shrink-back non-goal, while `List()`, both on the
+live `Directory` and after an independent reopen, correctly stops seeing
+the second block's now-stale physical content), and
+`TestDirectoryRemoveNonexistentEntryErrors` (a wrong version, a wrong
+name, and version 0, each confirmed to leave the directory's on-disk
+content byte-for-byte unchanged).
 
 ### 3. `volume`: `DeleteFile`
 

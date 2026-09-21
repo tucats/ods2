@@ -204,6 +204,90 @@ func (d *Directory) Insert(name string, version uint16, fid ondisk.Fid, bm *Bitm
 	return nil
 }
 
+// Remove deletes one specific (name, version) entry from the directory --
+// the mirror image of Insert. Like Insert, it doesn't splice a single
+// record out in place; instead it re-reads the full entry set (List),
+// drops the one matching entry, and re-lays out everything that's left
+// (packDirectoryBlocks) across however many blocks that now takes --
+// generally fewer than before, since there's strictly less content to
+// pack, though never more blocks than the directory already has allocated
+// (see the file-level doc comment above, and
+// docs/PHASE-03.md's non-goals, on why this method still never calls
+// Extend: removing entries can only shrink a greedy pack, never grow it).
+//
+// Name matching is case-insensitive, matching every other lookup in this
+// package (List/Lookup/NextVersion). Unlike Lookup, version 0 is never
+// accepted here as a "highest version" convenience -- an exact version is
+// always required, so a caller can never remove the wrong version by
+// relying on an implicit default. (The DELETE command, docs/PHASE-03.md
+// subtask 4, enforces the same rule one layer up: a bare "DELETE name"
+// with no version at all is rejected before it ever reaches here.)
+// Removing a (name, version) that isn't present is reported as an error,
+// leaving the directory's on-disk content untouched.
+//
+// bm and ib are the volume's storage- and index-file bitmap caches (see
+// OpenBitmap/OpenIndexBitmap) -- they're threaded through purely to keep
+// this method's signature symmetric with Insert's (which does consult
+// them, to Extend the directory when it needs to grow); Remove itself
+// never needs to allocate anything, since removing entries never needs
+// more space than the directory already has.
+func (d *Directory) Remove(name string, version uint16, bm *Bitmap, ib *IndexBitmap) error {
+	if version == 0 {
+		return fmt.Errorf("volume: removing %s: a specific version is required (0 is not a valid version)", name)
+	}
+
+	container, ok := d.Device.Container.(diskimage.WritableContainer)
+	if !ok {
+		return fmt.Errorf("volume: removing %s;%d: device is not open for write", name, version)
+	}
+
+	entries, err := d.List()
+	if err != nil {
+		return fmt.Errorf("volume: removing %s;%d: %w", name, version, err)
+	}
+
+	remaining := make([]ondisk.DirEntry, 0, len(entries))
+	found := false
+	for _, e := range entries {
+		if !found && strings.EqualFold(e.Name, name) && e.Version == version {
+			found = true
+			continue
+		}
+		remaining = append(remaining, e)
+	}
+	if !found {
+		return fmt.Errorf("volume: removing %s;%d: not found", name, version)
+	}
+
+	blocks, err := packDirectoryBlocks(remaining)
+	if err != nil {
+		return fmt.Errorf("volume: removing %s;%d: %w", name, version, err)
+	}
+
+	for i, block := range blocks {
+		vbn := uint32(i + 1)
+		lbn, err := resolveExtentLBN(d.Extents, vbn)
+		if err != nil {
+			return fmt.Errorf("volume: removing %s;%d: locating directory block %d: %w", name, version, vbn, err)
+		}
+		if err := container.WriteBlock(lbn, block); err != nil {
+			return fmt.Errorf("volume: removing %s;%d: writing directory block %d: %w", name, version, vbn, err)
+		}
+	}
+
+	// recordUsedBlocks may move HighWaterMark BACKWARD here, unlike every
+	// other caller of it (Insert only ever grows) -- see its own doc
+	// comment. Any now-stale bytes physically sitting in blocks beyond the
+	// new count are harmless: List's UsedBlocks-bounded walk never reads
+	// past the new, smaller HighWaterMark, so that leftover content is
+	// simply never looked at again unless a future Insert overwrites it.
+	if err := d.recordUsedBlocks(container, uint32(len(blocks))); err != nil {
+		return fmt.Errorf("volume: removing %s;%d: %w", name, version, err)
+	}
+
+	return nil
+}
+
 // recordUsedBlocks rewrites the directory's own header so that
 // File.UsedBlocks/File.isUnwritten correctly reflect that its first
 // usedBlocks virtual blocks now hold real, freshly-written content: both
