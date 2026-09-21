@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -129,8 +130,8 @@ func TestCmdDirectorySizeQualifier(t *testing.T) {
 	}
 
 	got := out.String()
-	if !strings.Contains(got, "(3)") {
-		t.Errorf("output = %q, want it to show the file's block count (3)", got)
+	if !strings.Contains(got, fmt.Sprintf("%5d", 3)) {
+		t.Errorf("output = %q, want it to show the file's block count (3, right-justified in a 5-wide field)", got)
 	}
 	if !strings.Contains(got, "3 block(s)") {
 		t.Errorf("output = %q, want a total-blocks summary", got)
@@ -159,7 +160,7 @@ func TestCmdDirectoryFullImpliesOthers(t *testing.T) {
 	}
 
 	got := out.String()
-	if !strings.Contains(got, "(3)") { // size
+	if !strings.Contains(got, fmt.Sprintf("%5d", 3)) { // size
 		t.Errorf("output = %q, want /full to imply /size", got)
 	}
 	if !strings.Contains(got, "(20,1,") { // file id

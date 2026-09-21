@@ -277,8 +277,8 @@ headers.
 ODS2> dir [SYS]*.EXE /size
 Directory DUA0:[SYS]
 
-FOO.EXE;1  (42)
-BAR.EXE;3  (17)
+FOO.EXE;1                          42
+BAR.EXE;3                          17
 
 Total of 2 file(s), 59 block(s).
 ```
