@@ -20,10 +20,10 @@ ODS2> dir *.txt
 ODS2> exit
 ```
 
-Every command is also available as a one-shot subcommand, for scripting.
-The one-shot form always takes the image to mount as its first argument,
-then the rest of an ordinary command line exactly as you'd type it at the
-`ODS2>` prompt:
+Five commands — `DIRECTORY`, `TYPE`, `COPY`, `SEARCH`, `DIFFERENCE` — are
+also available as one-shot subcommands, for scripting. The one-shot form
+always takes the image to mount as its first argument, then the rest of
+an ordinary command line exactly as you'd type it at the `ODS2>` prompt:
 
 ```text
 $ ods2 dir myvolume.iso *.txt
@@ -33,9 +33,31 @@ $ ods2 search myvolume.iso "*.TXT" "TODO"
 $ ods2 difference myvolume.iso NOTES.TXT ./local-notes.txt
 ```
 
-Each one-shot invocation mounts the image, runs exactly one command
-against it, and exits — it does not preserve state between invocations
-the way the REPL's `mount`/`set default` do across multiple commands.
+Each one-shot invocation mounts the image **read-only**, runs exactly one
+command against it, and exits — it does not preserve state between
+invocations the way the REPL's `mount`/`set default` do across multiple
+commands, and it has no way to pass `/WRITE` to that mount.
+
+`MOUNT`, `DISMOUNT`, `INITIALIZE`, `ANALYZE/DISK`, `SET`, `SHOW`, and
+`HELP` have **no one-shot subcommand form** — `ods2 mount ...` and
+`ods2 analyze ...` are not recognized at the shell. Anything that needs
+one of these (write access, building a new volume, checking bitmap
+consistency, or a multi-command script that carries state — like `SET
+DEFAULT` — across several commands) needs the interactive `ODS2>` prompt,
+or an equivalent script of command lines piped in on standard input:
+
+```text
+$ ods2 <<'EOF'
+initialize myvolume.dsk 4000 MYVOL
+mount myvolume.dsk /write
+analyze myvolume.dsk /disk
+EOF
+```
+
+Non-interactive standard input (a pipe, a redirected file, or a heredoc
+like the one above) is read one command per line, exactly as if it had
+been typed at the prompt, but without the interactive-only line-editing
+and history support `ODS2>` gets from a real terminal.
 
 **A shell quoting note:** file specifications containing `[` and `]`
 (directory brackets) or `*` are meaningful to most shells too. Quote them
