@@ -79,14 +79,16 @@ What must be preserved faithfully, because it's the actual ODS-2 file
 format rather than an artifact of C or VMS RMS: the home block / index file
 / file header / directory record byte layouts, the four-format
 retrieval-pointer (extent) encoding, VAR/VFC record framing, and
-VMS-quadword time semantics.
+VMS-quadword time semantics. These are publically available data structure;
+the C reference version was consulted for comfiration but not copied
+directly.
 
 ### Disk image containers
 
-Unlike the C tool, which requires a separate preprocessing step
-(`deraw_cdimage.py`) to strip sync/header/ECC bytes from a raw CD-ROM sector
-dump before it can be mounted, the Go `diskimage` package detects and
-de-frames both supported container kinds transparently:
+An extension of the functionality of the reference C project, this ODS2 tool
+can access a raw CD-ROM sector dump file as a standard disk image. The Go
+`diskimage` package detects and de-frames both supported container kinds
+transparently:
 
 - **Plain images** — raw ODS-2 volume bytes back-to-back (this also covers
   2048-byte-sector ISO dumps, since 2048 is an exact multiple of the
