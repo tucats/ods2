@@ -23,13 +23,14 @@ const FileHeaderSize = BlockSize
 // (primary or extension segment) carries in its StructureLevel field: 513
 // decimal, which splits into structure level 2, version 1 when read as two
 // separate bytes (the low byte, 1, is the version; the high byte, 2, is the
-// level). This is a different value from HomeBlock.StructureLevel's own
-// 0x0102 ("ODS-2, version 1.2") -- the volume as a whole and an individual
-// file header are versioned independently on real VMS, and both values are
-// genuine on-disk convention (confirmed against the reference
-// implementation's update_addhead(), which writes this same 513 into every
-// header it creates), not something this project is free to pick for
-// itself.
+// level). HomeBlock.StructureLevel uses this exact same value and the same
+// two-byte split (see its own doc comment, and the ground-truth check
+// against testdata/rq0-ra92.dsk described there) -- the volume as a whole
+// and an individual file header both record "ODS-2, version 1" this same
+// way, not two independent values as an earlier pass at this comment
+// mistakenly claimed. Confirmed against the reference implementation's
+// update_addhead(), which writes this same 513 into every header it
+// creates, not something this project is free to pick for itself.
 const FileHeaderStructureLevel uint16 = 513
 
 // FileHeader describes one file (or directory, or one of a volume's own

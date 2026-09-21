@@ -59,6 +59,7 @@ match more than one command, it's rejected as ambiguous.
 | `dismount` | `dis` (3) |
 | `exit` | `ex` (2) |
 | `help` | `he` (2) |
+| `initialize` | `init` (4) |
 | `mount` | `mou` (3) |
 | `quit` | `qu` (2) |
 | `search` | `sea` (3) |
@@ -153,6 +154,39 @@ DISMOUNT device
 ```
 
 Closes a mounted volume's underlying image file(s) and forgets it.
+
+### INITIALIZE
+
+```text
+INITIALIZE path size-in-blocks [label] [/CLUSTER=n]
+```
+
+Creates a new, zero-filled host file of `size-in-blocks` 512-byte blocks
+and formats it as a minimal but valid ODS-2 volume: a home block,
+`INDEXF.SYS` (with its own storage and header-slot bitmaps), `BITMAP.SYS`,
+and the rest of the nine reserved bookkeeping files (`BADBLK.SYS`,
+`000000.DIR`, `CORIMG.SYS`, `VOLSET.SYS`, `CONTIN.SYS`, `BACKUP.SYS`,
+`BADLOG.SYS`), all listed by name in a freshly built master file
+directory.
+
+`label` defaults to `NONAME` if omitted.
+
+- `/CLUSTER=n` — the volume's allocation cluster size, in blocks. Defaults
+  to 1.
+
+Unlike every other command here, INITIALIZE doesn't mount the volume it
+just built — matching real VMS's own INITIALIZE, which formats a device
+without mounting it. Follow it with `MOUNT path`. It's also not available
+as a one-shot subcommand (`ods2 initialize ...`): the one-shot form's
+convention of mounting `path` before running the command doesn't apply to
+a file that doesn't exist yet.
+
+```text
+ODS2> initialize myvolume.dsk 4000 MYVOL
+%INITIALIZE-I-DONE, Volume MYVOL initialized on myvolume.dsk (4000 blocks, 9 reserved files)
+ODS2> mount myvolume.dsk
+%MOUNT-I-MOUNTED, Volume MYVOL mounted on myvolume.dsk
+```
 
 ### DIRECTORY (DIR)
 

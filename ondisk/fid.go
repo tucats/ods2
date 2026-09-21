@@ -56,6 +56,51 @@ var BitmapFileFid = Fid{Num: 2, Seq: 2}
 // blocks the device itself has marked unusable (empty on a fresh volume).
 var BadBlockFileFid = Fid{Num: 3, Seq: 3}
 
+// CoreImageFileFid, VolumeSetFileFid, ContinuationFileFid, BackupFileFid,
+// and BadBlockLogFileFid are the fixed file IDs of a volume's five
+// remaining reserved bookkeeping files, header slots 5 through 9 —
+// CORIMG.SYS (a historical core-image file), VOLSET.SYS (the volume-set
+// member list, empty on a single-disk volume), CONTIN.SYS (a historical
+// continuation file), BACKUP.SYS (the backup journal), and BADLOG.SYS (a
+// bad-block log), respectively. All five are ordinary, normally-empty
+// files on a freshly initialized volume.
+//
+// Unlike IndexFileFid/BitmapFileFid/BadBlockFileFid/
+// MasterFileDirectoryFid (slots 1-4), the C reference implementation this
+// project is based on never names these five files or their slots at all
+// (see docs/PHASE-02.md subtask 12) — the numbers here were confirmed
+// empirically by reading testdata/rq0-ra92.dsk (a real, actively-used
+// OpenVMS volume) directly: its home block records ReservedFiles = 9, and
+// its master file directory lists exactly these nine names at exactly
+// these nine file numbers, with file number 10 onward already in
+// ordinary (non-reserved) use by real files the volume happens to
+// contain. ReservedFileCount below records that same count as the
+// authoritative single source of truth for how many of a volume's header
+// slots this reserved-file table accounts for.
+var (
+	CoreImageFileFid    = Fid{Num: 5, Seq: 5}
+	VolumeSetFileFid    = Fid{Num: 6, Seq: 6}
+	ContinuationFileFid = Fid{Num: 7, Seq: 7}
+	BackupFileFid       = Fid{Num: 8, Seq: 8}
+	BadBlockLogFileFid  = Fid{Num: 9, Seq: 9}
+)
+
+// ReservedFileCount is how many of a volume's file-header slots (1 through
+// this count) are reserved for the volume's own bookkeeping files —
+// INDEXF.SYS, BITMAP.SYS, BADBLK.SYS, 000000.DIR, CORIMG.SYS, VOLSET.SYS,
+// CONTIN.SYS, BACKUP.SYS, and BADLOG.SYS, in that order (file numbers 1
+// through 9). This is the same value a mounted volume's own
+// HomeBlock.ReservedFiles field records; package volume's allocators
+// always consult that field directly rather than a hardcoded constant
+// (see docs/PHASE-02.md's "what we're deliberately not porting" table,
+// on why this project doesn't repeat the reference implementation's own
+// hardcoded-10 mistake). ReservedFileCount exists for the one place that
+// has no HomeBlock to read yet: volume.Initialize, which is what DEFINES
+// a freshly built volume's HomeBlock.ReservedFiles value in the first
+// place, and needs a single authoritative source for it and for how many
+// entries its own reserved-file table above has.
+const ReservedFileCount = 9
+
 // Number combines Num and Nmx into the full file number: Nmx supplies the
 // high-order bits for volumes large enough to need file numbers beyond
 // 65535, the range a plain 16-bit Num can express on its own.

@@ -48,7 +48,16 @@ type HomeBlock struct {
 	AlternateHomeLBN  uint32
 	AlternateIndexLBN uint32
 
-	StructureLevel uint16 // ODS structure level/version, e.g. 0x0102 for "ODS-2, version 1.2"
+	// StructureLevel is the on-disk structure level/version, split into two
+	// bytes the same way FileHeaderStructureLevel is: the high byte is the
+	// structure level (2, for "ODS-2"), the low byte the version within it
+	// -- so a volume's home block conventionally carries the same value,
+	// 0x0201 (513 decimal), that every one of its file headers does.
+	// Confirmed directly against testdata/rq0-ra92.dsk (a real OpenVMS
+	// volume): its home block's raw bytes at this field are `01 02`, which
+	// decode little-endian to 0x0201, not the reversed 0x0102 an earlier
+	// pass at this comment mistakenly claimed.
+	StructureLevel uint16
 	ClusterSize    uint16 // disk allocation unit, in blocks: space is always allocated in groups of this many blocks
 
 	HomeVBN           uint16 // this home block's own position (virtual block number) within INDEXF.SYS

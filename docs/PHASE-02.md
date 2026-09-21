@@ -87,7 +87,7 @@ expose.
 | 9 | `volume`: directory mutation (insert + auto-extend + version assignment) | Done |
 | 10 | `volume`: file write API (open-for-write, CreateFile, WriteBlock) | Done |
 | 11 | `volume`: Dismount flush | Done |
-| 12 | `volume`+`cmd`: `INITIALIZE` | Not started |
+| 12 | `volume`+`cmd`: `INITIALIZE` | Done |
 | 13 | `rms`: record writer | Not started |
 | 14 | `cmd/ods2`: `MOUNT /WRITE` + `DISMOUNT` wiring | Not started |
 | 15 | `cmd/ods2`: `ANALYZE/DISK` | Not started |
@@ -384,7 +384,9 @@ this unchanged — it's a pure function of the first 510 bytes). Also add the
 reserved-file `Fid` constants Phase 1 never needed:
 `BitmapFileFid = {Num: 2, Seq: 2}`, `BadBlockFileFid = {Num: 3, Seq: 3}`,
 and (pending confirmation — see subtask 12) constants for file numbers
-5-11.
+5-11 — turned out, once subtask 12 actually checked, to be 5-9: a
+volume's reserved set is nine files, not eleven (see subtask 12's own
+write-up).
 
 `FileHeader`'s variable-position IDENT/map/ACL areas are the main
 complexity here: encoding a header means *choosing* non-overlapping
@@ -896,7 +898,16 @@ existing test needed to control them before `CreateHeader`'s owner/
 protection-defaulting tests did. `ondisk` gained one new exported constant,
 `FileHeaderStructureLevel` (513 decimal — structure level 2, version 1),
 the value the reference implementation writes into every header it
-creates, distinct from `HomeBlock.StructureLevel`'s own 0x0102.
+creates.
+
+**Correction (subtask 12):** this entry originally claimed
+`FileHeaderStructureLevel` was "distinct from `HomeBlock.StructureLevel`'s
+own 0x0102" — backwards. Reading testdata/rq0-ra92.dsk's actual home
+block bytes at that field (`01 02`) during subtask 12 showed they decode
+little-endian to 0x0201 (513), the *same* value as
+`FileHeaderStructureLevel`, not a different one; `0x0102` was this pass's
+own byte-order slip, not a real on-disk value. `ondisk.HomeBlock`'s and
+`ondisk.FileHeader`'s doc comments have been corrected to match.
 
 Tests build on a new, wider writable fixture
 (`newWritableHeaderTestVolume`/`installWideTestBitmap` in
@@ -1226,8 +1237,16 @@ defaults), builds a minimal but valid volume:
    | 7 | CONTIN.SYS | continuation file (historical; empty) |
    | 8 | BACKUP.SYS | backup journal (empty) |
    | 9 | BADLOG.SYS | bad-block log (empty) |
-   | 10 | (reserved) | unused placeholder header |
-   | 11 | (reserved) | unused placeholder header |
+
+   **Update, once this subtask actually checked `testdata/rq0-ra92.dsk`:**
+   there are no placeholder slots 10/11 — a volume's reserved set is
+   exactly these nine files (`HomeBlock.ReservedFiles` = 9 on the real
+   volume), and file numbers 10 onward are in ordinary, ReservedFiles-
+   `FindFreeSlot`-visible use the moment anything creates a file (this
+   real volume's own file 10 is `SECURITY.SYS`, file 11 `SYSEXE.DIR` —
+   both perfectly ordinary files, not part of any reserved table). See
+   this subtask's own "Shipped" write-up below for how this was confirmed
+   and what changed as a result.
 
 4. Build the root directory (`000000.DIR`)'s single data block, listing
    every reserved file above by name via subtask 5's encoder (matching
@@ -1254,6 +1273,133 @@ operation works against it unmodified: the reserved files' headers decode,
 initialized volume, runnable in CI unlike the real-image test), and a file
 subsequently created on it (subtask 10) and dismounted (subtask 11) can be
 re-mounted and read back correctly.
+
+**Shipped.** Before writing any code, the reserved-file table's open
+question (file numbers 5-11, never named anywhere in the C reference) was
+resolved by actually inspecting `testdata/rq0-ra92.dsk` (subtask 0's own
+note flagged this as worth doing once subtask 12 started): its home
+block's `ReservedFiles` field reads 9, not 11, and `DIRECTORY /FULL
+[000000]*.*` against it shows file numbers 1-9 are exactly this table's
+nine names, in this table's own order, while file 10 is `SECURITY.SYS`
+and file 11 `SYSEXE.DIR` — two perfectly ordinary files a real,
+actively-used system happened to create in the header slots right after
+the reserved ones, not further reserved placeholders. The table above is
+updated accordingly, and `ondisk.CoreImageFileFid`/`VolumeSetFileFid`/
+`ContinuationFileFid`/`BackupFileFid`/`BadBlockLogFileFid` (file numbers
+5-9) plus `ondisk.ReservedFileCount = 9` were added to `ondisk/fid.go`,
+completing what subtask 2 left pending.
+
+The same real volume's headers also settled two more open questions this
+subtask's original write-up hadn't anticipated needing:
+
+- Every reserved file's `Backlink` — including `000000.DIR`'s own,
+  self-referentially — points at `ondisk.MasterFileDirectoryFid`. Every
+  header `Initialize`/`writeReservedFile` builds does the same.
+- A reserved file's `RecordAttributes.EndOfFileBlock`/`HighWaterMark` are
+  always `HighestBlock + 1` with `FirstFreeByte` 0, even for a genuinely
+  empty file (`HighestBlock` 0, `EndOfFileBlock`/`HighWaterMark` 1) —
+  the same "whole allocation counts as used content" convention this
+  package's own `Directory.recordUsedBlocks` (subtask 9) already
+  established for a freshly written directory block, now confirmed as
+  real on-disk convention rather than this project's own invention.
+  `writeReservedFile` (`volume/initialize.go`) reproduces it exactly.
+
+This same pass also caught an unrelated, pre-existing documentation bug
+while cross-checking the real volume's home block byte-for-byte: both
+`ondisk.HomeBlock.StructureLevel`'s and `ondisk.FileHeaderStructureLevel`'s
+doc comments claimed the home block's own structure-level value was
+`0x0102`, distinct from a file header's `0x0201` (513) — backwards. The
+real volume's raw bytes at that field are `01 02`, which decode
+little-endian to `0x0201`, the *same* value a file header carries, not a
+different one; `0x0102` was a byte-order slip in an earlier pass at that
+comment, not a real on-disk value. Both doc comments are corrected (see
+`ondisk/homeblock.go`/`ondisk/fileheader.go`); `Initialize` writes the
+now-correctly-understood `0x0201` (via the existing
+`ondisk.FileHeaderStructureLevel` constant, reused rather than a second
+copy of the same magic number) into the home block it builds.
+
+`volume.Initialize(c diskimage.WritableContainer, opts InitializeOptions)
+error` (`volume/initialize.go`) matches the exposed shape the original
+plan called for. `InitializeOptions` (`Label`, `Owner`, `FileProtection`,
+`ClusterSize`, `MaxFiles`) is entirely optional — every field's zero
+value selects a documented default (`NONAME`; UIC `[1,1]`; `0xFA00`,
+also confirmed against the real volume's own reserved-file protection;
+cluster size 1; and a volume-size-scaled `MaxFiles` with a floor that
+always leaves room for a few user files even on a tiny volume) —
+matching how little real VMS's own `INITIALIZE` actually requires beyond
+a label.
+
+The six-step plan above survived intact once the reserved-file-table
+question was settled, with one structural decision the original
+one-paragraph sketch didn't spell out: rather than going through
+`volume.Mount` at any point before the home block is written (step 6),
+`Initialize` builds its own `*Device` directly, with `Home` set to a
+`HomeBlock` value that exists only in memory until the very last write.
+This is what actually makes "write the home block last" possible: `Mount`
+itself requires a *valid, on-disk* home block to find before it will
+bootstrap `dev.IndexFile`, so using it mid-`Initialize` would force the
+home block to be written first, exactly backwards from the ordering this
+subtask's plan called for. Once `dev.IndexFile` is resolved by hand (via
+the existing private `buildFile`, given the primary header
+`Initialize` just wrote directly to the fixed, computable LBN
+`bootstrapIndexFile` always reads it from — step 2, brute-forced exactly
+as planned), every other reserved file's header is written through the
+same private `writeHeader` helper `CreateHeader`/`Extend`
+(`writeheader.go`) already use, rather than a duplicate encode-and-write
+path — real code reuse, not just a shared convention. `BITMAP.SYS`'s and
+`000000.DIR`'s own data (step 3's "minimal data" and step 4) are written
+directly at their own computed LBNs before their headers, the same
+brute-force approach as INDEXF.SYS itself, since neither `Bitmap`,
+`IndexBitmap`, nor `Directory.Insert` exist yet at that point in the
+sequence to allocate that space through. Step 5 (marking the reserved
+region allocated in both bitmaps) is the first point `Initialize` uses
+the ordinary `Bitmap`/`IndexBitmap` machinery at all — via `Device.
+Bitmap`/`IndexBitmap` (subtask 11's accessors), not `OpenBitmap`/
+`OpenIndexBitmap` directly, so a caller that goes on to create a file
+right after `Initialize` returns (as the acceptance test below does) sees
+the same cached instances rather than a second, independent read of what
+was just written.
+
+A new private `computeLayout` function owns all of step 1's arithmetic
+(home block, INDEXF.SYS's bitmap and header area, BITMAP.SYS's data,
+000000.DIR's one block, all laid out contiguously from LBN 0), returning
+a clear error rather than a corrupt or truncated volume when the
+container is too small for even the minimal reserved layout at the
+requested `MaxFiles`/`ClusterSize`. One correctness point worth calling
+out: `computeLayout`'s formula for how many blocks BITMAP.SYS's own bits
+need is deliberately copied verbatim from `OpenBitmap`'s own (subtask 6)
+rather than derived independently — the two have to agree exactly on
+this number, or `OpenBitmap` would later try to read more (or fewer)
+bitmap-bit blocks than `Initialize` actually allocated space for.
+
+`cmd/ods2/internal/session/initialize.go` wraps it as `INITIALIZE path
+size-in-blocks [label] [/CLUSTER=n]`, creating the host file via
+`diskimage.Create` before calling `volume.Initialize`. Deliberately not
+registered as a one-shot subcommand (`main.go`'s `oneShotCommands`) the
+way `dir`/`copy`/`type` are: every one-shot command mounts its first
+argument as an existing image before running anything, which cannot work
+for a command whose whole job is to create that file — the same reason
+`mount`/`dismount` themselves aren't one-shot subcommands either.
+`INITIALIZE` also deliberately does not mount the volume it just built,
+matching real VMS's own `INITIALIZE` (formats a device without mounting
+it); a following `MOUNT path` picks it up like any other image.
+
+Tests: `volume/initialize_test.go` covers the primary acceptance scenario
+from this subtask's own test plan (`Initialize` a fresh container, `Mount`
+it, confirm the master file directory lists all nine reserved files at
+the right Fids with headers that decode cleanly, then `CreateFile` +
+`WriteBlock` + `Close` + `Dismount`, reopen completely independently, and
+confirm the new file reads back correctly — subtasks 10 and 11
+end-to-end, not just Initialize in isolation), every `InitializeOptions`
+field's default and override, a too-small container and a `MaxFiles`
+below the 9 reserved slots both rejected with a clear error rather than a
+corrupt volume, and the reserved region actually reading as allocated
+(not just logically accounted for) in both bitmaps' raw bits, with the
+very next cluster/slot past it reading free. `cmd/ods2/internal/session/
+initialize_test.go` covers the command wrapper itself: end-to-end
+`INITIALIZE` followed by an ordinary `MOUNT` of the file it created,
+`/CLUSTER` reaching the resulting home block, and the same invalid-size/
+undersized-volume rejections at the command layer.
 
 ### 13. `rms`: record writer
 
