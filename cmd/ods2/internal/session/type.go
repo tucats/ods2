@@ -52,13 +52,30 @@ func cmdType(s *Session, args []string, quals Qualifiers) error {
 	return typeFile(s.Stdout, f)
 }
 
-// typeFile writes f's entire content to w as text, honoring its record
-// format: VFC records have their carriage control expanded (see
-// rms.FormatVFCRecord); every other format gets one '\n' appended per
+// lfLineEnding and crlfLineEnding are the two line-ending byte sequences
+// writeRecords can be asked to use for non-VFC records — plain '\n'
+// (typeFile's own default, and copy's default absent /CRLF) or '\r\n'
+// (copy's /CRLF qualifier).
+var (
+	lfLineEnding   = []byte{'\n'}
+	crlfLineEnding = []byte{'\r', '\n'}
+)
+
+// typeFile writes f's entire content to w as text using the default '\n'
+// line ending. See writeRecords for the actual record-by-record logic.
+func typeFile(w io.Writer, f *volume.File) error {
+	return writeRecords(w, f, lfLineEnding)
+}
+
+// writeRecords writes f's entire content to w as text, honoring its
+// record format: VFC records have their carriage control expanded (see
+// rms.FormatVFCRecord) and lineEnding is not used for them at all, since
+// vfc1's own trailing-control decoding already determines what follows
+// each VFC record; every other format gets lineEnding appended per
 // record, reconstructing ordinary line-oriented text regardless of
 // whether the original framing was a length prefix (Fixed/Variable) or a
 // stream delimiter that rms.Reader has already stripped off (Stream).
-func typeFile(w io.Writer, f *volume.File) error {
+func writeRecords(w io.Writer, f *volume.File, lineEnding []byte) error {
 	r, err := rms.NewReader(f)
 	if err != nil {
 		return err
@@ -87,7 +104,7 @@ func typeFile(w io.Writer, f *volume.File) error {
 		if _, err := w.Write(rec); err != nil {
 			return err
 		}
-		if _, err := w.Write([]byte{'\n'}); err != nil {
+		if _, err := w.Write(lineEnding); err != nil {
 			return err
 		}
 	}

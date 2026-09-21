@@ -281,3 +281,224 @@ func TestCmdCopyIgnoreFallsBackToRawOnCorruptRecord(t *testing.T) {
 		t.Errorf("raw fallback content = %q, want %q", got, raw)
 	}
 }
+
+// newCopyDirsTestSession builds a session with one mounted volume
+// containing SUBDIR.DIR (file #40) in the master file directory, itself
+// containing NESTED.TXT;1 (file #41, StreamLF, "nested content\n") --
+// enough of a directory tree to exercise /DIRS.
+func newCopyDirsTestSession(t *testing.T) *Session {
+	t.Helper()
+
+	c := odstest.NewMemContainer(400)
+	c.PutBlock(1, odstest.BuildHomeBlockBytes(t, odstest.HomeBlockFixture{
+		HomeLBN:       1,
+		Rvn:           1,
+		IdxBitmapVBN:  dirTestIdxBitmapVBN,
+		IdxBitmapLBN:  dirTestIdxBitmapLBN,
+		IdxBitmapSize: dirTestIdxBitmapSize,
+	}))
+	c.PutBlock(dirTestFileHeaderLBN(ondisk.IndexFileFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:            ondisk.IndexFileFid,
+		MapOffsetWords: 55,
+		MapBytes:       odstest.EncodeExtentFormat2(300, dirTestIdxBitmapLBN),
+	}))
+
+	mfdFid := ondisk.MasterFileDirectoryFid
+	subdirFid := ondisk.Fid{Num: 40, Seq: 1}
+	nestedFid := ondisk.Fid{Num: 41, Seq: 1}
+
+	const mfdDataLBN = 200
+	c.PutBlock(dirTestFileHeaderLBN(mfdFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:            mfdFid,
+		FileChar:       ondisk.FchDirectory,
+		HighestBlock:   1,
+		MapOffsetWords: 55,
+		MapBytes:       odstest.EncodeExtentFormat2(1, mfdDataLBN),
+	}))
+	c.PutBlock(mfdDataLBN, odstest.BuildDirBlock(
+		odstest.BuildDirRecordBytes("SUBDIR.DIR", []uint16{1}, []ondisk.Fid{subdirFid}),
+	))
+
+	const subdirDataLBN = 201
+	c.PutBlock(dirTestFileHeaderLBN(subdirFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:            subdirFid,
+		FileChar:       ondisk.FchDirectory,
+		HighestBlock:   1,
+		MapOffsetWords: 55,
+		MapBytes:       odstest.EncodeExtentFormat2(1, subdirDataLBN),
+	}))
+	c.PutBlock(subdirDataLBN, odstest.BuildDirBlock(
+		odstest.BuildDirRecordBytes("NESTED.TXT", []uint16{1}, []ondisk.Fid{nestedFid}),
+	))
+
+	nestedData := []byte("nested content\n")
+	const nestedDataLBN = 210
+	c.PutBlock(dirTestFileHeaderLBN(nestedFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
+		Fid:            nestedFid,
+		Format:         ondisk.RecordFormatStreamLF,
+		HighestBlock:   1,
+		EndOfFileBlock: 1,
+		FirstFreeByte:  uint16(len(nestedData)),
+		MapOffsetWords: 55,
+		MapBytes:       odstest.EncodeExtentFormat2(1, nestedDataLBN),
+	}))
+	block := make([]byte, ondisk.BlockSize)
+	copy(block, nestedData)
+	c.PutBlock(nestedDataLBN, block)
+
+	vol, err := volume.Mount(c)
+	if err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+
+	s := New()
+	s.Stdout = &bytes.Buffer{}
+	s.Volumes["DUA0"] = vol
+	s.Default.Device = "DUA0"
+	return s
+}
+
+func TestCmdCopyDirsCreatesHostDirectoryAndPreservesHierarchy(t *testing.T) {
+	s := newCopyDirsTestSession(t)
+	dest := t.TempDir()
+
+	if err := cmdCopy(s, []string{"[...]*.*", dest}, Qualifiers{"dirs": ""}); err != nil {
+		t.Fatalf("cmdCopy: %v", err)
+	}
+
+	subdirPath := filepath.Join(dest, "SUBDIR")
+	if info, err := os.Stat(subdirPath); err != nil || !info.IsDir() {
+		t.Fatalf("expected %s to be a directory, err=%v", subdirPath, err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(subdirPath, "NESTED.TXT;1"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != "nested content\n" {
+		t.Errorf("content = %q, want %q", got, "nested content\n")
+	}
+}
+
+func TestCmdCopyWithoutDirsSkipsDirectoryEntries(t *testing.T) {
+	s := newCopyDirsTestSession(t)
+	dest := t.TempDir()
+
+	// "*.*" at the top level matches only SUBDIR.DIR, which should be
+	// silently skipped (not an error, and no output) without /dirs.
+	if err := cmdCopy(s, []string{"*.*", dest}, Qualifiers{}); err != nil {
+		t.Fatalf("cmdCopy: %v", err)
+	}
+
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("dest contents = %v, want none", entries)
+	}
+}
+
+func TestCmdCopyStreamQualifierPreservesRawBytes(t *testing.T) {
+	// A StreamCR file: without /stream, text-mode copying re-serializes
+	// records using the default LF line ending, changing '\r'
+	// terminators to '\n'. With /stream, the exact original bytes
+	// (including the '\r' terminators) pass through unchanged.
+	data := []byte("one\rtwo\r")
+	s := newSingleFileSession(t, "CRFILE.TXT", odstest.FileHeaderFixture{
+		Format:         ondisk.RecordFormatStreamCR,
+		EndOfFileBlock: 1,
+		FirstFreeByte:  uint16(len(data)),
+	}, data)
+
+	outPath := filepath.Join(t.TempDir(), "out.txt")
+	if err := cmdCopy(s, []string{"CRFILE.TXT", outPath}, Qualifiers{"stream": ""}); err != nil {
+		t.Fatalf("cmdCopy: %v", err)
+	}
+
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != string(data) {
+		t.Errorf("content = %q, want exact source bytes %q", got, data)
+	}
+}
+
+func TestCmdCopyWithoutStreamNormalizesLineEndings(t *testing.T) {
+	data := []byte("one\rtwo\r")
+	s := newSingleFileSession(t, "CRFILE.TXT", odstest.FileHeaderFixture{
+		Format:         ondisk.RecordFormatStreamCR,
+		EndOfFileBlock: 1,
+		FirstFreeByte:  uint16(len(data)),
+	}, data)
+
+	outPath := filepath.Join(t.TempDir(), "out.txt")
+	if err := cmdCopy(s, []string{"CRFILE.TXT", outPath}, Qualifiers{}); err != nil {
+		t.Fatalf("cmdCopy: %v", err)
+	}
+
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if want := "one\ntwo\n"; string(got) != want {
+		t.Errorf("content = %q, want normalized %q", got, want)
+	}
+}
+
+func TestCmdCopyCRLFQualifier(t *testing.T) {
+	data := []byte("one\ntwo\n")
+	s := newSingleFileSession(t, "LFFILE.TXT", odstest.FileHeaderFixture{
+		Format:         ondisk.RecordFormatStreamLF,
+		EndOfFileBlock: 1,
+		FirstFreeByte:  uint16(len(data)),
+	}, data)
+
+	outPath := filepath.Join(t.TempDir(), "out.txt")
+	if err := cmdCopy(s, []string{"LFFILE.TXT", outPath}, Qualifiers{"crlf": ""}); err != nil {
+		t.Fatalf("cmdCopy: %v", err)
+	}
+
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if want := "one\r\ntwo\r\n"; string(got) != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+func TestCmdCopyCRLFAndLFAreMutuallyExclusive(t *testing.T) {
+	s, _ := newTypeTestSession(t)
+	outPath := filepath.Join(t.TempDir(), "out.txt")
+
+	if err := cmdCopy(s, []string{"STREAM.TXT", outPath}, Qualifiers{"crlf": "", "lf": ""}); err == nil {
+		t.Fatal("cmdCopy with both /crlf and /lf: want error, got nil")
+	}
+}
+
+func TestCmdCopyVFCQualifierIsAcceptedNoOp(t *testing.T) {
+	s, _ := newTypeTestSession(t)
+	outPath1 := filepath.Join(t.TempDir(), "out1.txt")
+	outPath2 := filepath.Join(t.TempDir(), "out2.txt")
+
+	if err := cmdCopy(s, []string{"STREAM.TXT", outPath1}, Qualifiers{}); err != nil {
+		t.Fatalf("cmdCopy: %v", err)
+	}
+	if err := cmdCopy(s, []string{"STREAM.TXT", outPath2}, Qualifiers{"vfc": ""}); err != nil {
+		t.Fatalf("cmdCopy with /vfc: %v", err)
+	}
+
+	got1, err := os.ReadFile(outPath1)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	got2, err := os.ReadFile(outPath2)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got1) != string(got2) {
+		t.Errorf("output with /vfc = %q, want the same as without it: %q", got2, got1)
+	}
+}
