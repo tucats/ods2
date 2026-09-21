@@ -75,6 +75,7 @@ expose.
 
 | # | Subtask | Status |
 |---|---|---|
+| 0 | Phase 1 bugfix: `Directory.List()` on partially-allocated directories | Done |
 | 1 | `diskimage`: writable containers | Not started |
 | 2 | `ondisk`: fixed-layout encoders (HomeBlock, FileHeader, Fid, Uic, Ident, RecAttr) | Not started |
 | 3 | `ondisk`: retrieval-pointer encoder | Not started |
@@ -228,6 +229,80 @@ reason).
 Each subtask is sized to be one commit (per this repo's convention: commit
 each complete, testable task on its own). "Depends on" lists other Phase 2
 subtasks that must land first; Phase 1 is assumed complete throughout.
+
+### 0. Phase 1 bugfix: `Directory.List()` on partially-allocated directories
+
+**Depends on:** nothing — a Phase 1 correctness fix, not new Phase 2
+functionality, but worth landing first: it blocks reliable use of
+`testdata/rq0-ra92.dsk` (see
+[Testing strategy](#testing-strategy)) for the rest of this phase, and
+subtask 9's directory-insert path calls the same `List()` this bug is in.
+
+Discovered by smoke-testing `testdata/rq0-ra92.dsk` (a real, writable
+OpenVMS volume newly available locally — see
+[Testing strategy](#testing-strategy)) against the existing `DIRECTORY`
+command: `dir [000000]*.*` fails with `volume: decoding directory block 2:
+ondisk: directory record size is inconsistent with its name length`.
+
+Root cause: this volume's root directory header has
+`RecordAttributes.HighestBlock` (allocated) = 3 but
+`EndOfFileBlock`/`HighWaterMark` = 2 — one block of allocated-but-never-
+written trailing space, which is completely normal (VMS pre-extends
+directories by `HomeBlock.DefaultExtendSize` blocks at a time; this
+volume's is 5). `Directory.List()` (`volume/directory.go`) walks every
+block from `1` to `d.Blocks()`, where `Blocks()` returns the header's
+*allocated* size, not its *used* size. Reading block 2 correctly returns
+an all-zero buffer (`File.ReadBlock` honors `HighWaterMark`, per its
+documented guarantee), but `ondisk.DecodeDirectoryBlock` doesn't recognize
+an all-zero block as "no more data" — its end-of-data check only looks for
+the `0xFFFF` size-field sentinel, and a `0x0000` size field instead gets
+parsed as a valid-looking but internally-inconsistent record.
+
+Every fixture Phase 1 was tested against so far (synthetic
+`internal/odstest` fixtures, and the real OpenVMS install-CD image) never
+exercised a directory with this shape — install-CD directories are
+typically packed tightly with no slack, and hand-built test fixtures
+naturally only ever wrote blocks they meant to be read. A real, actively-
+used OpenVMS volume does have this shape, which is exactly the kind of
+real-world edge case Phase 1's own real-image validation exists to catch.
+
+Fix: `Directory.List()` should stop at the directory's logical end
+(`EndOfFileBlock`), not its physical allocation (`HighestBlock`) — matching
+the purpose of the high-water-mark guarantee (blocks at/beyond it are
+allocated-but-meaningless, not "more directory data"). Exact shape TBD when
+this lands (bound the loop by `EndOfFileBlock` directly, or treat any
+block at/beyond the high-water mark as an early, non-error stop) — worth
+confirming against this fixture's actual bytes whether a directory's last
+used block can ever contain a partial/trailing record before picking the
+exact boundary condition.
+
+**Tests:** a regression test reproducing this exact shape (a directory
+header with `HighestBlock > EndOfFileBlock`) against a synthetic fixture,
+confirming `List()` succeeds and returns exactly the entries within the
+used range; existing `directory_test.go`/`realimage_test.go` coverage
+continues to pass unchanged; `dir [000000]*.*` against
+`testdata/rq0-ra92.dsk` succeeds.
+
+**Shipped:** a shared `(*File) isUnwritten(vbn) bool` helper
+(`volume/file.go`) factors the high-water-mark check out of `ReadBlock`
+(unchanged behavior) and into `Directory.List`, which now stops as soon as
+it reaches an unwritten block instead of trying to decode it —
+`volume/directory.go`. Regression test
+`TestDirectoryListSkipsUnwrittenTrailingBlocks`
+(`volume/directory_test.go`) reproduces the exact shape found on
+`testdata/rq0-ra92.dsk` (`HighestBlock` 3, `HighWaterMark`/
+`EndOfFileBlock` 2) against a synthetic fixture, with the two trailing
+blocks filled with non-zero garbage rather than left zeroed — this catches
+a fix that only *happens* to work because unwritten blocks default to
+zero, as distinct from one that genuinely stops reading at the right
+boundary. Confirmed against the real fixture directly:
+`dir [000000]*.*` /`full` now lists all 13 reserved/system entries in
+`testdata/rq0-ra92.dsk`'s root directory cleanly. That listing is also a
+useful preview for subtask 12's reserved-file table: this real, actively-
+used volume's file 10 is `SECURITY.SYS` (not an unused placeholder as
+guessed below), and it has no file 11 at all — worth folding into that
+table's own ground-truth pass when subtask 12 starts, not changed here to
+keep this commit scoped to the bugfix.
 
 ### 1. `diskimage`: writable containers
 
@@ -511,12 +586,18 @@ defaults), builds a minimal but valid volume:
    reserved file set. The C reference gives no guidance here (files 3,
    5-11 are never referenced by name anywhere in it); the working table
    below is derived from published ODS-2 documentation and needs
-   confirming against a real volume (the existing
+   confirming against a real volume before this subtask is considered
+   done. Two real fixtures help here in different ways: the existing
    `cmd/ods2/realimage_test.go` fixture already asserts `INDEXF.SYS`,
    `BITMAP.SYS`, `000000.DIR`, and `BADBLK.SYS`'s names/Fids against a real
-   OpenVMS V5.5-2H4 CD — extending that same check, or inspecting the CD
-   image directly, is the way to confirm 5-11 before this subtask is
-   considered done):
+   OpenVMS V5.5-2H4 *install CD*; `testdata/rq0-ra92.dsk` (see
+   [Testing strategy](#testing-strategy)) is a real, actively-*used*
+   OpenVMS volume rather than an install image, so it's the better source
+   for what files 5-11 actually contain in practice (an install CD may
+   never have touched them) — inspect its master file directory and each
+   reserved file's header directly (once subtask 0 makes `DIRECTORY`
+   against its root reliable) to fill in this table for real before
+   treating it as final:
 
    | # | Name | Role |
    |---|---|---|
@@ -652,20 +733,39 @@ convention (tests land in the same commit as the functional code they
 cover), but two points apply across the whole phase and are worth stating
 once:
 
-- **The real-image fixture (`ODS2_TEST_IMAGE`) cannot be used to test
-  writes.** It's read-only by design (a real OpenVMS install CD dump,
-  checked out of the repo, used only for optional local validation), and
-  even where it's a plain (non-raw-CD) format in principle writable, it's
-  the wrong tool for regression testing: any accidental corruption would
-  need re-fetching an external asset outside this repo's control, and
-  intentional writes to it would make the fixture no longer represent
-  "known-good real VMS output" for future read-side regression checks.
-  Write-path tests build their own synthetic volumes instead, via
-  `diskimage.Create` + `volume.Initialize` (subtask 12) — once that
-  subtask lands, it becomes the standard fixture-construction path for
-  every later write-path test in this phase, superseding one-off manual
-  byte construction the way `internal/odstest` did for Phase 1's decode
-  tests.
+- **The install-CD real-image fixture (`ODS2_TEST_IMAGE`) cannot be used to
+  test writes.** It's read-only by design (a real OpenVMS install CD dump,
+  not checked into the repo, used only for optional local validation via
+  an environment variable), and even where it's a plain (non-raw-CD)
+  format in principle writable, it's the wrong tool for regression
+  testing: any accidental corruption would need re-fetching an external
+  asset outside this repo's control, and intentional writes to it would
+  make the fixture no longer represent "known-good real VMS output" for
+  future read-side regression checks. Write-path tests build their own
+  synthetic volumes instead, via `diskimage.Create` + `volume.Initialize`
+  (subtask 12) — once that subtask lands, it becomes the standard
+  fixture-construction path for every later write-path test in this
+  phase, superseding one-off manual byte construction the way
+  `internal/odstest` did for Phase 1's decode tests.
+- **A second real fixture, `testdata/rq0-ra92.dsk`, is available locally
+  and *can* be used for write testing.** It's a real, writable OpenVMS
+  volume (label `OPENVMS071`), placed directly under `testdata/` — `*.dsk`
+  is already `.gitignore`d, so it's a stable local path that simply won't
+  exist in CI or on a fresh checkout, rather than something reached
+  through an environment variable the way `ODS2_TEST_IMAGE` is. Tests that
+  use it should check for its presence (`os.Stat`, skipping if absent,
+  the same pattern `realimage_test.go` already uses) rather than assume
+  it's there. Unlike `ODS2_TEST_IMAGE`, writing to it is fine *in
+  principle* — but no test (or manual exploration) ever mutates the
+  checked-in copy directly; make a working copy first (a plain host-level
+  file copy to a scratch path is enough) and operate on that. It's also
+  useful beyond write testing: being a real, actively-used volume rather
+  than an install CD, it's the better source of ground truth for subtask
+  12's reserved-file-layout table (files 5-11 specifically, which the
+  install-CD fixture's own assertions don't cover) — see subtask 12. It
+  also already surfaced one genuine Phase 1 bug (subtask 0), which is
+  exactly the kind of value a second, differently-shaped real volume is
+  expected to keep providing through the rest of this phase.
 - **Dogfooding Phase 1's read path is the strongest correctness signal
   available.** Nearly every subtask's test plan above includes "write
   something, then confirm Phase 1's existing, already-validated read code
@@ -682,6 +782,11 @@ once:
   package architecture and design rationale.
 - [COMMANDS.md](COMMANDS.md) — full CLI command reference; `INITIALIZE` and
   `ANALYZE/DISK` get their own entries here once implemented.
+- `testdata/rq0-ra92.dsk` — a real, writable OpenVMS volume available
+  locally for this phase's development and testing (gitignored, not
+  checked into the repo); see [Testing strategy](#testing-strategy) for
+  how it's used and the ground rule (copies only, never mutate the
+  original).
 - `/Users/tom/Projects/ods2` — the C reference implementation consulted for
   this plan (Paul Nankervis's ODS2, via Hunter Goatley/crwolff/Dave
   Shepperd forks) — a from-scratch design informed by it, not a port of it;

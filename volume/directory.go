@@ -45,6 +45,21 @@ func (d *Directory) List() ([]ondisk.DirEntry, error) {
 	buf := make([]byte, ondisk.BlockSize)
 
 	for vbn := uint32(1); vbn <= d.Blocks(); vbn++ {
+		if d.isUnwritten(vbn) {
+			// VMS routinely pre-extends a directory file by several
+			// blocks at a time (see HomeBlock.DefaultExtendSize) and
+			// leaves the slack unwritten until it's actually needed.
+			// Blocks() reports the directory's full *allocation*, which
+			// can run ahead of how much of it has ever actually been
+			// written; a block at or beyond the high-water mark reads
+			// back as all-zero (see File.ReadBlock) rather than holding
+			// a legitimately empty directory block, so it can't be
+			// decoded as one. Every later VBN is unwritten too (the
+			// high-water mark only ever grows as a file is extended, so
+			// nothing beyond it is written while an earlier block isn't),
+			// so there's nothing more to find past this point.
+			break
+		}
 		if err := d.ReadBlock(vbn, buf); err != nil {
 			return nil, fmt.Errorf("volume: reading directory block %d: %w", vbn, err)
 		}

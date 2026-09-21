@@ -39,6 +39,24 @@ func (f *File) Blocks() uint32 {
 	return f.Header.RecordAttributes.HighestBlock
 }
 
+// isUnwritten reports whether virtual block vbn is allocated to f but has
+// never actually been written — see Header.HighWaterMark's own doc
+// comment for the guarantee this relies on. Not every file header records
+// a high-water mark (older/smaller headers omit it, indicated by
+// Header.IdentOffset <= 39); when it's absent, every allocated block is
+// assumed to hold real data, so isUnwritten always reports false.
+//
+// This is shared by ReadBlock (which must return zeroed data for such a
+// block rather than exposing whatever leftover bytes physically occupy
+// it) and Directory.List (which must not attempt to decode such a block
+// as directory records at all — its guaranteed-zero content isn't a
+// legitimately empty directory block, just unused trailing allocation VMS
+// left in place for future growth).
+func (f *File) isUnwritten(vbn uint32) bool {
+	hasHighWaterMark := f.Header.IdentOffset > 39
+	return hasHighWaterMark && vbn >= f.Header.HighWaterMark
+}
+
 // ReadBlock reads virtual block vbn of the file's data into buf, which
 // must be at least ondisk.BlockSize bytes long.
 //
@@ -55,16 +73,12 @@ func (f *File) Blocks() uint32 {
 // previously-deleted file that once occupied the same physical space.
 // ReadBlock returns an all-zero block for such a VBN instead of exposing
 // that leftover data, matching the guarantee VMS itself makes to readers.
-// Not every file header records a high-water mark (older/smaller headers
-// omit it, indicated by Header.IdentOffset <= 39); when it's absent, every
-// allocated block is assumed to hold real data.
 func (f *File) ReadBlock(vbn uint32, buf []byte) error {
 	if len(buf) < ondisk.BlockSize {
 		return fmt.Errorf("volume: ReadBlock buffer too small: need %d bytes, got %d", ondisk.BlockSize, len(buf))
 	}
 
-	hasHighWaterMark := f.Header.IdentOffset > 39
-	if hasHighWaterMark && vbn >= f.Header.HighWaterMark {
+	if f.isUnwritten(vbn) {
 		clear(buf[:ondisk.BlockSize])
 		return nil
 	}
