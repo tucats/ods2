@@ -16,21 +16,40 @@ func init() {
 	)
 }
 
-// cmdMount implements `mount device[,device...] [label[,label...]]`.
+// cmdMount implements `mount device[,device...] [label[,label...]] [/write]`.
 // Multiple comma-separated device names mount a volume set, in the order
 // given (matching VMS's own MOUNT command); labels are accepted for
 // compatibility but, as in the reference implementation, are not
 // validated against the volume's actual label.
 //
-// The /write qualifier is accepted for command-line compatibility but has
-// no effect: this project is read-only (see the project README), so
-// there is no write mode to enable.
+// Without /write (the default), every device is opened read-only
+// (diskimage.Open): the resulting volume can be read from, but any
+// write-path operation on it (CreateFile, WriteBlock, ...) fails, since
+// those check for a diskimage.WritableContainer underneath — see
+// volume.File.OpenForWrite. With /write, every device is instead opened
+// via diskimage.OpenWritable, which returns a WritableContainer that
+// satisfies that check. A device whose backing image can't be written to
+// at all — a raw CD-ROM sector dump; see WritableContainer's doc comment
+// for why — fails right here with a clear error, rather than mounting
+// successfully and only failing later, confusingly, on the first actual
+// write attempt.
 func cmdMount(s *Session, args []string, quals Qualifiers) error {
 	deviceNames := splitDeviceList(args[0])
+	writable := quals.Has("write")
 
 	containers := make([]diskimage.Container, 0, len(deviceNames))
 	for _, name := range deviceNames {
-		c, err := diskimage.Open(strings.TrimSuffix(name, ":"))
+		trimmed := strings.TrimSuffix(name, ":")
+
+		var (
+			c   diskimage.Container
+			err error
+		)
+		if writable {
+			c, err = diskimage.OpenWritable(trimmed)
+		} else {
+			c, err = diskimage.Open(trimmed)
+		}
 		if err != nil {
 			for _, opened := range containers {
 				_ = opened.Close()

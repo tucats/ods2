@@ -89,7 +89,7 @@ expose.
 | 11 | `volume`: Dismount flush | Done |
 | 12 | `volume`+`cmd`: `INITIALIZE` | Done |
 | 13 | `rms`: record writer | Done |
-| 14 | `cmd/ods2`: `MOUNT /WRITE` + `DISMOUNT` wiring | Not started |
+| 14 | `cmd/ods2`: `MOUNT /WRITE` + `DISMOUNT` wiring | Done |
 | 15 | `cmd/ods2`: `ANALYZE/DISK` | Not started |
 | 16 | `cmd/ods2`: `COPY` host → volume direction (stretch goal) | Not started |
 
@@ -1490,6 +1490,54 @@ subsequent write-path operation works; against a raw-CD image, fails with
 a clear message; `MOUNT` without `/WRITE` still works exactly as it does
 today (read-only, unchanged behavior) — a regression test against Phase
 1's existing `mount_test.go` coverage.
+
+**Shipped.** `cmdDismount` already called `Volume.Dismount()` as of
+subtask 11's own commit (it wired that up as part of adding `Dismount`
+itself, ahead of this subtask actually landing) — the only piece this
+subtask still had to do was `MOUNT /WRITE` itself. `cmdMount` now checks
+`quals.Has("write")` and, when given, opens every device via
+`diskimage.OpenWritable` instead of `diskimage.Open`, collecting the
+results into the same `[]diskimage.Container` slice `mountContainers`
+already expected (a `WritableContainer` satisfies `Container`, so no
+signature changes were needed downstream). Opening a raw-CD image `/WRITE`
+now fails right at `MOUNT` with `OpenWritable`'s own clear error, instead
+of mounting successfully and only failing later, confusingly, on the first
+write attempt. No separate "is this volume writable" flag was added to
+`Session` or `Volume`: whichever device(s) a write-path operation touches
+already decide this the same way subtask 10's `File.OpenForWrite` does —
+by type-asserting `Device.Container` to `diskimage.WritableContainer` —
+and a device mounted without `/WRITE` now genuinely fails that assertion
+(see the bug fix below), so a future mutating command (subtask 15/16) can
+rely on that existing check rather than needing a second copy of the same
+state.
+
+**Bug found and fixed while building on subtask 1:** the type-assertion
+check above (`f.Device.Container.(diskimage.WritableContainer)`, used
+throughout package `volume` — `OpenForWrite`, `Bitmap`/`IndexBitmap`
+opening, `writeHeader`, directory mutation, and more) only means anything
+if a `Container` obtained from the read-only `Open`/`OpenFormat` can
+actually *fail* that assertion. It couldn't: `plainImage`, the concrete
+type both `Open` and `OpenWritable` returned, carried a `WriteBlock`
+method unconditionally, regardless of whether the `*os.File` underneath it
+had actually been opened `O_RDWR` or plain `O_RDONLY`. A type assertion
+only inspects a value's method set, not how its fields were initialized,
+so *every* plain-image `Container` — mounted `/WRITE` or not — already
+satisfied `WritableContainer` before this subtask's `MOUNT /WRITE` wiring
+gave that distinction any way to actually differ in practice. The write
+itself would still have reached `os.File.WriteAt` and failed there with a
+raw OS permission error, rather than the clean, intentional "device is not
+open for write" error the check exists to produce — exactly the kind of
+latent bug that stays invisible until something (this subtask) finally
+exercises the read-only-vs-writable distinction end to end. Fixed by
+splitting the single `plainImage` type in two:
+`plainImage` (`diskimage/plain.go`) keeps only `ReadBlock`/`Blocks`/
+`Close` and is what `Open`/`OpenFormat` construct; a new
+`writablePlainImage` embeds `plainImage` and adds `WriteBlock`, and is
+what `OpenWritable`/`OpenFormatWritable`/`Create` construct instead. Added
+`TestOpenPlainImageDoesNotImplementWritableContainer` to
+`diskimage/container_test.go` as a regression guard, and updated
+`TestOpenWritableAutoDetectsPlainImage`'s type assertion to the new
+`*writablePlainImage`.
 
 ### 15. `cmd/ods2`: `ANALYZE/DISK`
 

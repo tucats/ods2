@@ -223,7 +223,7 @@ func OpenFormatWritable(path string, format Format) (WritableContainer, error) {
 				"diskimage: %s is %d bytes, not a multiple of the ODS-2 block size (%d)",
 				path, size, BlockSize))
 		}
-		return &plainImage{f: f, blocks: uint32(size / BlockSize)}, nil
+		return &writablePlainImage{plainImage{f: f, blocks: uint32(size / BlockSize)}}, nil
 
 	default:
 		return closeOnError(fmt.Errorf("diskimage: unknown format %d", format))
@@ -260,5 +260,5 @@ func Create(path string, blocks uint32) (WritableContainer, error) {
 		return nil, fmt.Errorf("diskimage: sizing %s to %d bytes: %w", path, size, err)
 	}
 
-	return &plainImage{f: f, blocks: blocks}, nil
+	return &writablePlainImage{plainImage{f: f, blocks: blocks}}, nil
 }

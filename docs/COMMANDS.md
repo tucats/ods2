@@ -139,8 +139,12 @@ aren't checked against the volume's actual label.
 The **first** device name you mount becomes your current default device
 (with directory `[000000]`) if you haven't set one yet.
 
-- `/WRITE` — accepted for compatibility; has no effect. This tool is
-  read-only.
+- `/WRITE` — mounts the volume for write access instead of the default
+  read-only mode, required before any write-path operation (`INITIALIZE`
+  already writes directly to an image without going through `MOUNT`, but
+  future write commands will need this). Fails with a clear error if the
+  image can't be written to — a raw CD-ROM sector dump, in particular, can
+  never be mounted `/WRITE`.
 
 ```text
 ODS2> mount DUA0: myvolume.iso

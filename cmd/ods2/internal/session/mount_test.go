@@ -158,3 +158,98 @@ func TestCmdMountNonexistentFile(t *testing.T) {
 		t.Fatal("cmdMount on a nonexistent file: want error, got nil")
 	}
 }
+
+// writeTestImage dumps an in-memory test container out to a real host file,
+// the same way TestCmdMountEndToEnd does, so /WRITE can be exercised
+// through cmdMount's actual diskimage.OpenWritable path rather than an
+// in-memory fake (odstest.MemContainer doesn't implement WriteBlock, so it
+// can't stand in for a WritableContainer).
+func writeTestImage(t *testing.T, name string, data []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
+
+func TestCmdMountWriteQualifierOpensWritableContainer(t *testing.T) {
+	c := newMountableTestContainer(t)
+	path := writeTestImage(t, "test.img", dumpContainer(t, c))
+
+	s := New()
+	s.Stdout = &bytes.Buffer{}
+	if err := cmdMount(s, []string{path}, Qualifiers{"write": ""}); err != nil {
+		t.Fatalf("cmdMount with /write: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, vol := range s.Volumes {
+			for _, dev := range vol.Devices {
+				_ = dev.Container.Close()
+			}
+		}
+	})
+
+	vol := s.Volumes[strings.ToUpper(path)]
+	if vol == nil {
+		t.Fatalf("Volumes = %v, want an entry for %q", s.Volumes, path)
+	}
+	if _, ok := vol.Devices[0].Container.(diskimage.WritableContainer); !ok {
+		t.Errorf("Devices[0].Container = %T, want a diskimage.WritableContainer (mounted /write)", vol.Devices[0].Container)
+	}
+}
+
+func TestCmdMountWithoutWriteQualifierIsReadOnly(t *testing.T) {
+	c := newMountableTestContainer(t)
+	path := writeTestImage(t, "test.img", dumpContainer(t, c))
+
+	s := New()
+	s.Stdout = &bytes.Buffer{}
+	if err := cmdMount(s, []string{path}, Qualifiers{}); err != nil {
+		t.Fatalf("cmdMount: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, vol := range s.Volumes {
+			for _, dev := range vol.Devices {
+				_ = dev.Container.Close()
+			}
+		}
+	})
+
+	vol := s.Volumes[strings.ToUpper(path)]
+	if vol == nil {
+		t.Fatalf("Volumes = %v, want an entry for %q", s.Volumes, path)
+	}
+	if _, ok := vol.Devices[0].Container.(diskimage.WritableContainer); ok {
+		t.Error("Devices[0].Container unexpectedly implements diskimage.WritableContainer without /write")
+	}
+}
+
+// rawCDSectorSize/rawCDSyncPattern mirror package diskimage's own unexported
+// rawSectorSize/rawSyncPattern constants (diskimage/rawcd.go): the physical
+// size of one raw CD-ROM sector, and the fixed 12-byte sync pattern every
+// such sector begins with. Duplicated here (rather than exported from
+// diskimage, which has no other reason to expose them) so this test can
+// build a minimal raw-CD-shaped host file without a real disc image,
+// confirming /WRITE rejects that format with a clear error instead of
+// mounting successfully and failing later on the first actual write.
+const rawCDSectorSize = 2352
+
+var rawCDSyncPattern = [12]byte{
+	0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00,
+}
+
+func TestCmdMountWriteQualifierRejectsRawCD(t *testing.T) {
+	sector := make([]byte, rawCDSectorSize)
+	copy(sector, rawCDSyncPattern[:])
+	path := writeTestImage(t, "raw.img", sector)
+
+	s := New()
+	s.Stdout = &bytes.Buffer{}
+	if err := cmdMount(s, []string{path}, Qualifiers{"write": ""}); err == nil {
+		t.Fatal("cmdMount with /write on a raw CD-ROM image: want error, got nil")
+	}
+	if _, ok := s.Volumes[strings.ToUpper(path)]; ok {
+		t.Error("cmdMount registered a volume despite failing to open it /write")
+	}
+}

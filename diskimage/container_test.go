@@ -194,6 +194,29 @@ func TestOpenAutoDetectsPlainImage(t *testing.T) {
 	}
 }
 
+// TestOpenPlainImageDoesNotImplementWritableContainer guards against a bug
+// where plainImage carried a WriteBlock method unconditionally: since a
+// type assertion only inspects a value's method set, a Container obtained
+// from the read-only Open would then satisfy WritableContainer regardless
+// of whether the underlying file was actually opened for writing, defeating
+// every write-path "is this device open for write" check in package volume
+// (e.g. File.OpenForWrite) — the write would still reach WriteAt, and only
+// fail there, confusingly, because the *os.File itself was opened
+// read-only.
+func TestOpenPlainImageDoesNotImplementWritableContainer(t *testing.T) {
+	path := writeFile(t, "plain.img", buildPlainImage([][]byte{blockFilledWith(1)}))
+
+	c, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer c.Close()
+
+	if _, ok := c.(WritableContainer); ok {
+		t.Fatalf("%T from Open unexpectedly implements WritableContainer", c)
+	}
+}
+
 func TestOpenAutoDetectsRawCDImage(t *testing.T) {
 	blocks := make([][]byte, blocksPerSector)
 	for i := range blocks {
@@ -292,8 +315,8 @@ func TestOpenWritableAutoDetectsPlainImage(t *testing.T) {
 	}
 	defer c.Close()
 
-	if _, ok := c.(*plainImage); !ok {
-		t.Fatalf("OpenWritable auto-detected %T, want *plainImage", c)
+	if _, ok := c.(*writablePlainImage); !ok {
+		t.Fatalf("OpenWritable auto-detected %T, want *writablePlainImage", c)
 	}
 }
 
