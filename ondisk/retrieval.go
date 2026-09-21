@@ -144,3 +144,96 @@ func (h *FileHeader) RetrievalPointers() ([]Extent, error) {
 
 	return extents, nil
 }
+
+// Per-format limits, derived directly from the bit layout RetrievalPointers
+// decodes above: how many blocks (Count) and how high an LBN (StartLBN)
+// each of the three real formats can represent. Format 0 (placeholder) is
+// never a target of encoding — it carries no extent, so there's nothing an
+// Extent would ever choose it to represent.
+const (
+	// Format 1 ("byte" format): an 8-bit count field (0-255, i.e. Count
+	// 1-256) and a 22-bit LBN (6 bits packed into word0, 16 into word1).
+	retrievalMaxCountFormat1 = 0x100    // Count must be <= this
+	retrievalMaxLBNFormat1   = 0x3FFFFF // StartLBN must be <= this
+
+	// Format 2 ("word" format): a 14-bit count field (Count 1-16384) but a
+	// full 32-bit LBN, so only Count constrains whether this format fits.
+	retrievalMaxCountFormat2 = 0x4000
+
+	// Format 3 ("longword" format): a 30-bit count field (split across two
+	// words) and a full 32-bit LBN — the widest format, always able to
+	// represent any Extent this project can construct (Count is a uint32,
+	// and 0xFFFFFFFF+1 doesn't fit in 30 bits either, so a Count above this
+	// ceiling is rejected as unrepresentable rather than silently wrapping).
+	retrievalMaxCountFormat3 = 0x40000000
+)
+
+// EncodeRetrievalPointers encodes extents into the packed on-disk
+// retrieval-pointer ("map") area bytes — the inverse of
+// FileHeader.RetrievalPointers, and (once chased across every extension
+// segment — package volume's job, not this one) of a file's complete
+// extent list. Unlike the reference implementation, which always emits the
+// widest ("longword") format regardless of whether a narrower one would
+// represent the same extent (see PHASE-02.md's "what we're deliberately
+// not porting" table), this picks the smallest of the three real formats
+// that fits each extent's Count and StartLBN, to avoid wasting header
+// space that a large or fragmented file may need for other extents.
+//
+// The result's length in words (len(result)/2) is what a caller should
+// store in FileHeader.MapWordsInUse (or FileHeaderAreas.MapBytes, whose
+// length EncodeFileHeader already derives that field from).
+func EncodeRetrievalPointers(extents []Extent) ([]byte, error) {
+	var b []byte
+
+	for i, e := range extents {
+		enc, err := encodeExtent(e)
+		if err != nil {
+			return nil, fmt.Errorf("ondisk: encoding retrieval pointer %d: %w", i, err)
+		}
+		b = append(b, enc...)
+	}
+
+	return b, nil
+}
+
+// encodeExtent encodes a single Extent into 2, 3, or 4 words (format 1, 2,
+// or 3 respectively — see RetrievalPointers' documentation for the exact
+// bit layout each format uses; this is its precise inverse), choosing the
+// narrowest format that can represent e.
+func encodeExtent(e Extent) ([]byte, error) {
+	if e.Count == 0 {
+		return nil, fmt.Errorf("ondisk: extent Count must be at least 1, got 0")
+	}
+
+	switch {
+	case e.Count <= retrievalMaxCountFormat1 && e.StartLBN <= retrievalMaxLBNFormat1:
+		b := make([]byte, 4)
+		word0 := uint16(1)<<14 | uint16((e.StartLBN>>16)&0x3F)<<8 | uint16(e.Count-1)
+		binary.LittleEndian.PutUint16(b[0:2], word0)
+		binary.LittleEndian.PutUint16(b[2:4], uint16(e.StartLBN))
+		return b, nil
+
+	case e.Count <= retrievalMaxCountFormat2:
+		b := make([]byte, 6)
+		word0 := uint16(2)<<14 | uint16(e.Count-1)
+		binary.LittleEndian.PutUint16(b[0:2], word0)
+		binary.LittleEndian.PutUint16(b[2:4], uint16(e.StartLBN))
+		binary.LittleEndian.PutUint16(b[4:6], uint16(e.StartLBN>>16))
+		return b, nil
+
+	case e.Count <= retrievalMaxCountFormat3:
+		b := make([]byte, 8)
+		countMinus1 := e.Count - 1
+		word0 := uint16(3)<<14 | uint16((countMinus1>>16)&0x3FFF)
+		binary.LittleEndian.PutUint16(b[0:2], word0)
+		binary.LittleEndian.PutUint16(b[2:4], uint16(countMinus1))
+		binary.LittleEndian.PutUint16(b[4:6], uint16(e.StartLBN))
+		binary.LittleEndian.PutUint16(b[6:8], uint16(e.StartLBN>>16))
+		return b, nil
+
+	default:
+		return nil, fmt.Errorf(
+			"ondisk: extent Count %d exceeds the largest representable retrieval-pointer count (%d)",
+			e.Count, retrievalMaxCountFormat3)
+	}
+}

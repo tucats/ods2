@@ -78,7 +78,7 @@ expose.
 | 0 | Phase 1 bugfix: `Directory.List()` on partially-allocated directories | Done |
 | 1 | `diskimage`: writable containers | Done |
 | 2 | `ondisk`: fixed-layout encoders (HomeBlock, FileHeader, Fid, Uic, Ident, RecAttr) | Done |
-| 3 | `ondisk`: retrieval-pointer encoder | Not started |
+| 3 | `ondisk`: retrieval-pointer encoder | Done |
 | 4 | `ondisk`: storage-bitmap bit-packing + SCB encoder | Not started |
 | 5 | `ondisk`: directory-block encoder | Not started |
 | 6 | `volume`: storage-bitmap cache & allocator (BITMAP.SYS) | Not started |
@@ -477,6 +477,28 @@ map area has run out of room).
 **Tests:** `RetrievalPointers(Encode(extents)) == extents` round-trips
 across boundary values for each format (max count/LBN that still fits
 format 1, one more than that forcing format 2, and so on).
+
+**Shipped.** `EncodeRetrievalPointers(extents []Extent) ([]byte, error)`
+encodes a whole extent list, delegating each extent to a private
+`encodeExtent`, which picks the narrowest of formats 1-3 that fits (format
+1 needs both `Count <= 256` and `StartLBN <= 0x3FFFFF`; format 2 only
+needs `Count <= 16384`, since its LBN field is already a full 32 bits;
+format 3 covers everything else up to `Count <= 0x40000000`, the largest
+count the on-disk 30-bit field can represent). A `Count` of 0 or above that
+ceiling is rejected outright rather than silently wrapping or producing a
+corrupt entry — no caller has a legitimate reason to construct either.
+Format 0 (the placeholder/filler word `RetrievalPointers` skips on decode)
+is never an encode target, since no `Extent` value means "no extent."
+
+The result plugs directly into `FileHeaderAreas.MapBytes` from subtask 2 —
+`EncodeFileHeader` already derives `MapWordsInUse` from its length, so no
+separate word-count return value was needed. Tests cover the boundary
+values the subtask's test plan called for (narrowest-format selection
+verified directly via encoded length, not just via a round trip, since a
+round trip alone can't distinguish "correct bytes" from "correct bytes in
+a wider-than-necessary format"), plus a full round trip through
+`EncodeFileHeader`/`DecodeFileHeader`/`RetrievalPointers` across a mixed
+extent list spanning every format boundary in one map area.
 
 ### 4. `ondisk`: storage-bitmap bit-packing + SCB encoder
 

@@ -118,3 +118,106 @@ func TestRetrievalPointersOutOfBounds(t *testing.T) {
 		t.Fatal("RetrievalPointers with out-of-bounds map area: want error, got nil")
 	}
 }
+
+// TestEncodeExtentPicksNarrowestFormat confirms encodeExtent doesn't just
+// produce correct bytes but the narrowest ones — the whole point of
+// picking format by size rather than always emitting format 3 (see
+// PHASE-02.md's "what we're deliberately not porting" table). wantWords is
+// the encoded length in 16-bit words: 2 for format 1, 3 for format 2, 4 for
+// format 3.
+func TestEncodeExtentPicksNarrowestFormat(t *testing.T) {
+	tests := []struct {
+		name      string
+		extent    Extent
+		wantWords int
+	}{
+		{"format1 smallest", Extent{Count: 1, StartLBN: 0}, 2},
+		{"format1 max count, max LBN", Extent{Count: 256, StartLBN: 0x3FFFFF}, 2},
+		{"one more count than format1 allows", Extent{Count: 257, StartLBN: 0}, 3},
+		{"one more LBN than format1 allows", Extent{Count: 1, StartLBN: 0x400000}, 3},
+		{"format2 max count, full-width LBN", Extent{Count: 16384, StartLBN: 0xFFFFFFFF}, 3},
+		{"one more count than format2 allows", Extent{Count: 16385, StartLBN: 0}, 4},
+		{"format3 max count, full-width LBN", Extent{Count: 0x40000000, StartLBN: 0xFFFFFFFF}, 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			enc, err := encodeExtent(tt.extent)
+			if err != nil {
+				t.Fatalf("encodeExtent(%+v): %v", tt.extent, err)
+			}
+			if gotWords := len(enc) / 2; gotWords != tt.wantWords {
+				t.Errorf("encodeExtent(%+v) = %d words, want %d", tt.extent, gotWords, tt.wantWords)
+			}
+		})
+	}
+}
+
+func TestEncodeExtentInvalidCount(t *testing.T) {
+	if _, err := encodeExtent(Extent{Count: 0, StartLBN: 0}); err == nil {
+		t.Error("encodeExtent with Count 0: want error, got nil")
+	}
+	if _, err := encodeExtent(Extent{Count: 0x40000001, StartLBN: 0}); err == nil {
+		t.Error("encodeExtent with Count exceeding the format-3 ceiling: want error, got nil")
+	}
+}
+
+// TestEncodeRetrievalPointersRoundTrip builds a header from a mix of
+// extents spanning every format's boundary, encodes it via
+// EncodeRetrievalPointers + EncodeFileHeader, decodes it back via
+// DecodeFileHeader + RetrievalPointers, and confirms the exact same
+// extents come back — the "RetrievalPointers(Encode(extents)) == extents"
+// round trip PHASE-02.md's subtask 3 test plan calls for, exercised across
+// boundary values for each format.
+func TestEncodeRetrievalPointersRoundTrip(t *testing.T) {
+	want := []Extent{
+		{Count: 1, StartLBN: 0},
+		{Count: 256, StartLBN: 0x3FFFFF},          // format 1 boundary
+		{Count: 257, StartLBN: 1},                 // just past format 1's count limit
+		{Count: 1, StartLBN: 0x400000},            // just past format 1's LBN limit
+		{Count: 16384, StartLBN: 0xABCDEF},        // format 2 boundary
+		{Count: 16385, StartLBN: 2},               // just past format 2's count limit
+		{Count: 0x40000000, StartLBN: 0xFFFFFFFF}, // format 3 boundary
+	}
+
+	mapBytes, err := EncodeRetrievalPointers(want)
+	if err != nil {
+		t.Fatalf("EncodeRetrievalPointers: %v", err)
+	}
+
+	b, err := EncodeFileHeader(FileHeader{Fid: Fid{Num: 5, Seq: 1}}, FileHeaderAreas{MapBytes: mapBytes})
+	if err != nil {
+		t.Fatalf("EncodeFileHeader: %v", err)
+	}
+
+	h, err := DecodeFileHeader(b)
+	if err != nil {
+		t.Fatalf("DecodeFileHeader: %v", err)
+	}
+
+	got, err := h.RetrievalPointers()
+	if err != nil {
+		t.Fatalf("RetrievalPointers: %v", err)
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("RetrievalPointers(EncodeFileHeader(EncodeRetrievalPointers(extents))) = %+v, want %+v", got, want)
+	}
+}
+
+func TestEncodeRetrievalPointersEmpty(t *testing.T) {
+	got, err := EncodeRetrievalPointers(nil)
+	if err != nil {
+		t.Fatalf("EncodeRetrievalPointers(nil): %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("EncodeRetrievalPointers(nil) = %v, want empty", got)
+	}
+}
+
+func TestEncodeRetrievalPointersPropagatesError(t *testing.T) {
+	_, err := EncodeRetrievalPointers([]Extent{{Count: 1}, {Count: 0}})
+	if err == nil {
+		t.Fatal("EncodeRetrievalPointers with an invalid extent: want error, got nil")
+	}
+}
