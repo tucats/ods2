@@ -28,6 +28,20 @@ type File struct {
 	Device  *Device
 	Header  ondisk.FileHeader
 	Extents []ExtentLocation
+
+	// bm and ib are the storage- and index-file bitmap caches this File was
+	// armed for writing with (see OpenForWrite, in writefile.go) — nil for
+	// a File that's never been through OpenForWrite (the case for every
+	// File returned by OpenFID/buildFile on its own), which is exactly how
+	// WriteBlock and Close tell a read-only File apart from a writable one.
+	bm *Bitmap
+	ib *IndexBitmap
+
+	// maxWrittenVBN is the highest virtual block WriteBlock has been asked
+	// to write since this File was armed for writing (0 if none yet, or if
+	// this File isn't writable at all) — see WriteBlock and Close's own doc
+	// comments (writefile.go) for how it's maintained and used.
+	maxWrittenVBN uint32
 }
 
 // Blocks reports the file's length in virtual blocks (VBNs), as recorded

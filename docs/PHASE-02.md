@@ -85,7 +85,7 @@ expose.
 | 7 | `volume`: index-file header-slot cache & allocator (INDEXF.SYS) | Done |
 | 8 | `volume`: file-header writer (new headers, extension segments, HighWaterMark) | Done |
 | 9 | `volume`: directory mutation (insert + auto-extend + version assignment) | Done |
-| 10 | `volume`: file write API (open-for-write, CreateFile, WriteBlock) | Not started |
+| 10 | `volume`: file write API (open-for-write, CreateFile, WriteBlock) | Done |
 | 11 | `volume`: Dismount flush | Not started |
 | 12 | `volume`+`cmd`: `INITIALIZE` | Not started |
 | 13 | `rms`: record writer | Not started |
@@ -1036,6 +1036,77 @@ to exercise the auto-extend path), close it, and confirm Phase 1's own
 directly-written block within the file's extended range reading back as
 zero pre-write; open an *existing* file (created by a previous test step)
 for write and confirm overwriting a block in place works.
+
+**Shipped**, as `volume/writefile.go`. `(*File) WriteBlock`/`Close` and
+`(*Volume) CreateFile` all needed `bm`/`ib` params the subtask's original
+one-line sketches didn't show — the same deviation subtasks 8 and 9's own
+write-ups already called out for the same reason (allocating/extending
+needs both caches, and nothing else on `File`/`Volume` holds a reference to
+them). Rather than thread them through every call, a `File` is instead
+**armed for writing** once, via a new `(*File) OpenForWrite(bm *Bitmap, ib
+*IndexBitmap) error`, which stores them as new unexported `bm`/`ib` fields
+on `File` — `nil` on every ordinary `File` returned by `OpenFID` (Phase 1's
+read path is completely unchanged), set once a `File` goes through
+`OpenForWrite`. `WriteBlock` and `Close` both use "`bm`/`ib` are nil" as the
+signal that a given `File` isn't writable, rather than adding a separate
+boolean. `CreateFile` builds on `Directory.NextVersion` + `CreateHeader` +
+`Directory.Insert` (subtasks 8/9) exactly as its subtask write-up describes,
+then calls `OpenForWrite` itself so a caller creating a brand-new file can
+go straight into `WriteBlock`/`Close` without an extra step.
+
+`WriteBlock` extends via `Extend` (subtask 8) whenever `vbn` is beyond
+`f.Blocks()`, then writes straight through via `resolveExtentLBN` +
+`WritableContainer.WriteBlock` — no write-back caching for file data,
+matching the design overview's "only the two bitmaps are cached" rule.
+Unlike `CreateHeader`/`Extend`/`Insert`, it deliberately does *not* rewrite
+the header on every call: it only records, in memory, the highest `vbn`
+written so far (`maxWrittenVBN`), leaving `Close` to do the one header
+rewrite needed to record `RecordAttributes.EndOfFileBlock`/`FirstFreeByte`/
+`HighWaterMark` — otherwise writing a file block-by-block would cost one
+full header re-encode/write per block. `Close` uses this package's existing
+whole-block EOF convention (the same one `Directory.recordUsedBlocks`
+already established for subtask 9: `FirstFreeByte` 0, `EndOfFileBlock` one
+past the last block written), and only ever moves `HighWaterMark` forward,
+never back, so it can't make an already-written block start reading as
+simulated-zero again. `Close` is a no-op (not an error) on a `File` that was
+never armed for writing, and disarms `f.bm`/`f.ib` at the end so it's safe
+to call twice and so a `WriteBlock` after `Close` fails cleanly instead of
+writing through stale state.
+
+One real design question worth recording: `WriteBlock` allows out-of-order
+writes (`vbn` 4 before `vbn` 2, say), but this package's on-disk
+`isUnwritten` check is a single scalar `HighWaterMark`, not a per-block
+bitmap — so `Close` advancing it past `maxWrittenVBN` necessarily also
+"un-protects" any lower `vbn` that was skipped over, which would read back
+as whatever is physically on the underlying container rather than a
+guaranteed zero. In practice this is harmless for everything Phase 2 itself
+ever writes (no file/directory deletion exists yet — see the non-goals
+section — so no cluster this project hands out could ever hold a since-
+deleted file's leftover data, and every fixture's free space starts
+genuinely zero-filled, via `diskimage.Create`), but it's a real
+simplification of VMS's own stronger guarantee, documented on `WriteBlock`
+itself rather than silently assumed. A future record-aware writer (subtask
+13) that needs the stronger guarantee, or partial-final-block accuracy, is
+expected to build its own bookkeeping on top rather than this being
+`WriteBlock`'s job.
+
+Tests reuse `writeheader_test.go`'s `newWritableHeaderTestVolume`/
+`installWideTestBitmap` fixture and `directory_test.go`'s
+`newWritableTestDirectory` helper. Coverage: `WriteBlock`/`Close` on an
+unarmed `File` (from `CreateHeader` alone, without `OpenForWrite`) reject
+cleanly rather than panicking on nil `bm`/`ib`; wrong-sized data and VBN 0
+rejected; the core out-of-order-write scenario (VBN 1, then a jump to VBN
+4, confirming VBN 3 reads zero both before *and* after `Close`, then VBN 2
+filled in), verified through a completely independent `OpenFID` re-read;
+reopening an existing, already-written file via `OpenFID` + `OpenForWrite`
+and overwriting one block in place, confirming the rest of the file and its
+`Blocks()` are undisturbed; `CreateFile` end-to-end (directory entry
+findable via `Lookup`, content round-trips through a fresh `OpenFID`, and a
+second `CreateFile` of the same name gets the next version with a distinct
+Fid); and `Close` being safe to call twice, with a `WriteBlock` after
+`Close` rejected.
+
+No pre-existing bugs were found in the code this subtask built on.
 
 ### 11. `volume`: Dismount flush
 
