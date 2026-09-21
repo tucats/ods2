@@ -9,11 +9,12 @@ Goatley and crwolff) — not a line-by-line translation.
 **Status: feature-complete for read access.** The public library surface —
 `vmstime`, `diskimage`, `ondisk`, `volume`, `filespec`, `rms` — and the
 `cmd/ods2` CLI (interactive REPL and one-shot subcommands) are both
-implemented, unit-tested, and verified end to end against a real compiled
-binary: `mount`, `dismount`, `directory`/`dir`, `copy`, `search`, `type`,
-`difference`, `set default`, `show`, `help`, `exit`/`quit`. Remaining polish
-(golden-file tests against real ODS-2 images, a few of `copy`'s more niche
-qualifiers) is tracked below.
+implemented, unit-tested, verified end to end against a real compiled
+binary, verified against a real OpenVMS installation CD image (both
+container formats), and passing CI across Linux, Windows, and macOS:
+`mount`, `dismount`, `directory`/`dir`, `copy`, `search`, `type`,
+`difference`, `set default`, `show`, `help`, `exit`/`quit`. A few of
+`copy`'s more niche qualifiers remain (tracked below).
 
 ## Goals
 
@@ -113,12 +114,18 @@ See the architecture section above for the package layout.
    `exit`/`quit`), REPL (via `github.com/chzyer/readline`) and one-shot CLI
    (via `github.com/spf13/cobra`) sharing the same command implementations.
 8. 🔶 Polish (in progress): automated end-to-end CLI tests against a
-   synthetic image ✅; `copy`'s `/time` and `/ignore` qualifiers ✅; still
-   open: golden-file tests against real (non-synthetic) ODS-2 images,
-   explicit cross-platform CI verification, and `copy`'s remaining niche
-   qualifiers (`/dirs`, `/stream`, `/vfc`, `/crlf`, `/lf`) — text-mode
-   copying already handles the common VFC/Stream/Variable cases correctly
-   via package `rms`, just without those specific overrides yet.
+   synthetic image ✅; `copy`'s `/time` and `/ignore` qualifiers ✅;
+   optional opt-in validation against real ODS-2 images
+   (`cmd/ods2/realimage_test.go`, `ODS2_TEST_IMAGE`/`ODS2_TEST_IMAGE_RAWCD`)
+   ✅ — confirmed correct against a real OpenVMS V5.5-2H4 installation CD,
+   both container formats; cross-platform CI ✅ (catching, and fixing, two
+   real Windows-only bugs along the way: `github.com/chzyer/readline` never
+   processing piped stdin, and a test not closing a mounted volume's file
+   handle before Windows' stricter delete-while-open rules kicked in).
+   Still open: `copy`'s remaining niche qualifiers (`/dirs`, `/stream`,
+   `/vfc`, `/crlf`, `/lf`) — text-mode copying already handles the common
+   VFC/Stream/Variable cases correctly via package `rms`, just without
+   those specific overrides yet.
 
 Explicitly out of scope for now (future work): write/create support,
 ODS-5 support, raw physical device mounting.
