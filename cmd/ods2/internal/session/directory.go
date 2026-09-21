@@ -52,6 +52,7 @@ func cmdDirectory(s *Session, args []string, quals Qualifiers) error {
 	showDate := full || quals.Has("date")
 
 	totalFiles := 0
+
 	var totalBlocks uint32
 
 	for _, group := range groupMatchesByDir(matches) {
@@ -62,6 +63,7 @@ func cmdDirectory(s *Session, args []string, quals Qualifiers) error {
 			if err != nil {
 				return fmt.Errorf("directory: %w", err)
 			}
+
 			fmt.Fprintln(s.Stdout, line)
 			totalFiles++
 			totalBlocks += blocks
@@ -72,6 +74,7 @@ func cmdDirectory(s *Session, args []string, quals Qualifiers) error {
 	if showSize {
 		fmt.Fprintf(s.Stdout, ", %d block(s)", totalBlocks)
 	}
+
 	fmt.Fprintln(s.Stdout, ".")
 
 	return nil
@@ -120,7 +123,9 @@ func groupMatchesByDir(matches []filespec.Match) []dirGroup {
 // per line, with any requested extra detail appended after it.
 func formatDirectoryEntry(vol *volume.Volume, m filespec.Match, showFile, showSize, showDate, full bool, delim byte) (string, uint32, error) {
 	var line strings.Builder
-	fmt.Fprintf(&line, "%s.%s%c%d", m.Name, m.Type, delim, m.Version)
+
+	name := fmt.Sprintf("%s.%s%c%d", m.Name, m.Type, delim, m.Version)
+	fmt.Fprintf(&line, "%-30s", name)
 
 	if !showFile && !showSize && !showDate && !full {
 		return line.String(), 0, nil
@@ -130,19 +135,23 @@ func formatDirectoryEntry(vol *volume.Volume, m filespec.Match, showFile, showSi
 	if err != nil {
 		return "", 0, fmt.Errorf("opening %s.%s: %w", m.Name, m.Type, err)
 	}
+
 	blocks := f.Header.RecordAttributes.HighestBlock
 
 	if showFile {
-		fmt.Fprintf(&line, "  %s", m.Fid.String())
+		fmt.Fprintf(&line, "  %-16s", m.Fid.String())
 	}
+
 	if showSize {
-		fmt.Fprintf(&line, "  (%d)", blocks)
+		fmt.Fprintf(&line, "  %5d", blocks)
 	}
+
 	if showDate {
 		if ident, err := f.Header.Ident(); err == nil {
 			fmt.Fprintf(&line, "  %s", ident.RevisionDate.String())
 		}
 	}
+
 	if full {
 		attr := f.Header.RecordAttributes
 		fmt.Fprintf(&line, "  %s", attr.Format)
