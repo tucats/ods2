@@ -86,7 +86,7 @@ expose.
 | 8 | `volume`: file-header writer (new headers, extension segments, HighWaterMark) | Done |
 | 9 | `volume`: directory mutation (insert + auto-extend + version assignment) | Done |
 | 10 | `volume`: file write API (open-for-write, CreateFile, WriteBlock) | Done |
-| 11 | `volume`: Dismount flush | Not started |
+| 11 | `volume`: Dismount flush | Done |
 | 12 | `volume`+`cmd`: `INITIALIZE` | Not started |
 | 13 | `rms`: record writer | Not started |
 | 14 | `cmd/ods2`: `MOUNT /WRITE` + `DISMOUNT` wiring | Not started |
@@ -1124,6 +1124,59 @@ volume was mounted.
 is genuinely exercising the deferred cache rather than something already
 flushed elsewhere), `Dismount()`, re-open the same container fresh, and
 confirm the allocation is visible.
+
+**Shipped**, as `volume/dismount.go`. The subtask write-up's one-line
+`Dismount() error` sketch glossed over a real question: flushing "every
+device's bitmap caches... if this mount session created any" requires
+somewhere to actually find those caches, and subtasks 6/7 as shipped don't
+give `Volume` one — `OpenBitmap`/`OpenIndexBitmap` are plain functions each
+returning a brand-new, independent instance on every call (deliberately,
+per their own tests: two independently-opened `Bitmap`s over the same
+device is exactly how those subtasks prove the deferred-flush design
+works), and `CreateHeader`/`Extend`/`Insert`/`CreateFile` all take a
+`*Bitmap`/`*IndexBitmap` as an explicit caller-supplied parameter rather
+than looking one up themselves.
+
+Resolved by adding two new methods, `(*Device) Bitmap()` and `(*Device)
+IndexBitmap()`, alongside two new unexported fields on `Device`
+(`bitmap`/`indexBitmap`, both nil until first use): each opens its cache
+via the existing `OpenBitmap`/`OpenIndexBitmap` the first time it's called
+and returns that same cached instance on every later call. This is
+additive, not a replacement — `OpenBitmap`/`OpenIndexBitmap` themselves are
+unchanged, so every existing test's "two independent instances" scenario
+keeps working exactly as before. The new methods are what future session-
+level write-path code (subtask 14 and beyond) is expected to call to get a
+`Bitmap`/`IndexBitmap` to pass into `CreateFile` and friends, and — the
+point of this subtask — what `Dismount` itself uses to find whatever a
+session actually opened: a nil field means "never asked for, so nothing in
+memory could possibly be dirty," which is what makes an all-read-only
+mount session's `Dismount` a genuine no-op rather than needing a separate
+code path.
+
+`(*Volume) Dismount() error` flushes every device's non-nil `bitmap`/
+`indexBitmap` (in that order) and then closes every device's container,
+deliberately attempting every device's flush and close even if an earlier
+one fails — a `WriteBlock` error on device 1 of a volume set shouldn't
+leave device 2's already-pending writes stranded in memory or its
+container needlessly held open — reporting the first error encountered, if
+any, wrapped with `volume: dismount:` context. `cmd/ods2/internal/session`'s
+`cmdDismount` (`mount.go`) now calls it instead of looping
+`dev.Container.Close()` directly, propagating any error instead of
+silently discarding it as the old loop did (a small pre-existing rough
+edge, not a functional bug since `plainImage.Close`/`MemContainer.Close`
+never actually fail in this project's own test suite, but worth fixing
+while touching this exact line).
+
+Tests (`volume/dismount_test.go`) cover: `Device.Bitmap`/`IndexBitmap`
+each returning the identical cached instance across two calls; `Dismount`
+as a safe no-op on a volume that never had either method called on it (the
+read-only-mount case); the primary acceptance scenario from this subtask's
+own test plan — allocate through `Device.Bitmap()` with no intervening
+`Flush`, `Dismount()`, then reopen the same host file as a completely
+independent container/`Volume`/`OpenBitmap` and confirm the allocated
+cluster's bit actually reads back as allocated on disk; and that `Dismount`
+genuinely closes the container (a write afterward fails), not just
+flushes.
 
 ### 12. `volume` + `cmd`: `INITIALIZE`
 

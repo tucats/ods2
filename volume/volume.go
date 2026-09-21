@@ -32,6 +32,18 @@ type Device struct {
 	// once per device (see mountDevice); every subsequent file lookup on
 	// this device goes through it.
 	IndexFile *File
+
+	// bitmap and indexBitmap are this device's storage- and index-file
+	// bitmap caches (see docs/PHASE-02.md's "Two bitmaps, not one"), lazily
+	// opened by the Bitmap/IndexBitmap methods (dismount.go) the first time
+	// a write-path operation asks for one, and left nil for the rest of the
+	// mount session otherwise — in particular, a device that was only ever
+	// read from (or mounted read-only in the first place) never populates
+	// either field. Dismount uses this to know which caches actually need
+	// flushing: nil here means "never opened, so nothing in memory could
+	// possibly be dirty," not "opened but clean."
+	bitmap      *Bitmap
+	indexBitmap *IndexBitmap
 }
 
 // Volume is a mounted ODS-2 volume, spanning one or more member Devices.

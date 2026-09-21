@@ -90,9 +90,10 @@ func mountContainers(s *Session, deviceNames []string, containers []diskimage.Co
 	return nil
 }
 
-// cmdDismount implements `dismount device`, releasing the volume's
-// underlying containers (closing their open file handles) and forgetting
-// it.
+// cmdDismount implements `dismount device`, flushing any pending bitmap
+// writes (volume.Volume.Dismount — a no-op if the volume was never mounted
+// /write or never actually written to), releasing the volume's underlying
+// containers (closing their open file handles), and forgetting it.
 func cmdDismount(s *Session, args []string, quals Qualifiers) error {
 	key := strings.ToUpper(strings.TrimSuffix(strings.TrimSpace(args[0]), ":"))
 
@@ -101,8 +102,8 @@ func cmdDismount(s *Session, args []string, quals Qualifiers) error {
 		return fmt.Errorf("dismount: %s is not mounted", key)
 	}
 
-	for _, dev := range vol.Devices {
-		_ = dev.Container.Close()
+	if err := vol.Dismount(); err != nil {
+		return fmt.Errorf("dismount: %w", err)
 	}
 	delete(s.Volumes, key)
 
