@@ -133,6 +133,18 @@ func TestCmdMountEndToEnd(t *testing.T) {
 	if err := cmdMount(s, []string{path}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdMount: %v", err)
 	}
+	// cmdMount leaves the image file open for as long as the volume stays
+	// mounted, matching real usage — but on Windows, unlike Unix, a file
+	// still open by this process can't be deleted, and t.TempDir()'s own
+	// cleanup would otherwise fail trying to remove it. Close it out
+	// explicitly once the test itself is done with it.
+	t.Cleanup(func() {
+		for _, vol := range s.Volumes {
+			for _, dev := range vol.Devices {
+				_ = dev.Container.Close()
+			}
+		}
+	})
 
 	key := strings.ToUpper(path)
 	if _, ok := s.Volumes[key]; !ok {
