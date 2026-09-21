@@ -1,7 +1,9 @@
 package volume
 
 import (
+	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/tucats/ods2/internal/odstest"
@@ -165,5 +167,219 @@ func TestDirectoryListSkipsUnwrittenTrailingBlocks(t *testing.T) {
 	}
 	if !reflect.DeepEqual(entries, want) {
 		t.Errorf("List() = %+v, want %+v", entries, want)
+	}
+}
+
+// Directory mutation (Insert/NextVersion) tests need an actually writable
+// volume, unlike the read-only newTestVolume fixture the tests above use --
+// they reuse writeheader_test.go's newWritableHeaderTestVolume/
+// installWideTestBitmap, the same writable fixture that file's own
+// CreateHeader/Extend tests build on.
+
+// newWritableTestDirectory creates a brand-new, empty directory file (via
+// CreateHeader, with the directory characteristic set) on dev, ready for
+// Insert calls.
+func newWritableTestDirectory(t *testing.T, dev *Device, ib *IndexBitmap, name string) *Directory {
+	t.Helper()
+
+	f, err := CreateHeader(dev, ib, NewFileHeader{
+		Name:            name,
+		Directory:       ondisk.Fid{Num: 4, Seq: 4},
+		Characteristics: ondisk.FchDirectory,
+	})
+	if err != nil {
+		t.Fatalf("CreateHeader(%s): %v", name, err)
+	}
+	dir, err := f.Directory()
+	if err != nil {
+		t.Fatalf("Directory(): %v", err)
+	}
+	return dir
+}
+
+func TestDirectoryInsertIntoEmptyDirectory(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "EMPTY.DIR")
+	if dir.Blocks() != 0 {
+		t.Fatalf("Blocks() of a freshly created directory = %d, want 0", dir.Blocks())
+	}
+
+	fid := ondisk.Fid{Num: 50, Seq: 1}
+	if err := dir.Insert("README.TXT", 1, fid, bm, ib); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	if dir.Blocks() != 1 {
+		t.Errorf("Blocks() after first Insert = %d, want 1 (the directory had to be extended from 0)", dir.Blocks())
+	}
+
+	want := []ondisk.DirEntry{{Name: "README.TXT", Version: 1, Fid: fid}}
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !reflect.DeepEqual(entries, want) {
+		t.Errorf("List() = %+v, want %+v", entries, want)
+	}
+
+	// Confirm this round-trips through a completely independent reopen, not
+	// just the in-memory dir this test already mutated.
+	vol := &Volume{Devices: []*Device{dev}}
+	reopened, err := vol.OpenDirectory(dir.Header.Fid)
+	if err != nil {
+		t.Fatalf("OpenDirectory: %v", err)
+	}
+	reentries, err := reopened.List()
+	if err != nil {
+		t.Fatalf("List (reopened): %v", err)
+	}
+	if !reflect.DeepEqual(reentries, want) {
+		t.Errorf("List() after reopen = %+v, want %+v", reentries, want)
+	}
+}
+
+func TestDirectoryInsertSecondVersionAndNextVersion(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "VERS.DIR")
+
+	// A name with no existing entries at all predicts version 1.
+	firstVersion, err := dir.NextVersion("DATA.DAT")
+	if err != nil {
+		t.Fatalf("NextVersion (no existing entries): %v", err)
+	}
+	if firstVersion != 1 {
+		t.Errorf("NextVersion(DATA.DAT) with nothing inserted yet = %d, want 1", firstVersion)
+	}
+
+	fid1 := ondisk.Fid{Num: 50, Seq: 1}
+	if err := dir.Insert("DATA.DAT", firstVersion, fid1, bm, ib); err != nil {
+		t.Fatalf("Insert v%d: %v", firstVersion, err)
+	}
+
+	secondVersion, err := dir.NextVersion("DATA.DAT")
+	if err != nil {
+		t.Fatalf("NextVersion: %v", err)
+	}
+	if secondVersion != 2 {
+		t.Errorf("NextVersion(DATA.DAT) after inserting v1 = %d, want 2", secondVersion)
+	}
+
+	fid2 := ondisk.Fid{Num: 51, Seq: 1}
+	if err := dir.Insert("DATA.DAT", secondVersion, fid2, bm, ib); err != nil {
+		t.Fatalf("Insert v%d: %v", secondVersion, err)
+	}
+
+	// Versions come back highest-first, matching EncodeDirectoryBlock's own
+	// on-disk convention (see its doc comment) and Lookup's "version 0 means
+	// highest" rule.
+	want := []ondisk.DirEntry{
+		{Name: "DATA.DAT", Version: 2, Fid: fid2},
+		{Name: "DATA.DAT", Version: 1, Fid: fid1},
+	}
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !reflect.DeepEqual(entries, want) {
+		t.Errorf("List() = %+v, want %+v", entries, want)
+	}
+
+	if got, err := dir.Lookup("DATA.DAT", 0); err != nil || got.Fid != fid2 {
+		t.Errorf("Lookup(DATA.DAT, 0) = %+v, %v; want Fid %v, no error", got, err, fid2)
+	}
+}
+
+// TestDirectoryInsertForcesDirectoryExtension inserts enough distinctly
+// named entries that they can't all fit in the directory's first block,
+// forcing Insert to grow the directory's own allocation via Extend --
+// exactly the case the reference implementation's insert_ent() simply
+// crashes on (see docs/PHASE-02.md's "what we're deliberately not porting"
+// table) and this project handles as an ordinary case instead.
+func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "BIG.DIR")
+
+	// Each "FILEnnnn.TXT;1" record needs 6 (header) + 12 (name) + 8 (one
+	// version entry) = 26 bytes, so a single 512-byte block holds roughly
+	// 19 of them; 60 comfortably forces at least a second (and likely a
+	// third) block.
+	const count = 60
+	want := make([]ondisk.DirEntry, 0, count)
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("FILE%04d.TXT", i)
+		fid := ondisk.Fid{Num: uint16(100 + i), Seq: 1}
+		if err := dir.Insert(name, 1, fid, bm, ib); err != nil {
+			t.Fatalf("Insert(%s) (#%d): %v", name, i, err)
+		}
+		want = append(want, ondisk.DirEntry{Name: name, Version: 1, Fid: fid})
+	}
+
+	if dir.Blocks() <= 1 {
+		t.Fatalf("Blocks() after %d inserts = %d, want more than 1 (the directory should have needed to extend)", count, dir.Blocks())
+	}
+
+	byName := func(entries []ondisk.DirEntry) []ondisk.DirEntry {
+		sorted := append([]ondisk.DirEntry(nil), entries...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+		return sorted
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got, want := byName(entries), byName(want); !reflect.DeepEqual(got, want) {
+		t.Errorf("List() after %d inserts = %+v, want %+v", count, got, want)
+	}
+
+	// Independent reopen must see exactly the same entries, across every
+	// block the directory ended up using.
+	vol := &Volume{Devices: []*Device{dev}}
+	reopened, err := vol.OpenDirectory(dir.Header.Fid)
+	if err != nil {
+		t.Fatalf("OpenDirectory: %v", err)
+	}
+	reentries, err := reopened.List()
+	if err != nil {
+		t.Fatalf("List (reopened): %v", err)
+	}
+	if got, want := byName(reentries), byName(want); !reflect.DeepEqual(got, want) {
+		t.Errorf("List() after reopen = %+v, want %+v", got, want)
 	}
 }

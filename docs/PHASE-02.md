@@ -84,7 +84,7 @@ expose.
 | 6 | `volume`: storage-bitmap cache & allocator (BITMAP.SYS) | Done |
 | 7 | `volume`: index-file header-slot cache & allocator (INDEXF.SYS) | Done |
 | 8 | `volume`: file-header writer (new headers, extension segments, HighWaterMark) | Done |
-| 9 | `volume`: directory mutation (insert + auto-extend + version assignment) | Not started |
+| 9 | `volume`: directory mutation (insert + auto-extend + version assignment) | Done |
 | 10 | `volume`: file write API (open-for-write, CreateFile, WriteBlock) | Not started |
 | 11 | `volume`: Dismount flush | Not started |
 | 12 | `volume`+`cmd`: `INITIALIZE` | Not started |
@@ -940,6 +940,74 @@ extra block(s).
 existing name and confirm `NextVersion` predicted it correctly; insert
 enough entries to force a directory-block split/extension and confirm
 `List()` afterward sees every entry, correctly grouped and versioned.
+
+**Shipped.** `(*Directory) Insert(name string, version uint16, fid
+ondisk.Fid, bm *Bitmap, ib *IndexBitmap) error` — `bm`/`ib` weren't in the
+subtask's original one-line signature sketch above, but turned out to be
+unavoidable: growing the directory's own allocation goes through subtask
+8's `Extend`, which needs both to allocate space and (if the directory's
+own header map ever fills up) a new extension-header segment.
+
+Rather than an in-place byte-splice into one affected block, `Insert`
+re-reads the directory's *entire* current content (`List()`), adds the new
+entry to that set, and re-lays out the complete result from scratch via a
+new `packDirectoryBlocks` helper — greedily filling one `EncodeDirectoryBlock`
+worth of whole name-groups per block, moving to a new block only when the
+next name group doesn't fit. This leans on subtask 5's `EncodeDirectoryBlock`
+as the *sole* authority on "does this fit in a block," rather than
+duplicating its byte-layout math to answer that question independently
+(deliberately paying the small extra cost of a trial `EncodeDirectoryBlock`
+call per candidate group over the life of a `packDirectoryBlocks` call,
+in exchange for a single, already-tested source of truth for the on-disk
+layout). If the new total needs more blocks than the directory currently
+has allocated, `Insert` calls `Extend` for the difference before writing
+anything; the newly written blocks are always written via `WritableContainer.
+WriteBlock` directly (through `resolveExtentLBN`), not through a `File.
+WriteBlock` — that's subtask 10, which depends on this one.
+
+One real correctness subtlety, not called out in the subtask's original
+write-up: writing real directory content into newly-extended space requires
+advancing the directory header's `HighWaterMark`, not just its `HighestBlock`
+(which `Extend` already updates). `Extend` itself *never* touches
+`HighWaterMark` — by design, since it only allocates space without writing
+into it (see subtask 8's own doc comment) — but `Insert` is the opposite
+case: every block up to the new total is unconditionally overwritten with
+real, freshly-encoded directory content. Leaving `HighWaterMark` where
+`Extend` left it would make `File.isUnwritten` (and therefore `Directory.
+List`, which uses it as a defensive bound) treat that freshly-written data
+as still-simulated-zero unwritten space and stop reading before reaching it
+— a real entry silently dropped from every subsequent `List()`. A new
+`(*Directory) recordUsedBlocks` helper, called at the end of `Insert`, fixes
+this by rewriting `RecordAttributes.EndOfFileBlock`/`FirstFreeByte` *and*
+`HighWaterMark` together to reflect the directory's new logical size —
+directory blocks are always written out at exactly `ondisk.BlockSize`
+bytes, so the content always ends precisely on a block boundary, the same
+`FirstFreeByte`-0/`EndOfFileBlock`-one-past-the-last-block convention
+`File.UsedBlocks`' own doc comment already describes.
+
+`NextVersion(name string) (uint16, error)` doesn't call `Lookup` directly
+(despite the doc's original one-line description of it doing so) — `Lookup`
+signals "name not found" via a formatted error string, and distinguishing
+that from a genuine I/O/decode error by string-matching would be fragile.
+Instead it calls `List()` itself and scans for the highest existing version
+of `name`, returning `highest + 1` (which is already correctly `1` when
+`highest`'s zero value means "no existing entries").
+
+Tests reuse `writeheader_test.go`'s writable fixture
+(`newWritableHeaderTestVolume`/`installWideTestBitmap`) via a new
+`newWritableTestDirectory` helper (a `CreateHeader` call with `FchDirectory`
+set). Coverage: insert into a freshly created, zero-block directory
+(confirming the auto-extend-from-nothing path); a second version of an
+existing name, confirming `NextVersion` predicts it and that `List()`
+returns both versions highest-first; and 60 distinctly-named entries (each
+needing 26 on-disk bytes, comfortably more than one 512-byte block holds),
+confirming the directory's `Blocks()` grew past 1 and that every entry
+survives, correctly grouped and versioned — checked both against the
+in-memory `Directory` just mutated and, independently, through a completely
+fresh `Volume.OpenDirectory` re-read (this phase's usual "dogfood Phase 1's
+read path" cross-check).
+
+No pre-existing bugs were found in the code this subtask built on.
 
 ### 10. `volume`: file write API
 
