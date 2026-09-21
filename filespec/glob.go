@@ -108,6 +108,34 @@ func walkDirs(vol *volume.Volume, dirPath []string) ([]dirNode, error) {
 	return current, nil
 }
 
+// ResolveDirectory resolves a literal directory path (as found in
+// Spec.Dirs, e.g. from a parsed destination file spec) to the Directory it
+// names, starting from vol's master file directory — the same walk Glob
+// itself does internally (walkDirs) to reach the directory a file spec's
+// own name/type pattern is matched within, exposed here for callers that
+// need the destination *directory itself*, open and ready to write into
+// (Directory.Insert), rather than a listing of files inside it.
+//
+// Unlike Glob, dirs is not expanded as a wildcard pattern: each component
+// must name an existing subdirectory (matched case-insensitively, the same
+// as any other VMS name comparison in this package), and the result is an
+// error unless that resolves to exactly one directory — unambiguous, since
+// a write destination has to be.
+func ResolveDirectory(vol *volume.Volume, dirs []string) (*volume.Directory, error) {
+	nodes, err := walkDirs(vol, dirs)
+	if err != nil {
+		return nil, err
+	}
+	switch len(nodes) {
+	case 0:
+		return nil, fmt.Errorf("filespec: directory %s not found", formatDirPath(dirs))
+	case 1:
+		return nodes[0].dir, nil
+	default:
+		return nil, fmt.Errorf("filespec: directory %s is ambiguous (%d matches)", formatDirPath(dirs), len(nodes))
+	}
+}
+
 // expandRecursive returns nodes plus every directory nested beneath each
 // one, to any depth, for spec.Recursive's "and everything below" behavior.
 func expandRecursive(vol *volume.Volume, nodes []dirNode) ([]dirNode, error) {

@@ -283,3 +283,72 @@ func TestGlobInvalidVersionSelector(t *testing.T) {
 		t.Fatal("Glob with an invalid version selector: want error, got nil")
 	}
 }
+
+func TestResolveDirectoryRoot(t *testing.T) {
+	vol := newGlobTestVolume(t)
+
+	dir, err := ResolveDirectory(vol, nil)
+	if err != nil {
+		t.Fatalf("ResolveDirectory(nil): %v", err)
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("root directory has %d entries, want 3", len(entries))
+	}
+}
+
+func TestResolveDirectoryNested(t *testing.T) {
+	vol := newGlobTestVolume(t)
+
+	dir, err := ResolveDirectory(vol, []string{"SUBDIR", "DEEPER"})
+	if err != nil {
+		t.Fatalf("ResolveDirectory([SUBDIR.DEEPER]): %v", err)
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name != "LEAF.TXT" {
+		t.Fatalf("ResolveDirectory([SUBDIR.DEEPER]) entries = %+v, want just LEAF.TXT", entries)
+	}
+}
+
+func TestResolveDirectoryIsCaseInsensitive(t *testing.T) {
+	vol := newGlobTestVolume(t)
+
+	dir, err := ResolveDirectory(vol, []string{"subdir"})
+	if err != nil {
+		t.Fatalf("ResolveDirectory([subdir]): %v", err)
+	}
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("ResolveDirectory([subdir]) entries = %+v, want 2", entries)
+	}
+}
+
+func TestResolveDirectoryNotFound(t *testing.T) {
+	vol := newGlobTestVolume(t)
+
+	if _, err := ResolveDirectory(vol, []string{"NOSUCHDIR"}); err == nil {
+		t.Fatal("ResolveDirectory([NOSUCHDIR]): want error, got nil")
+	}
+}
+
+func TestResolveDirectoryRejectsAFile(t *testing.T) {
+	vol := newGlobTestVolume(t)
+
+	// README.TXT is an ordinary file, not a directory -- SUBDIR.DIR is
+	// what walkDirs' own subdirectory match looks for (names ending in
+	// ".DIR"), so a plain file name never resolves to anything here.
+	if _, err := ResolveDirectory(vol, []string{"README"}); err == nil {
+		t.Fatal("ResolveDirectory([README]) naming a plain file: want error, got nil")
+	}
+}

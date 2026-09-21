@@ -91,7 +91,7 @@ expose.
 | 13 | `rms`: record writer | Done |
 | 14 | `cmd/ods2`: `MOUNT /WRITE` + `DISMOUNT` wiring | Done |
 | 15 | `cmd/ods2`: `ANALYZE/DISK` | Done |
-| 16 | `cmd/ods2`: `COPY` host → volume direction (stretch goal) | Not started |
+| 16 | `cmd/ods2`: `COPY` host → volume direction (stretch goal) | Done |
 
 Legend: **Not started** / **In progress** / **Done** (commit `abc1234`) /
 **Deferred** (with a reason).
@@ -1724,6 +1724,113 @@ over and would need their own design pass if pursued).
 identically via `TYPE`/`COPY` off the volume; copying to a name that
 already exists on the volume creates the next version rather than
 overwriting, matching this document's version-numbering goal directly.
+
+**Shipped**, but as `COPY` *volume → volume* rather than strictly *host →
+volume* — the subtask title undersold what turned out to be the natural
+scope once `copy.go`'s existing destination-resolution logic
+(`resolveDestination`, `destIsDirectory`) was extended to recognize a
+second kind of destination at all: any VMS-syntax destination
+(`device:[dir]name.type`) naming a *currently mounted* volume, checked via
+a new `volumeDestination` helper (looked up by the text before dest's
+first `:` — the overwhelmingly common `dest` shape, an ordinary host path
+with no `:` at all or one that doesn't name a mounted device, is never
+mistaken for one). Since `copy`'s *source* is always a file spec on an
+already-mounted volume regardless of which direction the destination
+turns out to be, "host → volume" and "volume → volume" are the same code
+path once the destination is recognized as a volume at all — there was no
+extra cost to also covering the volume-to-volume case, and no clean way to
+exclude it.
+
+New library-level support this needed, not called for by the subtask's
+own one-paragraph sketch: `filespec.ResolveDirectory(vol, dirs)`
+(`filespec/glob.go`), factored out of `Glob`'s own internal `walkDirs` —
+the directory-path-walking logic `Glob` already uses to reach the
+directory a file spec's name/type pattern is matched *within* is exactly
+what's needed to open the destination directory itself (for
+`Directory.Insert`), just exposed as its own function rather than folded
+into a file listing.
+
+`cmdCopy`'s destination handling branches once, early, on
+`volumeDestination`'s result, but the loop body genuinely bifurcates: a
+volume destination resolves its target `Directory` and bitmap caches
+(`Device.Bitmap`/`IndexBitmap`) once, up front (not per matched file —
+every match shares one destination directory), then for each match either
+calls the new `copyOneFileToVolume`, which creates the file via
+`Volume.CreateFile` (subtask 10) and writes its content one of two ways:
+
+- `/BINARY`: `copyRawToVolume` copies the source's exact bytes
+  block-by-block (`File.ReadBlock`/`WriteBlock`), the same convention
+  `copyBinary` already established for the read direction, finishing with
+  `CloseWithFinalByte` (subtask 13) rather than `Close`'s whole-block
+  rounding, so a file whose length isn't a multiple of `ondisk.BlockSize`
+  still round-trips to its exact byte count.
+- Default (text mode): `copyRecordsToVolume` builds a Stream_LF file via
+  `rms.Writer` (subtask 13) — the simplest text convention to target
+  without negotiating VMS's full record-format/carriage-control space on
+  the write side. It reuses `writeRecords`' own per-source-format logic
+  (VFC carriage-control expansion, Fixed/Variable/Stream all normalized to
+  plain `\n`-terminated text) — the same code that already builds a host
+  text file's content — through a small new `lineSplitWriter` adapter that
+  re-splits that already-linear text back into individual records for
+  `Writer.Put` to apply Stream_LF's own framing to, rather than
+  duplicating any per-format read logic a second time.
+
+This is also why /TIME, /IGNORE, /DIRS, and the line-ending qualifiers
+don't carry over, as this subtask's own write-up anticipated: /TIME has no
+host mtime to preserve; /DIRS' "materialize an empty directory" has no
+write-side equivalent yet (a matched `.DIR` source entry is always skipped
+for a volume destination, regardless of /DIRS); and /IGNORE/`/CRLF`/`/LF`
+are about *how* text gets reframed, a choice this subtask deliberately
+narrowed to "always Stream_LF" rather than opening in full. `/QUIET`,
+`/VERBOSE`, `/TEST`, and `/BINARY` all work exactly as they do for a host
+destination, including `/TEST` never touching the destination volume's
+bitmap caches at all (not just skipping the write) — resolving the
+destination directory is itself skipped under `/TEST`, since nothing
+afterward needs it.
+
+Destination name/type resolution (`volumeDestName`) mirrors
+`resolveDestination`'s existing `*`-substitution rule for a host
+destination: a destination naming no file of its own at all (just
+`device:` or `device:[dir]`) keeps every matched file's own name, and `*`
+or `%` in the destination's name or type individually falls back to the
+source's own value for that component — the same "wildcard-copy" rule
+real DCL applies. Version numbers are never taken from the destination
+text (a real VMS destination version is meaningless for `COPY`'s own
+auto-versioning goal); `CreateFile`'s own `Directory.NextVersion` call
+always decides it, and `copyOneFileToVolume` looks the result back up via
+`Directory.Lookup` afterward (rather than having `CreateFile` return it
+directly) purely to report it in `/VERBOSE`'s and the final confirmation
+message's output.
+
+One design point worth recording since it wasn't obvious until working
+through it: a destination directory mounted read-only fails with a clear
+error at the `Device.Bitmap()`/`IndexBitmap()` call resolved up front
+(subtask 6/7's own read-only rejection), before any file is touched —
+`cmdCopy` itself needs no separate "is the destination volume writable"
+check of its own, matching subtask 14's own design of not tracking that
+as separate session state.
+
+Tests: `filespec/glob_test.go` covers `ResolveDirectory` directly (root,
+a nested path, case-insensitivity, not-found, and a plain file name
+correctly rejected — it only ever resolves `.DIR` entries).
+`cmd/ods2/internal/session/copytovolume_test.go` builds a session with one
+read-only source volume (`newTypeTestSession`'s existing fixture) and one
+freshly `Initialize`d, genuinely writable destination volume (`diskimage.
+Create` + `volume.Initialize` + `volume.Mount`, mounted under device
+"DEST"), and covers: default text-mode copy reading back correctly through
+`TYPE` (and landing as genuine Stream_LF, not just coincidentally correct
+bytes); `/BINARY` round-tripping through both directions (host → volume →
+host) and matching the source's exact bytes; a wildcard, directory-only
+destination keeping every matched file's own name; a second copy to the
+same name/type getting the next version, confirmed both in the
+confirmation message and via an independent `Glob`; an ambiguous
+multi-match literal volume destination rejected the same as a literal host
+one; a destination volume mounted read-only rejected with a clear error;
+`/TEST` writing nothing at all; and a plain host-path destination
+continuing to behave exactly as before this subtask (no regression to
+`copy`'s original direction).
+
+No pre-existing bugs were found in the code this subtask built on.
 
 ---
 

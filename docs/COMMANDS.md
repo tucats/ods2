@@ -286,11 +286,18 @@ COPY source-spec destination [/QUIET] [/VERBOSE] [/TEST] [/BINARY] [/TIME]
      [/IGNORE] [/DIRS] [/STREAM] [/VFC] [/CRLF] [/LF]
 ```
 
-Copies one or more files off the volume onto the host filesystem.
-`destination` is always a **host path**, never VMS syntax — this tool
-never writes back to an ODS-2 volume.
+Copies one or more files off the volume. `source-spec` always names files
+on an already-mounted volume; `destination` is usually a **host path** (the
+original, and still the most common, direction), but may instead be VMS
+syntax (`device:[dir]name.type`) naming a location on a *different* (or
+the same) volume that's mounted `/WRITE` — in which case the copy goes
+volume-to-volume instead of onto the host filesystem. A `destination`
+string is only ever treated as VMS syntax if the text before its first
+`:` actually names a currently mounted device; anything else (including
+every ordinary host path, which typically has no `:` at all) is a host
+path exactly as before.
 
-`destination` can be:
+For a **host** `destination`, it can be:
 
 - An existing **directory** — each file is written there under its own
   `name.type;version`.
@@ -301,6 +308,31 @@ never writes back to an ODS-2 volume.
 - An exact literal path — only valid when `source-spec` matches exactly
   one file (copying several files to one literal name is rejected up
   front, rather than silently letting each one overwrite the last).
+
+For a **volume** `destination`, it can be:
+
+- `device:` or `device:[dir]` — naming no file of its own — each matched
+  file is created there under its own name/type (version numbers are
+  always auto-assigned; see below).
+- A name/type containing `*` or `%` — the same wildcard substitution as
+  the host-path case, applied component-by-component.
+- An exact literal `device:[dir]name.type` — only valid when `source-spec`
+  matches exactly one file, same as the host case.
+
+A volume destination's version number is never taken from the text typed
+(even if one was given): the file is always created under the next
+version after whatever, if anything, already exists there under that
+name/type, the same auto-versioning `INITIALIZE`d volumes and `CREATE`
+give every new file. Only `/QUIET`, `/VERBOSE`, `/TEST`, and `/BINARY`
+apply to a volume destination — `/TIME` (no host modification time to
+preserve), `/IGNORE`, `/DIRS`, and the line-ending qualifiers are
+host-file-format concerns with no volume-side equivalent (a matched
+`.DIR` source entry is always skipped for a volume destination, the same
+as without `/DIRS`). Without `/BINARY`, the destination file is always
+created as a Stream (`Stream_LF`) file, whatever record format the source
+file itself used — the simplest text convention to target without
+negotiating a full record-format/carriage-control choice on the write
+side.
 
 Qualifiers:
 
@@ -341,6 +373,17 @@ Qualifiers:
 ODS2> copy *.txt ./extracted/ /verbose
 %COPY-I-COPYING, copying FOO.TXT;1 to ./extracted/FOO.TXT;1
 %COPY-S-COPIED, FOO.TXT;1 copied to ./extracted/FOO.TXT;1
+```
+
+Copying onto a volume mounted `/WRITE` (`DUA1:` here) instead of the host
+filesystem:
+
+```text
+ODS2> mount dua1 /write
+%MOUNT-I-MOUNTED, Volume SCRATCH mounted on DUA1
+ODS2> copy foo.txt DUA1:*.* /verbose
+%COPY-I-COPYING, copying FOO.TXT;1 to DUA1:[000000]FOO.TXT
+%COPY-S-COPIED, FOO.TXT;1 copied to DUA1:[000000]FOO.TXT;1
 ```
 
 ### SEARCH

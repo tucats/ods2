@@ -33,9 +33,15 @@ func init() {
 // cmdCopy implements `copy source-spec destination` with the reference
 // implementation's full qualifier set (see COMMANDS.md for user-facing
 // documentation of each one): /QUIET, /VERBOSE, /TEST, /BINARY, /TIME,
-// /IGNORE, /DIRS, /STREAM, /VFC, /CRLF, /LF. destination is always host
-// (not VMS) path syntax — this project, like the reference
-// implementation, never writes back to an ODS-2 volume.
+// /IGNORE, /DIRS, /STREAM, /VFC, /CRLF, /LF. destination is usually a host
+// path, as in the reference implementation, but may instead be VMS syntax
+// (device:[dir]name.type) naming a location on a volume mounted /WRITE —
+// see volumeDestination — in which case copying goes the other direction,
+// from this session's already-mounted source volume onto that one. Only
+// /QUIET, /VERBOSE, /TEST, and /BINARY carry over to that direction:
+// /TIME (no host mtime to preserve), /IGNORE, /DIRS, and the line-ending
+// qualifiers are host-file-format concerns with no obvious volume-side
+// equivalent (see copyOneFileToVolume/copyRecordsToVolume).
 //
 // /VFC is accepted for command-line compatibility but has no effect:
 // unlike the reference implementation (where VFC interpretation is
@@ -62,7 +68,12 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 	}
 
 	dest := args[1]
-	if len(matches) > 1 && !destIsDirectory(dest) && !strings.Contains(filepath.Base(dest), "*") {
+	destVol, destSpec, toVolume, err := volumeDestination(s, dest)
+	if err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+
+	if len(matches) > 1 && !destAcceptsMultiple(dest, destSpec, toVolume) {
 		return fmt.Errorf("copy: %s.%s matches %d files; destination must be a directory or contain '*' to copy more than one file", spec.Name, spec.Type, len(matches))
 	}
 
@@ -86,19 +97,72 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 	preserveTime := quals.Has("time")
 	dirs := quals.Has("dirs")
 
+	// For a volume destination, the target directory (and its device's
+	// bitmap caches) are resolved once, up front, rather than once per
+	// matched file — the same directory receives every file this command
+	// copies. Skipped entirely under /TEST, which never actually writes.
+	var destDir *volume.Directory
+	var destBm *volume.Bitmap
+	var destIb *volume.IndexBitmap
+	if toVolume && !test {
+		destDir, err = filespec.ResolveDirectory(destVol, destSpec.Dirs)
+		if err != nil {
+			return fmt.Errorf("copy: %w", err)
+		}
+		destBm, err = destDir.Device.Bitmap()
+		if err != nil {
+			return fmt.Errorf("copy: %w", err)
+		}
+		destIb, err = destDir.Device.IndexBitmap()
+		if err != nil {
+			return fmt.Errorf("copy: %w", err)
+		}
+	}
+
 	for _, m := range matches {
 		sourceName := fmt.Sprintf("%s.%s%c%d", m.Name, m.Type, s.Delim, m.Version)
 
 		// A directory entry (e.g. SUBDIR.DIR) has no file content of its
 		// own to copy. Without /DIRS, skip it entirely, matching the
 		// reference implementation's default; with /DIRS, materialize it
-		// as a host directory instead of copying "content".
+		// as a host directory instead of copying "content" — meaningless
+		// for a volume destination (there's no "empty directory" concept
+		// being asked for on the write side), so it's always skipped
+		// there regardless of /DIRS.
 		if strings.EqualFold(m.Type, "DIR") {
-			if !dirs {
+			if toVolume || !dirs {
 				continue
 			}
 			if err := copyDirEntry(s, dest, m, sourceName, test, verbose, quiet); err != nil {
 				return err
+			}
+			continue
+		}
+
+		if toVolume {
+			name, typ := volumeDestName(destSpec, m)
+			destName := (filespec.Spec{Device: destSpec.Device, Dirs: destSpec.Dirs, Name: name, Type: typ}).String()
+
+			if test {
+				fmt.Fprintf(s.Stdout, "%%COPY-I-TEST, would copy %s to %s\n", sourceName, destName)
+				continue
+			}
+			if verbose {
+				fmt.Fprintf(s.Stdout, "%%COPY-I-COPYING, copying %s to %s\n", sourceName, destName)
+			}
+
+			src, err := vol.OpenFID(m.Fid)
+			if err != nil {
+				return fmt.Errorf("copy: %s: %w", sourceName, err)
+			}
+			version, err := copyOneFileToVolume(destVol, destDir, destBm, destIb, name, typ, src, opts.binary)
+			if err != nil {
+				return fmt.Errorf("copy: %s: %w", sourceName, err)
+			}
+
+			if !quiet {
+				destVersion := (filespec.Spec{Device: destSpec.Device, Dirs: destSpec.Dirs, Name: name, Type: typ, Version: fmt.Sprint(version)}).String()
+				fmt.Fprintf(s.Stdout, "%%COPY-S-COPIED, %s copied to %s\n", sourceName, destVersion)
 			}
 			continue
 		}
@@ -131,6 +195,72 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 	}
 
 	return nil
+}
+
+// volumeDestination checks whether dest is VMS-syntax destination
+// (device:[dir]name.type) on a currently mounted volume, as opposed to an
+// ordinary host path — copy's original (and, absent this check, only)
+// destination direction. The device name is looked up before dest is
+// parsed as a file spec at all, so an ordinary host path with no mounted
+// device of that name (the overwhelmingly common case, and every path
+// with no ':' at all) is never mistaken for one.
+//
+// destSpec's Name and Type are deliberately left unresolved from the
+// session's current default (only Dirs inherits it, as a base for dest's
+// own directory text, which may itself be written relative — see
+// filespec.Parse) — an empty destSpec.Name/Type reliably means "dest's
+// text named no file of its own", the volume-destination equivalent of
+// destIsDirectory for a host path (see destAcceptsMultiple/
+// volumeDestName).
+func volumeDestination(s *Session, dest string) (vol *volume.Volume, destSpec filespec.Spec, ok bool, err error) {
+	colonIdx := strings.IndexByte(dest, ':')
+	if colonIdx == -1 {
+		return nil, filespec.Spec{}, false, nil
+	}
+
+	vol, ok = s.Volumes[strings.ToUpper(dest[:colonIdx])]
+	if !ok {
+		return nil, filespec.Spec{}, false, nil
+	}
+
+	destSpec, err = filespec.Parse(dest, filespec.Spec{Dirs: s.Default.Dirs})
+	if err != nil {
+		return nil, filespec.Spec{}, false, err
+	}
+	return vol, destSpec, true, nil
+}
+
+// destAcceptsMultiple reports whether dest can receive more than one
+// matched file: for a host path, an existing directory or a base name
+// containing '*' (copy's original rule); for a volume destination, one
+// naming no file of its own (each source file keeps its own name/type) or
+// one using VMS's own wildcard-substitution characters ('*'/'%') in its
+// name or type, the volume-destination equivalent of a host '*'
+// destination.
+func destAcceptsMultiple(dest string, destSpec filespec.Spec, toVolume bool) bool {
+	if toVolume {
+		return (destSpec.Name == "" && destSpec.Type == "") || strings.ContainsAny(destSpec.Name+destSpec.Type, "*%")
+	}
+	return destIsDirectory(dest) || strings.Contains(filepath.Base(dest), "*")
+}
+
+// volumeDestName resolves the actual name/type to create in the
+// destination directory for matched source file m: destSpec's own
+// name/type, if it gave one (applying VMS's wildcard-substitution
+// characters — a literal "*" or "%" component keeps the source's own
+// name/type instead of using it literally, matching resolveDestination's
+// '*' handling for a host destination), or m's own name/type unchanged if
+// destSpec named no file at all (a directory-only destination — see
+// volumeDestination).
+func volumeDestName(destSpec filespec.Spec, m filespec.Match) (name, typ string) {
+	name, typ = m.Name, m.Type
+	if destSpec.Name != "" && destSpec.Name != "*" && destSpec.Name != "%" {
+		name = destSpec.Name
+	}
+	if destSpec.Type != "" && destSpec.Type != "*" && destSpec.Type != "%" {
+		typ = destSpec.Type
+	}
+	return name, typ
 }
 
 // copyDirEntry handles one matched directory entry under /DIRS: it
@@ -298,6 +428,133 @@ func copyOneFile(vol *volume.Volume, m filespec.Match, outPath string, opts copy
 		return f, copyBinary(out, f)
 	}
 	return f, err
+}
+
+// copyOneFileToVolume copies src's content into a brand-new file
+// name.typ in destDir (using destBm/destIb, destDir's device's bitmap
+// caches — see Device.Bitmap/IndexBitmap), auto-assigning the next
+// version number the same way CreateFile always does, and returns that
+// version for the caller's own confirmation message.
+//
+// binary selects the same two modes copyOneFile's own read-side direction
+// offers: /BINARY creates an Undefined-format file and copies src's exact
+// bytes through unchanged (copyRawToVolume); otherwise the destination is
+// created Stream_LF and src's records are reframed as plain '\n'-delimited
+// text (copyRecordsToVolume), the simplest text convention to target
+// without negotiating a full record-format/carriage-control choice on the
+// write side — see cmdCopy's own doc comment for why /STREAM, /IGNORE,
+// and the line-ending qualifiers don't carry over to this direction.
+func copyOneFileToVolume(destVol *volume.Volume, destDir *volume.Directory, destBm *volume.Bitmap, destIb *volume.IndexBitmap, name, typ string, src *volume.File, binary bool) (uint16, error) {
+	fullName := name + "." + typ
+
+	recAttr := ondisk.RecAttr{Format: ondisk.RecordFormatStreamLF}
+	if binary {
+		recAttr = ondisk.RecAttr{Format: ondisk.RecordFormatUndefined, MaxRecordSize: ondisk.BlockSize}
+	}
+
+	dst, err := destVol.CreateFile(destDir, fullName, recAttr, destBm, destIb)
+	if err != nil {
+		return 0, fmt.Errorf("creating %s: %w", fullName, err)
+	}
+
+	if binary {
+		err = copyRawToVolume(dst, src)
+	} else {
+		err = copyRecordsToVolume(dst, src)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("writing %s: %w", fullName, err)
+	}
+
+	// CreateFile/Directory.Insert already assigned the version actually
+	// used (the highest that existed for fullName before this call, plus
+	// one); looking it back up via Lookup, rather than threading it back
+	// out of CreateFile itself, keeps that bookkeeping entirely inside
+	// Directory, where it already lives.
+	entry, err := destDir.Lookup(fullName, 0)
+	if err != nil {
+		return 0, fmt.Errorf("looking up newly created %s: %w", fullName, err)
+	}
+	return entry.Version, nil
+}
+
+// copyRawToVolume copies src's exact valid bytes (see rms.FileByteLength)
+// to dst block by block, matching copyBinary's own read-side convention,
+// then records dst's true byte length — which may end partway through its
+// last block — via CloseWithFinalByte rather than Close's own
+// whole-block-only rounding.
+func copyRawToVolume(dst, src *volume.File) error {
+	total := rms.FileByteLength(src.Header.RecordAttributes)
+	remaining := total
+
+	buf := make([]byte, ondisk.BlockSize)
+	for vbn := uint32(1); remaining > 0; vbn++ {
+		if err := src.ReadBlock(vbn, buf); err != nil {
+			return err
+		}
+		if err := dst.WriteBlock(vbn, buf); err != nil {
+			return err
+		}
+		remaining -= int64(len(buf))
+	}
+
+	return dst.CloseWithFinalByte(uint16(total % ondisk.BlockSize))
+}
+
+// copyRecordsToVolume reframes src's records as a Stream_LF file on dst.
+// It reuses writeRecords' own per-format logic (VFC carriage-control
+// expansion, Fixed/Variable/Stream all normalized to plain '\n'-terminated
+// text) — the same code that already builds a host text file's content —
+// via lineSplitWriter, which re-splits that text back into individual
+// records for rms.Writer.Put to apply Stream_LF's own framing to.
+func copyRecordsToVolume(dst, src *volume.File) error {
+	w, err := rms.NewWriter(dst)
+	if err != nil {
+		return err
+	}
+
+	lw := &lineSplitWriter{put: w.Put}
+	if err := writeRecords(lw, src, lfLineEnding); err != nil {
+		return err
+	}
+	if len(lw.buf) > 0 {
+		// A trailing "line" with no terminating '\n' at all — possible
+		// when src's own last record has no natural terminator (a VFC
+		// record using a carriage-control that suppresses the trailing
+		// line feed, most notably). Flushed as a final record rather than
+		// silently dropped.
+		if err := w.Put(lw.buf); err != nil {
+			return err
+		}
+	}
+
+	return w.Close()
+}
+
+// lineSplitWriter is an io.Writer adapter that calls put once per
+// '\n'-terminated line written to it (excluding the '\n' itself),
+// buffering only whatever partial line hasn't seen its terminator yet —
+// the bridge between writeRecords, which writes a stream of already
+// line-terminated text, and rms.Writer, whose Put wants each record
+// handed to it individually so it can apply its own destination format's
+// framing.
+type lineSplitWriter struct {
+	buf []byte
+	put func([]byte) error
+}
+
+func (l *lineSplitWriter) Write(p []byte) (int, error) {
+	for _, b := range p {
+		if b != '\n' {
+			l.buf = append(l.buf, b)
+			continue
+		}
+		if err := l.put(l.buf); err != nil {
+			return 0, err
+		}
+		l.buf = l.buf[:0]
+	}
+	return len(p), nil
 }
 
 // isStreamFormat reports whether format is one of the three Stream record
