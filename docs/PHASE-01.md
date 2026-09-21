@@ -1,10 +1,24 @@
 # ods2
 
-A native Go implementation of ODS2, a tool for reading VAX/VMS "Files-11"
-(ODS-2) disk volumes and images. This is a from-scratch Go rewrite of the
-architecture and file-format knowledge in the C [ods2](https://github.com/DaveShepperd/ods2)
+This is the design and progress notes for the initial build of a
+from-scratch Go rewrite of the architecture and file-format knowledge
+in the C [ods2](https://github.com/DaveShepperd/ods2)
 project (itself descended from Paul Nankervis's original, via Hunter
 Goatley and crwolff) — not a line-by-line translation.
+
+As a generalization, this covers basic disk format, volume management,
+and *read* access to an ODS-2 disk image or CDROM image.
+
+**Status: feature-complete for read access.** The public library surface —
+`vmstime`, `diskimage`, `ondisk`, `volume`, `filespec`, `rms` — and the
+`cmd/ods2` CLI (interactive REPL and one-shot subcommands) are both
+implemented, unit-tested, verified end to end against a real compiled
+binary, verified against a real OpenVMS installation CD image (both
+container formats), and passing CI across Linux, Windows, and macOS:
+`mount`, `dismount`, `directory`/`dir`, `copy`, `search`, `type`,
+`difference`, `set default`, `show`, `help`, `exit`/`quit`, with `copy`'s
+complete qualifier set (see COMMANDS.md). See the development plan below
+for what's left.
 
 ## Goals
 
@@ -13,6 +27,9 @@ Goatley and crwolff) — not a line-by-line translation.
 - Targets Linux, Windows, and macOS. No VMS-native code, no raw physical
   device or SCSI passthrough support — only disk image/container files
   (plain block dumps and raw optical-media sector dumps) are supported.
+- Read-only in this phase: mount, directory listing, copy-off, search, type,
+  diff. Write/create support (file creation, deletion, bitmap allocation) is
+  explicitly deferred to a future phase with its own design phase.
 - **Library-first.** Everything except the `cmd/ods2` CLI is a clean,
   importable Go library, intended for reuse from other projects.
 
@@ -84,3 +101,41 @@ transparently:
 - **Raw CD-ROM sector dumps** — 2352 bytes/sector (12-byte sync + 4-byte
   header + 2048 bytes user data + ECC/EDC), detected by file size and sync
   pattern, de-framed on the fly per read.
+
+## Development plan
+
+See the architecture section above for the package layout.
+
+1. ✅ Scaffolding: `go.mod`, package skeletons, CI.
+2. ✅ `diskimage`: plain + raw-CD container support.
+3. ✅ `ondisk`: on-disk structure decode + checksum validation.
+4. ✅ `volume`: mount, index file bootstrap, file header access, virtual-to-
+   logical block mapping, directory list/lookup.
+5. ✅ `filespec`: VMS spec parsing + wildcard/recursive glob.
+6. ✅ `rms`: record-format reading, VFC decode.
+7. ✅ `cmd/ods2`: full command set (`mount`, `dismount`, `directory`/`dir`,
+   `copy`, `search`, `type`, `difference`, `set default`, `show`, `help`,
+   `exit`/`quit`), REPL (via `github.com/chzyer/readline`) and one-shot CLI
+   (via `github.com/spf13/cobra`) sharing the same command implementations.
+8. ✅ Polish: automated end-to-end CLI tests against a synthetic image;
+   `copy`'s complete qualifier set (`/quiet`, `/verbose`, `/test`,
+   `/binary`, `/time`, `/ignore`, `/dirs`, `/stream`, `/vfc`, `/crlf`,
+   `/lf` — see COMMANDS.md); optional opt-in validation against real
+   ODS-2 images (`cmd/ods2/realimage_test.go`,
+   `ODS2_TEST_IMAGE`/`ODS2_TEST_IMAGE_RAWCD`), confirmed correct against a
+   real OpenVMS V5.5-2H4 installation CD in both container formats;
+   cross-platform CI green on Linux, Windows, and macOS (catching, and
+   fixing, two real Windows-only bugs along the way: `github.com/chzyer/
+   readline` never processing piped stdin, and a test not closing a
+   mounted volume's file handle before Windows' stricter
+   delete-while-open rules kicked in).
+
+Explicitly out of scope for now (future work): write/create support,
+ODS-5 support, raw physical device mounting.
+
+## Credits
+
+Paul Nankervis / Hunter Goatley / crwolff — original C implementation and
+subsequent forks. See the C reference at
+[https://github.com/DaveShepperd/ods2](https://github.com/DaveShepperd/ods2)
+which is derived from several predecessor versions of the original forks.
