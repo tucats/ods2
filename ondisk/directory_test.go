@@ -213,6 +213,121 @@ func TestDecodeDirectoryBlockWrongSize(t *testing.T) {
 	}
 }
 
+// TestEncodeDirectoryBlockRoundTrip confirms
+// DecodeDirectoryBlock(EncodeDirectoryBlock(entries)) reproduces the same
+// entries, across a mix of name lengths (even and odd, exercising padding)
+// and version counts, fed in scrambled input order to confirm the encoder
+// doesn't just happen to work when handed already-sorted input.
+func TestEncodeDirectoryBlockRoundTrip(t *testing.T) {
+	in := []DirEntry{
+		{Name: "DATA.DAT", Version: 1, Fid: Fid{Num: 30, Seq: 1}},
+		{Name: "A.TXT", Version: 3, Fid: Fid{Num: 20, Seq: 2, Rvn: 1}}, // odd-length name
+		{Name: "DATA.DAT", Version: 2, Fid: Fid{Num: 30, Seq: 2}},
+		{Name: "BETA.DIR", Version: 1, Fid: Fid{Num: 2, Seq: 1}},
+	}
+
+	block, err := EncodeDirectoryBlock(in)
+	if err != nil {
+		t.Fatalf("EncodeDirectoryBlock: %v", err)
+	}
+
+	got, err := DecodeDirectoryBlock(block)
+	if err != nil {
+		t.Fatalf("DecodeDirectoryBlock(EncodeDirectoryBlock(in)): %v", err)
+	}
+
+	// Names ascending; DATA.DAT's two versions descending.
+	want := []DirEntry{
+		{Name: "A.TXT", Version: 3, Fid: Fid{Num: 20, Seq: 2, Rvn: 1}},
+		{Name: "BETA.DIR", Version: 1, Fid: Fid{Num: 2, Seq: 1}},
+		{Name: "DATA.DAT", Version: 2, Fid: Fid{Num: 30, Seq: 2}},
+		{Name: "DATA.DAT", Version: 1, Fid: Fid{Num: 30, Seq: 1}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("DecodeDirectoryBlock(EncodeDirectoryBlock(in)) = %+v, want %+v", got, want)
+	}
+}
+
+func TestEncodeDirectoryBlockEmpty(t *testing.T) {
+	block, err := EncodeDirectoryBlock(nil)
+	if err != nil {
+		t.Fatalf("EncodeDirectoryBlock(nil): %v", err)
+	}
+
+	got, err := DecodeDirectoryBlock(block)
+	if err != nil {
+		t.Fatalf("DecodeDirectoryBlock: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("DecodeDirectoryBlock(EncodeDirectoryBlock(nil)) = %+v, want empty", got)
+	}
+}
+
+// TestEncodeDirectoryBlockFillsBlockExactly confirms entries that encode
+// to exactly BlockSize bytes (no room left for the 0xFFFF sentinel) still
+// round-trip correctly -- DecodeDirectoryBlock's scan loop must stop on
+// its own once there's no room left for another record header.
+func TestEncodeDirectoryBlockFillsBlockExactly(t *testing.T) {
+	// One record: a 2-byte name plus enough version entries that the
+	// header, name, and entries add up to exactly BlockSize, leaving no
+	// room for the sentinel.
+	const nameLen = 2
+	numVersions := (BlockSize - dirRecHeaderSize - nameLen) / dirEntSize
+	if dirRecHeaderSize+nameLen+numVersions*dirEntSize != BlockSize {
+		t.Fatalf("test setup: %d versions of a %d-byte name don't add up to exactly %d bytes", numVersions, nameLen, BlockSize)
+	}
+
+	var in []DirEntry
+	for v := 1; v <= numVersions; v++ {
+		in = append(in, DirEntry{Name: "XX", Version: uint16(v), Fid: Fid{Num: uint16(v), Seq: 1}})
+	}
+
+	block, err := EncodeDirectoryBlock(in)
+	if err != nil {
+		t.Fatalf("EncodeDirectoryBlock: %v", err)
+	}
+
+	got, err := DecodeDirectoryBlock(block)
+	if err != nil {
+		t.Fatalf("DecodeDirectoryBlock: %v", err)
+	}
+
+	// EncodeDirectoryBlock orders one name's versions descending, so the
+	// decoded order is in reversed.
+	want := make([]DirEntry, len(in))
+	for i, e := range in {
+		want[len(in)-1-i] = e
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("DecodeDirectoryBlock(EncodeDirectoryBlock(in)) = %+v, want %+v", got, want)
+	}
+}
+
+func TestEncodeDirectoryBlockTooManyEntries(t *testing.T) {
+	// Each version entry is 8 bytes; far more than fit in one 512-byte
+	// block under a single name.
+	var in []DirEntry
+	for v := uint16(1); v <= 100; v++ {
+		in = append(in, DirEntry{Name: "BIG.DAT", Version: v, Fid: Fid{Num: 1, Seq: v}})
+	}
+
+	if _, err := EncodeDirectoryBlock(in); err == nil {
+		t.Fatal("EncodeDirectoryBlock with more entries than fit in one block: want error, got nil")
+	}
+}
+
+func TestEncodeDirectoryBlockNameTooLong(t *testing.T) {
+	name := make([]byte, dirNameLenMax+1)
+	for i := range name {
+		name[i] = 'X'
+	}
+
+	_, err := EncodeDirectoryBlock([]DirEntry{{Name: string(name), Version: 1}})
+	if err == nil {
+		t.Fatal("EncodeDirectoryBlock with an oversized name: want error, got nil")
+	}
+}
+
 func TestRoundUpToEven(t *testing.T) {
 	cases := map[int]int{0: 0, 1: 2, 2: 2, 3: 4, 10: 10, 11: 12}
 	for n, want := range cases {

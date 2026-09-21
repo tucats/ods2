@@ -3,6 +3,7 @@ package ondisk
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 )
 
 // DirEntry is one (name, version) -> Fid mapping recorded in a directory.
@@ -124,4 +125,93 @@ func DecodeDirectoryBlock(block []byte) ([]DirEntry, error) {
 	}
 
 	return entries, nil
+}
+
+// dirNameLenMax is the largest name a directory record can hold: its
+// length is stored in a single on-disk byte (see this file's package-level
+// comment on the name record layout).
+const dirNameLenMax = 255
+
+// EncodeDirectoryBlock encodes entries into one 512-byte directory data
+// block, the inverse of DecodeDirectoryBlock. Entries are grouped by Name
+// into one name record per distinct name — each holding every version of
+// that name found in entries — with the groups themselves ordered by Name
+// ascending and, within a group, versions ordered descending. Both match
+// the on-disk convention a real volume's directories already follow (see
+// Directory.List's doc comment in package volume, and Directory.Lookup's
+// "version 0 means highest" rule, which finding the highest version first
+// serves directly): DecodeDirectoryBlock itself doesn't require any
+// particular order to decode correctly, but producing one that already
+// matches convention means a block this function writes is
+// indistinguishable, byte for byte, from one a real, well-behaved VMS
+// system would have written for the same entries.
+//
+// Like the reference implementation's own equivalent, this is a
+// whole-block "encode this set of entries" function, not an in-place
+// byte-splicing API: it has no notion of an existing block to slot new
+// entries into, and no opinion on what to do when entries don't fit in one
+// block — both are package volume's job (allocating another block and
+// calling this again), not this package's. An entries slice that can't fit
+// in a single block, or a Name too long for its 1-byte length field,
+// produces an error rather than a silently truncated or corrupt block.
+func EncodeDirectoryBlock(entries []DirEntry) ([]byte, error) {
+	byName := make(map[string][]DirEntry, len(entries))
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if _, seen := byName[e.Name]; !seen {
+			names = append(names, e.Name)
+		}
+		byName[e.Name] = append(byName[e.Name], e)
+	}
+	sort.Strings(names)
+
+	var block []byte
+	for _, name := range names {
+		nameBytes := []byte(name)
+		if len(nameBytes) > dirNameLenMax {
+			return nil, fmt.Errorf("ondisk: directory entry name %q is %d bytes, longer than the %d-byte on-disk limit", name, len(nameBytes), dirNameLenMax)
+		}
+
+		versions := byName[name]
+		sort.Slice(versions, func(i, j int) bool {
+			return versions[i].Version > versions[j].Version
+		})
+
+		paddedNameLen := roundUpToEven(len(nameBytes))
+		entriesStart := dirRecHeaderSize + paddedNameLen
+		recordLen := entriesStart + len(versions)*dirEntSize
+
+		record := make([]byte, recordLen)
+		binary.LittleEndian.PutUint16(record[0:2], uint16(recordLen-2)) // dir$size = total record length - 2
+		// Bytes [2:4] (version limit) and byte [4] (flags) are left zero:
+		// this project's own DecodeDirectoryBlock never reads them, the
+		// same "not needed" call this file's own package comment already
+		// makes about the version-limit field.
+		record[5] = uint8(len(nameBytes))
+		copy(record[dirRecHeaderSize:dirRecHeaderSize+len(nameBytes)], nameBytes)
+
+		for i, v := range versions {
+			pos := entriesStart + i*dirEntSize
+			binary.LittleEndian.PutUint16(record[pos:pos+2], v.Version)
+			copy(record[pos+2:pos+dirEntSize], EncodeFid(v.Fid))
+		}
+
+		block = append(block, record...)
+	}
+
+	if len(block) > BlockSize {
+		return nil, fmt.Errorf("ondisk: directory entries need %d bytes, more than fit in one %d-byte block", len(block), BlockSize)
+	}
+
+	out := make([]byte, BlockSize)
+	copy(out, block)
+	if len(block)+2 <= BlockSize {
+		// The 0xFFFF end-of-data sentinel. When the encoded records
+		// happen to fill the block exactly, there's no room (or need) for
+		// it: DecodeDirectoryBlock's scan loop stops on its own once
+		// there's no room left for even a record header.
+		binary.LittleEndian.PutUint16(out[len(block):len(block)+2], 0xFFFF)
+	}
+
+	return out, nil
 }

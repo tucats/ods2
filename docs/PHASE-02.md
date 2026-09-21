@@ -80,7 +80,7 @@ expose.
 | 2 | `ondisk`: fixed-layout encoders (HomeBlock, FileHeader, Fid, Uic, Ident, RecAttr) | Done |
 | 3 | `ondisk`: retrieval-pointer encoder | Done |
 | 4 | `ondisk`: storage-bitmap bit-packing + SCB encoder | Done |
-| 5 | `ondisk`: directory-block encoder | Not started |
+| 5 | `ondisk`: directory-block encoder | Done |
 | 6 | `volume`: storage-bitmap cache & allocator (BITMAP.SYS) | Not started |
 | 7 | `volume`: index-file header-slot cache & allocator (INDEXF.SYS) | Not started |
 | 8 | `volume`: file-header writer (new headers, extension segments, HighWaterMark) | Not started |
@@ -571,6 +571,42 @@ alongside the rest of the allocation policy.
 **Tests:** `DecodeDirectoryBlock(EncodeDirectoryBlock(entries))` round-trips
 for various entry counts/name lengths; encoding entries that don't fit
 returns an error rather than silently truncating.
+
+**Shipped.** `EncodeDirectoryBlock` groups the input `[]DirEntry` by Name
+into a `map[string][]DirEntry`, orders the distinct names ascending
+(`sort.Strings`) and each name's versions descending
+(`sort.Slice`), then lays out one name record per group exactly as
+`DecodeDirectoryBlock` expects to find it: 6-byte header (size, then a
+version-limit word and a flags byte this project's own decoder never
+reads, left zero), name text padded to even length, then one 8-byte
+version entry per version. Ordering names ascending isn't required for
+correctness — `DecodeDirectoryBlock` has no ordering expectation of its
+own — but matches the convention `volume.Directory.List`'s doc comment
+already describes real on-disk directories as following, so a block this
+function produces is indistinguishable from one a real VMS system would
+have written for the same entries. A name longer than 255 bytes (the
+on-disk name-length field is a single byte) or an entry set that doesn't
+fit in one 512-byte block is rejected with an error rather than silently
+truncated; when the encoded records fill the block exactly, the trailing
+`0xFFFF` sentinel is skipped rather than written past the buffer's end,
+relying on (and exercised by a test against) `DecodeDirectoryBlock`'s scan
+loop already stopping on its own once there's no room left for another
+record header.
+
+`internal/odstest`'s `BuildDirRecordBytes`/`BuildDirBlock` were
+deliberately **not** retired in favor of this — unlike subtask 2's
+`putFidAt`/`BuildHomeBlockBytes`, which really were pure duplicates, these
+two let a test hand-place records in an arbitrary, unsorted order and
+build deliberately malformed blocks (oversized declared sizes, truncated
+entry areas, and so on — see `directory_test.go`'s own corruption tests),
+which is exactly the decode-side robustness testing `EncodeDirectoryBlock`
+itself doesn't need or want to support. They're consumed across
+`cmd/ods2`, `filespec`, and `volume`'s own test suites, several of which
+assert a specific on-disk block layout or entry order as part of what
+they're testing; converging those onto `EncodeDirectoryBlock`'s
+always-sorted output would silently change what those tests exercise, well
+outside this subtask's scope — the same call subtask 2's write-up made
+about `BuildFileHeaderBytes`.
 
 ### 6. `volume`: storage-bitmap cache & allocator (BITMAP.SYS)
 
