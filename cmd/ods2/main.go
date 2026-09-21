@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/tucats/ods2/cmd/ods2/internal/repl"
 	"github.com/tucats/ods2/cmd/ods2/internal/session"
@@ -48,7 +49,19 @@ func newRootCommand() *cobra.Command {
 func runInteractive() error {
 	s := session.New()
 	fmt.Fprintln(s.Stdout, "ODS2 (Go port) -- type HELP for a command summary, EXIT to quit.")
-	return repl.RunInteractive(s, "ODS2> ", historyFilePath())
+
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		return repl.RunInteractive(s, "ODS2> ", historyFilePath())
+	}
+
+	// Standard input isn't a real terminal — it's been piped or
+	// redirected, e.g. "ods2 < script.txt" or a test/CI harness feeding
+	// commands via a pipe. github.com/chzyer/readline's raw-terminal-mode
+	// handling doesn't behave correctly against a pipe on every platform
+	// (notably Windows, where it emits terminal control sequences instead
+	// of ever reading the piped input), so fall back to plain line
+	// reading instead, which works identically everywhere.
+	return repl.Run(os.Stdin, s)
 }
 
 // historyFilePath returns where command history should be persisted
