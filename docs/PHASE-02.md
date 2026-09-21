@@ -77,7 +77,7 @@ expose.
 |---|---|---|
 | 0 | Phase 1 bugfix: `Directory.List()` on partially-allocated directories | Done |
 | 1 | `diskimage`: writable containers | Done |
-| 2 | `ondisk`: fixed-layout encoders (HomeBlock, FileHeader, Fid, Uic, Ident, RecAttr) | Not started |
+| 2 | `ondisk`: fixed-layout encoders (HomeBlock, FileHeader, Fid, Uic, Ident, RecAttr) | Done |
 | 3 | `ondisk`: retrieval-pointer encoder | Not started |
 | 4 | `ondisk`: storage-bitmap bit-packing + SCB encoder | Not started |
 | 5 | `ondisk`: directory-block encoder | Not started |
@@ -398,6 +398,69 @@ implementation's `update_addhead()` does at `fh2$b_idoffset=40`).
 of each type, including edge cases (a header with a zero-length IDENT area,
 a `Fid` with a non-zero `Nmx`, etc.); checksum of an encoded block validates
 via the existing decoder.
+
+**Shipped.** `EncodeFid`/`EncodeUic`/`EncodeRecAttr` are direct,
+no-error inverses of their `Decode*` counterparts (RecAttr's
+`HighestBlock`/`EndOfFileBlock` round-trip through a new
+`encodeSwappedLongword`, the inverse of the existing
+`decodeSwappedLongword`). `EncodeHomeBlock` and `EncodeIdent` can fail —
+their space/NUL-padded text fields (`VolumeName`, `Ident.Filename`, etc.)
+have a fixed on-disk width a caller's string might not fit — so they
+return `(..., error)`, via new `encodePaddedString`/`EncodeIdent` bounds
+checks rather than silently truncating.
+
+`FileHeader` needed a different shape entirely, for the reason the
+subtask description called out: `IdentOffset`/`MapOffset`/`AclOffset`/
+`EndOffset`/`MapWordsInUse` aren't independent inputs the way the rest of
+a header's fields are — they're wholly *determined* by what variable
+content is being written and in what order, so treating them as settable
+`FileHeader` fields on the encode side would let a caller construct a
+self-contradictory header. `EncodeFileHeader(h FileHeader, areas
+FileHeaderAreas) ([]byte, error)` splits the two apart: `h` carries every
+field that really is just replayed onto disk (`Fid`, `RecordAttributes`,
+`HighWaterMark`, ...), while `FileHeaderAreas{Ident *Ident, MapBytes,
+AclBytes []byte}` carries the variable content, and the function itself
+computes and fills in all five derived fields — laying IDENT, then map,
+then ACL out contiguously starting right after the fixed portion of the
+header (word offset 54, byte 108, matching the existing
+`fhOff*`-constants' own layout), erroring if the combined content
+overflows the 402 bytes available before the checksum field. A nil
+`Ident` produces a genuine zero-length IDENT area (`IdentOffset ==
+MapOffset`) rather than requiring one, covering the "zero-length IDENT
+area" edge case the subtask's test plan called out. `MapBytes` exists
+today only as an opaque pre-encoded `[]byte` a caller supplies directly
+(subtask 3 hasn't landed the extent-list encoder yet); `AclBytes` is
+always `nil` in practice, since this project never constructs ACLs, but
+the field exists so the layout math treats all three areas uniformly.
+
+Because `EncodeFileHeader` *computes* its own `IdentOffset`/`MapOffset`/
+etc. rather than replaying whatever an input `FileHeader` happened to
+carry there, a literal `Decode(Encode(x)) == x` isn't quite the right
+round-trip test for this one type (unlike Fid/Uic/RecAttr, where it is,
+and HomeBlock, where encoding a `HomeBlock` decoded straight from a
+hand-built fixture reproduces the original bytes exactly). Its test
+instead builds a `FileHeader` + `FileHeaderAreas`, encodes, decodes, and
+checks: every field that came from `h` matches directly; the IDENT and
+map-area content match via the *existing*, already-validated decode-side
+`(*FileHeader).Ident()`/`RetrievalPointers()` methods rather than a
+hand-rolled byte comparison — a stronger check, and a preview of the
+"dogfood Phase 1's read path" strategy this document's own [Testing
+strategy](#testing-strategy) section calls out for later subtasks.
+
+`internal/odstest`'s hand-rolled duplicates were retired where directly
+replaceable without disturbing any consuming test's behavior: `putFidAt`
+now delegates to `ondisk.EncodeFid`, `putSwappedLongword` is gone entirely
+(`BuildFileHeaderBytes` now builds an `ondisk.RecAttr` and calls
+`ondisk.EncodeRecAttr`), and `BuildHomeBlockBytes` is now a thin wrapper
+around `ondisk.EncodeHomeBlock`. `BuildFileHeaderBytes` itself keeps its
+own hand-placed offset logic rather than switching to `EncodeFileHeader`
+— its `FileHeaderFixture.IdentOffset` is deliberately settable to
+arbitrary values, including 0 to disable `volume.File.ReadBlock`'s
+high-water-mark check, a fixture-only affordance `EncodeFileHeader`'s
+always-computed layout has no way to express and Phase 1's own read-path
+tests across several packages already depend on; forcing convergence here
+would have meant changing test behavior well outside this subtask's
+scope, not just retiring a duplicate.
 
 ### 3. `ondisk`: retrieval-pointer encoder
 

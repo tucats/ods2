@@ -141,6 +141,17 @@ const (
 	fhOffChecksum = 510
 )
 
+// fhVariableAreaStart is the WORD offset (see IdentOffset's doc comment
+// for why these are word, not byte, offsets) where a freshly-encoded
+// header's variable-position IDENT/map/ACL areas begin: immediately after
+// every fixed field this package decodes (ClassProtection, the last of
+// them, ends at byte offset 108 — fhOffClassProt+20 — i.e. word offset
+// 54). A header read from a real volume can have its areas start
+// elsewhere (older on-disk layouts left less of the header fixed), but
+// EncodeFileHeader has no reason to: it's free to always start exactly
+// where its own fixed-field layout ends.
+const fhVariableAreaStart = (fhOffClassProt + 20) / 2
+
 // IsDirectory reports whether this header describes a directory rather
 // than an ordinary file. On ODS-2, a directory's contents are a sequence
 // of directory records (see package volume) rather than arbitrary data,
@@ -224,4 +235,123 @@ func DecodeFileHeader(b []byte) (FileHeader, error) {
 	}
 
 	return h, nil
+}
+
+// FileHeaderAreas bundles the variable-position content EncodeFileHeader
+// lays out after a header's fixed fields, in the conventional order VMS
+// itself uses: IDENT, then the retrieval-pointer map, then ACL. Encoding a
+// header is different from decoding one in exactly this respect — a
+// decoded header's IdentOffset/MapOffset/AclOffset just replay whatever
+// positions were already on disk, but building a header from scratch means
+// *choosing* those positions (see IdentOffset's own doc comment), which is
+// what this type and EncodeFileHeader exist to do.
+type FileHeaderAreas struct {
+	// Ident is this header's file identification content. Nil produces a
+	// header with a zero-length IDENT area — a legitimate on-disk shape
+	// (see FileHeader.IdentOffset's documentation on where the high-water
+	// mark check requires one), though every header this project's own
+	// write path constructs is expected to set one.
+	Ident *Ident
+
+	// MapBytes is the already-encoded retrieval-pointer map area (see the
+	// map-area encoder added in a later subtask); nil for a header with no
+	// data extents of its own, e.g. one that only chains to an extension
+	// segment via ExtensionFid. Must have an even length, since retrieval
+	// pointer entries are always a whole number of 16-bit words.
+	MapBytes []byte
+
+	// AclBytes is the already-encoded access-control-list area. This
+	// project never constructs ACLs, so every caller today passes nil; the
+	// field exists so the layout logic below has one consistent place to
+	// account for all three variable areas, symmetric with how the on-disk
+	// format itself treats them. Must have an even length.
+	AclBytes []byte
+}
+
+// EncodeFileHeader encodes h into its 512-byte on-disk representation,
+// laying out areas' IDENT/map/ACL content immediately after h's fixed
+// fields and computing IdentOffset, MapOffset, AclOffset, EndOffset,
+// MapWordsInUse, and Checksum from that layout. Whatever values h itself
+// carries in those six fields are ignored: they only make sense as the
+// OUTPUT of this layout decision, unlike h's other fields (Fid,
+// RecordAttributes, HighWaterMark, and so on), which really are just
+// replayed onto disk as given.
+//
+// Returns an error if areas' content doesn't fit in the 402 bytes
+// available between the end of h's fixed fields and the checksum field,
+// or if MapBytes/AclBytes has an odd length.
+func EncodeFileHeader(h FileHeader, areas FileHeaderAreas) ([]byte, error) {
+	if len(areas.MapBytes)%2 != 0 {
+		return nil, fmt.Errorf("ondisk: FileHeaderAreas.MapBytes has odd length %d", len(areas.MapBytes))
+	}
+	if len(areas.AclBytes)%2 != 0 {
+		return nil, fmt.Errorf("ondisk: FileHeaderAreas.AclBytes has odd length %d", len(areas.AclBytes))
+	}
+
+	var identBytes []byte
+	identWords := 0
+	if areas.Ident != nil {
+		var err error
+		identBytes, err = EncodeIdent(*areas.Ident)
+		if err != nil {
+			return nil, fmt.Errorf("ondisk: encoding FileHeader IDENT area: %w", err)
+		}
+		identWords = len(identBytes) / 2
+	}
+	mapWords := len(areas.MapBytes) / 2
+	aclWords := len(areas.AclBytes) / 2
+
+	identOffsetWords := fhVariableAreaStart
+	mapOffsetWords := identOffsetWords + identWords
+	aclOffsetWords := mapOffsetWords + mapWords
+	endOffsetWords := aclOffsetWords + aclWords
+
+	if endOffsetWords*2 > fhOffChecksum {
+		available := fhOffChecksum - fhVariableAreaStart*2
+		needed := endOffsetWords*2 - fhVariableAreaStart*2
+		return nil, fmt.Errorf(
+			"ondisk: FileHeader IDENT+map+ACL areas need %d bytes, only %d available before the checksum",
+			needed, available)
+	}
+
+	b := make([]byte, FileHeaderSize)
+
+	b[fhOffIdOffset] = uint8(identOffsetWords)
+	b[fhOffMpOffset] = uint8(mapOffsetWords)
+	b[fhOffAcOffset] = uint8(aclOffsetWords)
+	b[fhOffRsOffset] = uint8(endOffsetWords)
+	binary.LittleEndian.PutUint16(b[fhOffSegNum:], h.SegmentNumber)
+	binary.LittleEndian.PutUint16(b[fhOffStrucLevel:], h.StructureLevel)
+	copy(b[fhOffFid:fhOffFid+FidSize], EncodeFid(h.Fid))
+	copy(b[fhOffExtFid:fhOffExtFid+FidSize], EncodeFid(h.ExtensionFid))
+	copy(b[fhOffRecAttr:fhOffRecAttr+RecAttrSize], EncodeRecAttr(h.RecordAttributes))
+	binary.LittleEndian.PutUint32(b[fhOffFileChar:], h.FileCharacteristics)
+	b[fhOffMapInUse] = uint8(mapWords)
+	b[fhOffAccMode] = h.AccessMode
+	copy(b[fhOffFileOwner:fhOffFileOwner+UicSize], EncodeUic(h.Owner))
+	binary.LittleEndian.PutUint16(b[fhOffFileProt:], h.FileProtection)
+	copy(b[fhOffBacklink:fhOffBacklink+FidSize], EncodeFid(h.Backlink))
+	b[fhOffJournal] = h.Journaling
+	b[fhOffRuActive] = h.RecoveryUnitActive
+	binary.LittleEndian.PutUint32(b[fhOffHighwater:], h.HighWaterMark)
+	copy(b[fhOffClassProt:fhOffClassProt+20], h.ClassProtection[:])
+
+	if len(identBytes) > 0 {
+		copy(b[identOffsetWords*2:identOffsetWords*2+len(identBytes)], identBytes)
+	}
+	if len(areas.MapBytes) > 0 {
+		copy(b[mapOffsetWords*2:mapOffsetWords*2+len(areas.MapBytes)], areas.MapBytes)
+	}
+	if len(areas.AclBytes) > 0 {
+		copy(b[aclOffsetWords*2:aclOffsetWords*2+len(areas.AclBytes)], areas.AclBytes)
+	}
+
+	sum, err := Checksum(b)
+	if err != nil {
+		// Unreachable given b's fixed length above.
+		return nil, err
+	}
+	binary.LittleEndian.PutUint16(b[fhOffChecksum:], sum)
+
+	return b, nil
 }

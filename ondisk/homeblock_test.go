@@ -1,6 +1,7 @@
 package ondisk
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 )
@@ -122,5 +123,87 @@ func TestDecodeHomeBlockBadChecksum(t *testing.T) {
 func TestDecodeHomeBlockWrongSize(t *testing.T) {
 	if _, err := DecodeHomeBlock(make([]byte, BlockSize-1)); err == nil {
 		t.Fatal("DecodeHomeBlock with wrong-size buffer: want error, got nil")
+	}
+}
+
+// TestEncodeHomeBlock confirms EncodeHomeBlock is the exact inverse of
+// DecodeHomeBlock: decoding validHomeBlockBytes and re-encoding the result
+// should reproduce the original bytes byte-for-byte, including a checksum
+// that validates via DecodeHomeBlock itself.
+func TestEncodeHomeBlock(t *testing.T) {
+	want := validHomeBlockBytes(t)
+
+	h, err := DecodeHomeBlock(want)
+	if err != nil {
+		t.Fatalf("DecodeHomeBlock: %v", err)
+	}
+
+	got, err := EncodeHomeBlock(h)
+	if err != nil {
+		t.Fatalf("EncodeHomeBlock: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("EncodeHomeBlock(DecodeHomeBlock(b)) = % x\nwant % x", got, want)
+	}
+
+	if _, err := DecodeHomeBlock(got); err != nil {
+		t.Errorf("DecodeHomeBlock(EncodeHomeBlock(h)): %v", err)
+	}
+}
+
+func TestHomeBlockRoundTrip(t *testing.T) {
+	want := HomeBlock{
+		HomeLBN:                 1,
+		AlternateHomeLBN:        2,
+		AlternateIndexLBN:       3,
+		StructureLevel:          0x0102,
+		ClusterSize:             4,
+		HomeVBN:                 1,
+		AlternateHomeVBN:        2,
+		AlternateIndexVBN:       3,
+		IndexBitmapVBN:          4,
+		IndexBitmapLBN:          5,
+		MaxFiles:                1000,
+		IndexBitmapSize:         6,
+		ReservedFiles:           9,
+		RelativeVolumeNumber:    1,
+		VolumeSetCount:          1,
+		VolumeOwner:             Uic{Member: 4, Group: 1},
+		Protection:              0xFF00,
+		FileProtection:          0xFF00,
+		WindowSize:              7,
+		DirectoryPreAccessLimit: 8,
+		DefaultExtendSize:       5,
+		SerialNumber:            0x12345678,
+		StructureName:           "DECFILE11B",
+		VolumeName:              "MYVOLUME",
+		OwnerName:               "PAULNANK",
+		Format:                  HomeBlockFormatID,
+	}
+	want.MinSecurityClass[0] = 1
+	want.MaxSecurityClass[0] = 2
+
+	b, err := EncodeHomeBlock(want)
+	if err != nil {
+		t.Fatalf("EncodeHomeBlock: %v", err)
+	}
+
+	got, err := DecodeHomeBlock(b)
+	if err != nil {
+		t.Fatalf("DecodeHomeBlock(EncodeHomeBlock(want)): %v", err)
+	}
+	// Checksum2 is an output of encoding, not an input -- compare
+	// everything else, then check the checksum separately below.
+	got.Checksum2 = 0
+	want.Checksum2 = 0
+	if got != want {
+		t.Errorf("round trip =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+func TestEncodeHomeBlockTextFieldTooLong(t *testing.T) {
+	h := HomeBlock{VolumeName: "THIS-LABEL-IS-WAY-TOO-LONG-FOR-TWELVE-BYTES"}
+	if _, err := EncodeHomeBlock(h); err == nil {
+		t.Fatal("EncodeHomeBlock with an over-long VolumeName: want error, got nil")
 	}
 }

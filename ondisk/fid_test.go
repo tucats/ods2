@@ -1,6 +1,9 @@
 package ondisk
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestDecodeFid(t *testing.T) {
 	// Bytes chosen so every field is a distinct, recognizable value:
@@ -67,5 +70,44 @@ func TestFidString(t *testing.T) {
 	fid := Fid{Num: 137, Seq: 4, Rvn: 1}
 	if got, want := fid.String(), "(137,4,1)"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestEncodeFid(t *testing.T) {
+	// Same bytes TestDecodeFid decodes: Num=5, Seq=10, Rvn=1, Nmx=2.
+	want := []byte{0x05, 0x00, 0x0A, 0x00, 0x01, 0x02}
+	if got := EncodeFid(Fid{Num: 5, Seq: 10, Rvn: 1, Nmx: 2}); !bytes.Equal(got, want) {
+		t.Errorf("EncodeFid() = % x, want % x", got, want)
+	}
+}
+
+func TestFidRoundTrip(t *testing.T) {
+	cases := []Fid{
+		{},
+		{Num: 5, Seq: 1},
+		// Nmx non-zero exercises the high-order file-number extension
+		// field, which a plain 16-bit Num alone can't represent.
+		{Num: 0xFFFF, Seq: 0xFFFF, Rvn: 0xFF, Nmx: 0xFF},
+	}
+	for _, want := range cases {
+		got, err := DecodeFid(EncodeFid(want))
+		if err != nil {
+			t.Fatalf("DecodeFid(EncodeFid(%+v)): %v", want, err)
+		}
+		if got != want {
+			t.Errorf("round trip of %+v = %+v", want, got)
+		}
+	}
+}
+
+func TestReservedFileFids(t *testing.T) {
+	// These are fixed ODS-2 convention, not derived from anything --
+	// worth pinning down in a test so a typo doesn't silently corrupt
+	// whichever reserved file a future subtask writes using them.
+	if BitmapFileFid != (Fid{Num: 2, Seq: 2}) {
+		t.Errorf("BitmapFileFid = %+v, want {Num:2 Seq:2}", BitmapFileFid)
+	}
+	if BadBlockFileFid != (Fid{Num: 3, Seq: 3}) {
+		t.Errorf("BadBlockFileFid = %+v, want {Num:3 Seq:3}", BadBlockFileFid)
 	}
 }

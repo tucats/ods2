@@ -133,3 +133,26 @@ func DecodeRecAttr(b []byte) (RecAttr, error) {
 		VersionLimit: binary.LittleEndian.Uint16(b[30:32]),
 	}, nil
 }
+
+// EncodeRecAttr encodes ra into its 32-byte on-disk representation, the
+// exact inverse of DecodeRecAttr — including using the "swapped longword"
+// convention (see decodeSwappedLongword) for HighestBlock and
+// EndOfFileBlock. The 8 reserved bytes between GlobalBufferCount and
+// VersionLimit are left zero.
+func EncodeRecAttr(ra RecAttr) []byte {
+	b := make([]byte, RecAttrSize)
+	b[0] = byte(ra.Format)
+	b[1] = ra.Attributes
+	binary.LittleEndian.PutUint16(b[2:4], ra.RecordSize)
+	encodeSwappedLongword(b[4:8], ra.HighestBlock)
+	encodeSwappedLongword(b[8:12], ra.EndOfFileBlock)
+	binary.LittleEndian.PutUint16(b[12:14], ra.FirstFreeByte)
+	b[14] = ra.BucketSize
+	b[15] = ra.VfcSize
+	binary.LittleEndian.PutUint16(b[16:18], ra.MaxRecordSize)
+	binary.LittleEndian.PutUint16(b[18:20], ra.DefaultExtend)
+	binary.LittleEndian.PutUint16(b[20:22], ra.GlobalBufferCount)
+	// bytes [22:30) are reserved and intentionally left zero.
+	binary.LittleEndian.PutUint16(b[30:32], ra.VersionLimit)
+	return b
+}

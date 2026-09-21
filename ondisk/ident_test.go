@@ -7,6 +7,68 @@ import (
 	"github.com/tucats/ods2/vmstime"
 )
 
+func TestEncodeIdent(t *testing.T) {
+	want := Ident{
+		Filename:          "TEST.TXT",
+		Revision:          3,
+		CreationDate:      vmstime.VMSTime(0),
+		RevisionDate:      vmstime.VMSTime(1000000),
+		ExpirationDate:    vmstime.VMSTime(0),
+		BackupDate:        vmstime.VMSTime(0),
+		FilenameExtension: "",
+	}
+
+	b, err := EncodeIdent(want)
+	if err != nil {
+		t.Fatalf("EncodeIdent: %v", err)
+	}
+	if len(b) != identSize {
+		t.Fatalf("EncodeIdent() returned %d bytes, want %d", len(b), identSize)
+	}
+
+	// Install the encoded area into a full header at a known IdentOffset
+	// and confirm (*FileHeader).Ident decodes it back out identically --
+	// exercising the real decode path, not a hand-rolled comparison of
+	// EncodeIdent's own byte layout against itself.
+	fb := make([]byte, FileHeaderSize)
+	const identOffsetWords = 54
+	fb[fhOffIdOffset] = identOffsetWords
+	copy(fb[identOffsetWords*2:identOffsetWords*2+identSize], b)
+	sum, err := Checksum(fb)
+	if err != nil {
+		t.Fatalf("Checksum: %v", err)
+	}
+	binary.LittleEndian.PutUint16(fb[fhOffChecksum:], sum)
+
+	h, err := DecodeFileHeader(fb)
+	if err != nil {
+		t.Fatalf("DecodeFileHeader: %v", err)
+	}
+	got, err := h.Ident()
+	if err != nil {
+		t.Fatalf("Ident: %v", err)
+	}
+	if got != want {
+		t.Errorf("round trip = %+v, want %+v", got, want)
+	}
+}
+
+func TestEncodeIdentFilenameTooLong(t *testing.T) {
+	if _, err := EncodeIdent(Ident{Filename: "THIS-FILENAME-IS-DEFINITELY-TOO-LONG.TXT"}); err == nil {
+		t.Fatal("EncodeIdent with an over-long Filename: want error, got nil")
+	}
+}
+
+func TestEncodeIdentFilenameExtensionTooLong(t *testing.T) {
+	long := make([]byte, 67)
+	for i := range long {
+		long[i] = 'X'
+	}
+	if _, err := EncodeIdent(Ident{FilenameExtension: string(long)}); err == nil {
+		t.Fatal("EncodeIdent with an over-long FilenameExtension: want error, got nil")
+	}
+}
+
 func TestFileHeaderIdent(t *testing.T) {
 	b := make([]byte, FileHeaderSize)
 

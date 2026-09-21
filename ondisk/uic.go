@@ -37,3 +37,12 @@ func DecodeUic(b []byte) (Uic, error) {
 		Group:  binary.LittleEndian.Uint16(b[2:4]),
 	}, nil
 }
+
+// EncodeUic encodes u into its 4-byte on-disk representation, the exact
+// inverse of DecodeUic (note the same member-then-group field order).
+func EncodeUic(u Uic) []byte {
+	b := make([]byte, UicSize)
+	binary.LittleEndian.PutUint16(b[0:2], u.Member)
+	binary.LittleEndian.PutUint16(b[2:4], u.Group)
+	return b
+}

@@ -30,3 +30,14 @@ func decodeSwappedLongword(b []byte) uint32 {
 	secondWord := binary.LittleEndian.Uint16(b[2:4])
 	return uint32(firstWord)<<16 | uint32(secondWord)
 }
+
+// encodeSwappedLongword is the exact inverse of decodeSwappedLongword: it
+// writes val into b (which must be at least 4 bytes) using the same VAX
+// RMS "swapped longword" convention — the high 16 bits of val become the
+// FIRST little-endian word, and the low 16 bits become the SECOND, rather
+// than the ordinary little-endian layout a plain uint32 write would
+// produce.
+func encodeSwappedLongword(b []byte, val uint32) {
+	binary.LittleEndian.PutUint16(b[0:2], uint16(val>>16))
+	binary.LittleEndian.PutUint16(b[2:4], uint16(val))
+}

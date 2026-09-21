@@ -45,6 +45,17 @@ var IndexFileFid = Fid{Num: 1, Seq: 1}
 // tree can use this constant directly rather than needing to be told it.
 var MasterFileDirectoryFid = Fid{Num: 4, Seq: 4}
 
+// BitmapFileFid is the fixed file ID of the volume's storage (free-space)
+// bitmap file, BITMAP.SYS — reserved header slot 2 on every ODS-2 volume.
+// See the storage-bitmap allocator (package volume) for what this file
+// actually contains.
+var BitmapFileFid = Fid{Num: 2, Seq: 2}
+
+// BadBlockFileFid is the fixed file ID of the volume's bad-block file,
+// BADBLK.SYS — reserved header slot 3 on every ODS-2 volume, listing any
+// blocks the device itself has marked unusable (empty on a fresh volume).
+var BadBlockFileFid = Fid{Num: 3, Seq: 3}
+
 // Number combines Num and Nmx into the full file number: Nmx supplies the
 // high-order bits for volumes large enough to need file numbers beyond
 // 65535, the range a plain 16-bit Num can express on its own.
@@ -87,4 +98,15 @@ func DecodeFid(b []byte) (Fid, error) {
 		Rvn: b[4],
 		Nmx: b[5],
 	}, nil
+}
+
+// EncodeFid encodes f into its 6-byte on-disk representation, the exact
+// inverse of DecodeFid.
+func EncodeFid(f Fid) []byte {
+	b := make([]byte, FidSize)
+	binary.LittleEndian.PutUint16(b[0:2], f.Num)
+	binary.LittleEndian.PutUint16(b[2:4], f.Seq)
+	b[4] = f.Rvn
+	b[5] = f.Nmx
+	return b
 }

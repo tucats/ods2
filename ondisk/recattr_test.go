@@ -1,6 +1,9 @@
 package ondisk
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 // buildRecAttrBytes assembles a 32-byte RecAttr record with each field set
 // to an easily-recognizable, distinct value, for exercising DecodeRecAttr.
@@ -80,6 +83,44 @@ func TestDecodeRecAttr(t *testing.T) {
 func TestDecodeRecAttrShortBuffer(t *testing.T) {
 	if _, err := DecodeRecAttr(make([]byte, RecAttrSize-1)); err == nil {
 		t.Fatal("DecodeRecAttr with too-short buffer: want error, got nil")
+	}
+}
+
+func TestEncodeRecAttr(t *testing.T) {
+	want := buildRecAttrBytes()
+
+	ra, err := DecodeRecAttr(want)
+	if err != nil {
+		t.Fatalf("DecodeRecAttr: %v", err)
+	}
+
+	if got := EncodeRecAttr(ra); !bytes.Equal(got, want) {
+		t.Errorf("EncodeRecAttr(DecodeRecAttr(b)) = % x, want % x (original bytes)", got, want)
+	}
+}
+
+func TestRecAttrRoundTrip(t *testing.T) {
+	want := RecAttr{
+		Format:            RecordFormatVariable,
+		Attributes:        AttrImpliedCC,
+		RecordSize:        512,
+		HighestBlock:      0x00010002, // exercises the swapped-longword encode/decode
+		EndOfFileBlock:    0x00030004,
+		FirstFreeByte:     100,
+		BucketSize:        1,
+		VfcSize:           2,
+		MaxRecordSize:     4096,
+		DefaultExtend:     10,
+		GlobalBufferCount: 3,
+		VersionLimit:      5,
+	}
+
+	got, err := DecodeRecAttr(EncodeRecAttr(want))
+	if err != nil {
+		t.Fatalf("DecodeRecAttr(EncodeRecAttr(want)): %v", err)
+	}
+	if got != want {
+		t.Errorf("round trip = %+v, want %+v", got, want)
 	}
 }
 

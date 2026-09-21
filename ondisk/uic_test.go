@@ -1,6 +1,9 @@
 package ondisk
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestDecodeUic(t *testing.T) {
 	// On-disk field order is member-then-group, the reverse of how a UIC
@@ -32,5 +35,24 @@ func TestUicString(t *testing.T) {
 	uic := Uic{Group: 8, Member: 1} // octal 10, octal 1
 	if got, want := uic.String(), "[10,1]"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestEncodeUic(t *testing.T) {
+	b := []byte{0x04, 0x00, 0x0A, 0x00} // same bytes TestDecodeUic decodes
+	if got := EncodeUic(Uic{Member: 4, Group: 10}); !bytes.Equal(got, b) {
+		t.Errorf("EncodeUic() = % x, want % x", got, b)
+	}
+}
+
+func TestUicRoundTrip(t *testing.T) {
+	want := Uic{Member: 0x1234, Group: 0x5678}
+
+	got, err := DecodeUic(EncodeUic(want))
+	if err != nil {
+		t.Fatalf("DecodeUic(EncodeUic(want)): %v", err)
+	}
+	if got != want {
+		t.Errorf("round trip = %+v, want %+v", got, want)
 	}
 }

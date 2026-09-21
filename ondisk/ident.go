@@ -89,3 +89,35 @@ func (h *FileHeader) Ident() (Ident, error) {
 		FilenameExtension: decodeNulPaddedString(area[identOffFilenameExt : identOffFilenameExt+66]),
 	}, nil
 }
+
+// EncodeIdent encodes id into its 120-byte on-disk representation — the
+// fixed-size IDENT area (*FileHeader).Ident decodes, always identSize
+// bytes regardless of how short id's actual text fields are. Unlike the
+// home block's text fields (see encodePaddedString), this area's unused
+// trailing bytes are zero-filled rather than space-padded: decode accepts
+// either convention (see decodeNulPaddedString), so this is simply the
+// simpler of two equally-valid choices, not an attempt to reproduce
+// exactly what a real volume happens to write there.
+//
+// The only way this can fail is Filename longer than 20 bytes or
+// FilenameExtension longer than 66 bytes — the fixed widths of those two
+// fields on disk.
+func EncodeIdent(id Ident) ([]byte, error) {
+	if len(id.Filename) > 20 {
+		return nil, fmt.Errorf("ondisk: Ident.Filename %q is %d bytes, want at most 20", id.Filename, len(id.Filename))
+	}
+	if len(id.FilenameExtension) > 66 {
+		return nil, fmt.Errorf("ondisk: Ident.FilenameExtension %q is %d bytes, want at most 66", id.FilenameExtension, len(id.FilenameExtension))
+	}
+
+	b := make([]byte, identSize)
+	copy(b[identOffFilename:identOffFilename+20], id.Filename)
+	binary.LittleEndian.PutUint16(b[identOffRevision:], id.Revision)
+	encodeVMSTime(b[identOffCreDate:], id.CreationDate)
+	encodeVMSTime(b[identOffRevDate:], id.RevisionDate)
+	encodeVMSTime(b[identOffExpDate:], id.ExpirationDate)
+	encodeVMSTime(b[identOffBakDate:], id.BackupDate)
+	copy(b[identOffFilenameExt:identOffFilenameExt+66], id.FilenameExtension)
+
+	return b, nil
+}

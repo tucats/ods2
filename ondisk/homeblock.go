@@ -149,12 +149,34 @@ func decodeVMSTime(b []byte) vmstime.VMSTime {
 	return vmstime.VMSTime(int64(binary.LittleEndian.Uint64(b)))
 }
 
+// encodeVMSTime writes an 8-byte VMS quadword timestamp into b (which must
+// be at least 8 bytes), the exact inverse of decodeVMSTime.
+func encodeVMSTime(b []byte, t vmstime.VMSTime) {
+	binary.LittleEndian.PutUint64(b, uint64(int64(t)))
+}
+
 // decodePaddedString decodes a fixed-width, space-padded ASCII text field
 // (VMS pads names and labels with trailing spaces to fill their allotted
 // width) and trims the padding, since Go code almost always wants the
 // trimmed form.
 func decodePaddedString(b []byte) string {
 	return strings.TrimRight(string(b), " ")
+}
+
+// encodePaddedString writes s into dst (its full fixed on-disk width),
+// space-padding whatever's left, the exact inverse of decodePaddedString.
+// It's an error for s to be longer than dst, since there's no defined way
+// to truncate a name or label without silently losing data the caller
+// almost certainly cares about.
+func encodePaddedString(dst []byte, s string) error {
+	if len(s) > len(dst) {
+		return fmt.Errorf("value %q is %d bytes, want at most %d", s, len(s), len(dst))
+	}
+	n := copy(dst, s)
+	for ; n < len(dst); n++ {
+		dst[n] = ' '
+	}
+	return nil
 }
 
 // DecodeHomeBlock decodes a HomeBlock from its 512-byte on-disk
@@ -234,4 +256,74 @@ func DecodeHomeBlock(b []byte) (HomeBlock, error) {
 	}
 
 	return h, nil
+}
+
+// EncodeHomeBlock encodes h into its 512-byte on-disk representation,
+// computing Checksum2 (see Checksum) from the rest of the block —
+// whatever value h.Checksum2 itself holds is ignored, since a checksum
+// only makes sense as the OUTPUT of encoding the rest of the block, never
+// an input to it.
+//
+// The only way this can fail is a text field (StructureName, VolumeName,
+// OwnerName, or Format) too long for its fixed 12-byte on-disk width;
+// every other field is a fixed-width numeric value with no validity
+// constraint this package enforces.
+func EncodeHomeBlock(h HomeBlock) ([]byte, error) {
+	b := make([]byte, BlockSize)
+
+	binary.LittleEndian.PutUint32(b[homeOffHomeLBN:], h.HomeLBN)
+	binary.LittleEndian.PutUint32(b[homeOffAlHomeLBN:], h.AlternateHomeLBN)
+	binary.LittleEndian.PutUint32(b[homeOffAltIdxLBN:], h.AlternateIndexLBN)
+	binary.LittleEndian.PutUint16(b[homeOffStrucLevel:], h.StructureLevel)
+	binary.LittleEndian.PutUint16(b[homeOffClusterSize:], h.ClusterSize)
+	binary.LittleEndian.PutUint16(b[homeOffHomeVBN:], h.HomeVBN)
+	binary.LittleEndian.PutUint16(b[homeOffAlHomeVBN:], h.AlternateHomeVBN)
+	binary.LittleEndian.PutUint16(b[homeOffAltIdxVBN:], h.AlternateIndexVBN)
+	binary.LittleEndian.PutUint16(b[homeOffIdxBitmapVBN:], h.IndexBitmapVBN)
+	binary.LittleEndian.PutUint32(b[homeOffIdxBitmapLBN:], h.IndexBitmapLBN)
+	binary.LittleEndian.PutUint32(b[homeOffMaxFiles:], h.MaxFiles)
+	binary.LittleEndian.PutUint16(b[homeOffIdxBitmapSize:], h.IndexBitmapSize)
+	binary.LittleEndian.PutUint16(b[homeOffReservedFiles:], h.ReservedFiles)
+	binary.LittleEndian.PutUint16(b[homeOffDeviceType:], h.DeviceType)
+	binary.LittleEndian.PutUint16(b[homeOffRvn:], h.RelativeVolumeNumber)
+	binary.LittleEndian.PutUint16(b[homeOffSetCount:], h.VolumeSetCount)
+	binary.LittleEndian.PutUint16(b[homeOffVolChar:], h.VolumeCharacteristics)
+	copy(b[homeOffVolOwner:homeOffVolOwner+UicSize], EncodeUic(h.VolumeOwner))
+	binary.LittleEndian.PutUint16(b[homeOffProtection:], h.Protection)
+	binary.LittleEndian.PutUint16(b[homeOffFileProtection:], h.FileProtection)
+	binary.LittleEndian.PutUint16(b[homeOffChecksum1:], h.Checksum1)
+	encodeVMSTime(b[homeOffCreationDate:], h.CreationDate)
+	b[homeOffWindow] = h.WindowSize
+	b[homeOffLruLimit] = h.DirectoryPreAccessLimit
+	binary.LittleEndian.PutUint16(b[homeOffExtend:], h.DefaultExtendSize)
+	encodeVMSTime(b[homeOffRetainMin:], h.RetentionMin)
+	encodeVMSTime(b[homeOffRetainMax:], h.RetentionMax)
+	encodeVMSTime(b[homeOffRevDate:], h.RevisionDate)
+	copy(b[homeOffMinClass:homeOffMinClass+20], h.MinSecurityClass[:])
+	copy(b[homeOffMaxClass:homeOffMaxClass+20], h.MaxSecurityClass[:])
+	binary.LittleEndian.PutUint32(b[homeOffSerialNumber:], h.SerialNumber)
+
+	for _, f := range []struct {
+		name string
+		dst  []byte
+		val  string
+	}{
+		{"StructureName", b[homeOffStrucName : homeOffStrucName+12], h.StructureName},
+		{"VolumeName", b[homeOffVolName : homeOffVolName+12], h.VolumeName},
+		{"OwnerName", b[homeOffOwnerName : homeOffOwnerName+12], h.OwnerName},
+		{"Format", b[homeOffFormat : homeOffFormat+12], h.Format},
+	} {
+		if err := encodePaddedString(f.dst, f.val); err != nil {
+			return nil, fmt.Errorf("ondisk: encoding HomeBlock.%s: %w", f.name, err)
+		}
+	}
+
+	sum, err := Checksum(b)
+	if err != nil {
+		// Unreachable given b's fixed length above.
+		return nil, err
+	}
+	binary.LittleEndian.PutUint16(b[homeOffChecksum2:], sum)
+
+	return b, nil
 }

@@ -4,18 +4,24 @@
 // record structures.
 //
 // This lives under internal/ (rather than being folded into, say, package
-// ondisk itself) for two reasons. First, package ondisk deliberately
-// exposes no encoder — this project only ever needs to read ODS-2
-// volumes, so production code only ever needs to decode these structures,
-// never build them from scratch. Second, more than one package's tests
-// need to fabricate these bytes (package volume, to build a mountable
-// in-memory volume; package filespec, to build a small directory tree to
-// glob against), and duplicating the same byte-offset knowledge in each
-// package's own test files would be exactly the kind of copy-paste this
-// project otherwise tries to avoid. Every package within this module can
-// import an internal/ package, so this one place serves all of them,
-// while still being invisible to (and unusable by) anyone importing this
-// module from outside it.
+// ondisk itself) because more than one package's tests need to fabricate
+// these bytes (package volume, to build a mountable in-memory volume;
+// package filespec, to build a small directory tree to glob against), and
+// duplicating the same fixture-assembly logic in each package's own test
+// files would be exactly the kind of copy-paste this project otherwise
+// tries to avoid. Every package within this module can import an
+// internal/ package, so this one place serves all of them, while still
+// being invisible to (and unusable by) anyone importing this module from
+// outside it.
+//
+// Historical note: until ondisk gained its own Encode* functions (see
+// docs/PHASE-02.md subtask 2), this package hand-rolled every byte offset
+// itself, duplicating ondisk's private decode-side knowledge. Its builders
+// now delegate the mechanical byte-layout work to ondisk.Encode* wherever
+// their fixture shape allows it (BuildHomeBlockBytes, most fully); what
+// remains here is fixture-specific assembly ondisk's own encoders don't
+// (and, in FileHeaderFixture's case, structurally can't — see its
+// IdentOffset field) attempt to generalize.
 package odstest
 
 import (
@@ -61,21 +67,12 @@ func (m *MemContainer) ReadBlock(lbn uint32, buf []byte) error {
 func (m *MemContainer) Blocks() uint32 { return uint32(len(m.blocks)) }
 func (m *MemContainer) Close() error   { return nil }
 
-// The following byte offsets duplicate the on-disk home block and file
-// header layouts documented (and privately defined) on ondisk.HomeBlock
-// and ondisk.FileHeader respectively. See this file's package comment for
-// why they're repeated here rather than imported.
+// The following byte offsets duplicate the on-disk file header layout
+// documented (and privately defined) on ondisk.FileHeader. See this file's
+// package comment for why they're repeated here rather than imported. (The
+// equivalent home-block offsets no longer need repeating here now that
+// ondisk.EncodeHomeBlock exists -- see BuildHomeBlockBytes.)
 const (
-	homeOffHomeLBN      = 0
-	homeOffClusterSize  = 14
-	homeOffIdxBitmapVBN = 22
-	homeOffIdxBitmapLBN = 24
-	homeOffMaxFiles     = 28
-	homeOffIdxBitmapSz  = 32
-	homeOffRvn          = 38
-	homeOffFormat       = 496
-	homeOffChecksum2    = 510
-
 	fhOffIdOffset  = 0
 	fhOffMpOffset  = 1
 	fhOffFid       = 8
@@ -105,25 +102,26 @@ type HomeBlockFixture struct {
 
 // BuildHomeBlockBytes assembles a syntactically valid, correctly
 // checksummed 512-byte ODS-2 home block from a HomeBlockFixture, ready to
-// install into a MemContainer with PutBlock.
+// install into a MemContainer with PutBlock. This is a thin wrapper around
+// ondisk.EncodeHomeBlock -- it exists only to translate this package's
+// narrower test-fixture shape into a full ondisk.HomeBlock, and to fail
+// the test (rather than return an error) if that somehow doesn't encode.
 func BuildHomeBlockBytes(t testing.TB, f HomeBlockFixture) []byte {
 	t.Helper()
-	b := make([]byte, ondisk.BlockSize)
 
-	binary.LittleEndian.PutUint32(b[homeOffHomeLBN:], f.HomeLBN)
-	binary.LittleEndian.PutUint16(b[homeOffClusterSize:], f.ClusterSize)
-	binary.LittleEndian.PutUint16(b[homeOffIdxBitmapVBN:], f.IdxBitmapVBN)
-	binary.LittleEndian.PutUint32(b[homeOffIdxBitmapLBN:], f.IdxBitmapLBN)
-	binary.LittleEndian.PutUint32(b[homeOffMaxFiles:], f.MaxFiles)
-	binary.LittleEndian.PutUint16(b[homeOffIdxBitmapSz:], f.IdxBitmapSize)
-	binary.LittleEndian.PutUint16(b[homeOffRvn:], f.Rvn)
-	copy(b[homeOffFormat:homeOffFormat+12], "DECFILE11B  ")
-
-	sum, err := ondisk.Checksum(b)
+	b, err := ondisk.EncodeHomeBlock(ondisk.HomeBlock{
+		HomeLBN:              f.HomeLBN,
+		ClusterSize:          f.ClusterSize,
+		IndexBitmapVBN:       f.IdxBitmapVBN,
+		IndexBitmapLBN:       f.IdxBitmapLBN,
+		MaxFiles:             f.MaxFiles,
+		IndexBitmapSize:      f.IdxBitmapSize,
+		RelativeVolumeNumber: f.Rvn,
+		Format:               ondisk.HomeBlockFormatID,
+	})
 	if err != nil {
-		t.Fatalf("odstest: computing home block checksum: %v", err)
+		t.Fatalf("odstest: encoding home block: %v", err)
 	}
-	binary.LittleEndian.PutUint16(b[homeOffChecksum2:], sum)
 
 	return b
 }
@@ -195,22 +193,12 @@ type FileHeaderFixture struct {
 	MapBytes       []byte
 }
 
+// putFidAt writes fid's 6-byte on-disk encoding into b at offset, via
+// ondisk.EncodeFid (this package's own former hand-rolled duplicate of
+// that logic was retired once EncodeFid could produce identical bytes --
+// see docs/PHASE-02.md subtask 2).
 func putFidAt(b []byte, offset int, fid ondisk.Fid) {
-	binary.LittleEndian.PutUint16(b[offset:], fid.Num)
-	binary.LittleEndian.PutUint16(b[offset+2:], fid.Seq)
-	b[offset+4] = fid.Rvn
-	b[offset+5] = fid.Nmx
-}
-
-// putSwappedLongword writes val into b (which must be at least 4 bytes)
-// using the VAX RMS "swapped longword" convention that RecAttr's
-// HighestBlock/EndOfFileBlock fields use -- see ondisk's
-// decodeSwappedLongword for what this means and why it's necessary.
-func putSwappedLongword(b []byte, val uint32) {
-	firstWord := uint16(val >> 16)
-	secondWord := uint16(val & 0xFFFF)
-	binary.LittleEndian.PutUint16(b[0:2], firstWord)
-	binary.LittleEndian.PutUint16(b[2:4], secondWord)
+	copy(b[offset:offset+ondisk.FidSize], ondisk.EncodeFid(fid))
 }
 
 // EncodeExtentFormat2 encodes one retrieval-pointer extent using the
@@ -256,18 +244,20 @@ func BuildFileHeaderBytes(t testing.TB, f FileHeaderFixture) []byte {
 		f.EndOfFileBlock = f.HighestBlock + 1
 	}
 
-	// The RecAttr sub-structure begins at fhOffRecAttr; offsets below are
-	// relative to it (see ondisk.RecAttr's own field-by-field byte
-	// layout, which this mirrors): byte 0 is Format, bytes 4-7 are
-	// HighestBlock (swapped-longword), bytes 8-11 are EndOfFileBlock
-	// (also swapped-longword), bytes 12-13 are FirstFreeByte, byte 15 is
-	// VfcSize, and bytes 16-17 are MaxRecordSize.
-	b[fhOffRecAttr] = byte(f.Format)
-	putSwappedLongword(b[fhOffRecAttr+4:], f.HighestBlock)
-	putSwappedLongword(b[fhOffRecAttr+8:], f.EndOfFileBlock)
-	binary.LittleEndian.PutUint16(b[fhOffRecAttr+12:], f.FirstFreeByte)
-	b[fhOffRecAttr+15] = f.VfcSize
-	binary.LittleEndian.PutUint16(b[fhOffRecAttr+16:], f.MaxRecordSize)
+	// The RecAttr sub-structure begins at fhOffRecAttr; ondisk.EncodeRecAttr
+	// (added alongside DecodeRecAttr once this package needed to write, not
+	// just read, ODS-2 volumes -- see docs/PHASE-02.md subtask 2) handles
+	// its internal layout, including HighestBlock/EndOfFileBlock's
+	// "swapped longword" encoding.
+	recAttr := ondisk.EncodeRecAttr(ondisk.RecAttr{
+		Format:         f.Format,
+		HighestBlock:   f.HighestBlock,
+		EndOfFileBlock: f.EndOfFileBlock,
+		FirstFreeByte:  f.FirstFreeByte,
+		VfcSize:        f.VfcSize,
+		MaxRecordSize:  f.MaxRecordSize,
+	})
+	copy(b[fhOffRecAttr:fhOffRecAttr+ondisk.RecAttrSize], recAttr)
 
 	if f.MapBytes != nil {
 		start := int(f.MapOffsetWords) * 2
