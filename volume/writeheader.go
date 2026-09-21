@@ -309,15 +309,44 @@ func Extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32) error
 // first, since VMS always appends new space to the end of the chain rather
 // than searching earlier segments for room.
 func tailHeader(dev *Device, primary ondisk.FileHeader) (ondisk.FileHeader, error) {
+	chain, err := fileHeaderChain(dev, primary)
+	if err != nil {
+		return ondisk.FileHeader{}, err
+	}
+	return chain[len(chain)-1], nil
+}
+
+// fileHeaderChain returns every header segment belonging to a file, in
+// order: primary (SegmentNumber 0) first, then each successive extension
+// segment reached by following ExtensionFid, up to and including the last
+// one (the segment whose own ExtensionFid is zero). This is the same
+// traversal tailHeader (above) and buildFile (file.go) each
+// perform for their own purposes -- tailHeader only wants the last segment,
+// and buildFile only wants each segment's flattened Extents -- but a
+// caller that needs every segment's own identity (its Fid/file number, not
+// just the space it describes) needs the whole chain kept apart, which is
+// exactly what freeing a file's storage requires (see delete.go): every
+// segment's own header slot has to be freed individually, not just the
+// space its retrieval pointers describe.
+//
+// Unlike buildFile, this never needs the "still bootstrapping INDEXF.SYS's
+// own File" special case (dev.IndexFile == nil) -- both of this function's
+// callers only ever run against an already-fully-mounted device, long
+// after dev.IndexFile has been resolved.
+func fileHeaderChain(dev *Device, primary ondisk.FileHeader) ([]ondisk.FileHeader, error) {
+	chain := []ondisk.FileHeader{primary}
+
 	header := primary
 	for !header.ExtensionFid.IsZero() {
 		next, err := readFileHeaderViaIndex(dev, dev.IndexFile.Extents, header.ExtensionFid)
 		if err != nil {
-			return ondisk.FileHeader{}, fmt.Errorf("following header extension chain for file %v: %w", primary.Fid, err)
+			return nil, fmt.Errorf("following header extension chain for file %v: %w", primary.Fid, err)
 		}
+		chain = append(chain, next)
 		header = next
 	}
-	return header, nil
+
+	return chain, nil
 }
 
 // headerIdent decodes header's IDENT area, or returns (nil, nil) if it has
