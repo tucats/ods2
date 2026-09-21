@@ -1,7 +1,7 @@
 # ods2
 
 A native Go implementation of ODS2, a tool for reading VAX/VMS "Files-11"
-(ODS-2) disk volumes and images. This is a from-scratch Go port of the
+(ODS-2) disk volumes and images. This is a from-scratch Go rewrite of the
 architecture and file-format knowledge in the C [ods2](https://github.com/DaveShepperd/ods2)
 project (itself descended from Paul Nankervis's original, via Hunter
 Goatley and crwolff) — not a line-by-line translation.
@@ -12,7 +12,7 @@ Goatley and crwolff) — not a line-by-line translation.
 implemented, unit-tested, and verified end to end against a real compiled
 binary: `mount`, `dismount`, `directory`/`dir`, `copy`, `search`, `type`,
 `difference`, `set default`, `show`, `help`, `exit`/`quit`. Remaining polish
-(golden-file tests against real ODS-2 images, some of `copy`'s less-common
+(golden-file tests against real ODS-2 images, a few of `copy`'s more niche
 qualifiers) is tracked below.
 
 ## Goals
@@ -24,11 +24,9 @@ qualifiers) is tracked below.
   (plain block dumps and raw optical-media sector dumps) are supported.
 - Read-only in this phase: mount, directory listing, copy-off, search, type,
   diff. Write/create support (file creation, deletion, bitmap allocation) is
-  explicitly deferred to a future phase with its own design, since the
-  equivalent C code is experimental and known-buggy.
+  explicitly deferred to a future phase with its own design phase.
 - **Library-first.** Everything except the `cmd/ods2` CLI is a clean,
-  importable Go library, intended for reuse from other projects (a VAX
-  emulator is a planned future consumer).
+  importable Go library, intended for reuse from other projects.
 
 ## Architecture
 
@@ -112,11 +110,13 @@ See the architecture section above for the package layout.
    `copy`, `search`, `type`, `difference`, `set default`, `show`, `help`,
    `exit`/`quit`), REPL (via `github.com/chzyer/readline`) and one-shot CLI
    (via `github.com/spf13/cobra`) sharing the same command implementations.
-8. ⬜ Polish: golden-file/integration tests against real ODS-2 images,
-   cross-platform CI verification, `copy`'s remaining qualifiers (`/dirs`,
-   `/stream`, `/vfc`, `/ignore`, `/time`, `/crlf`, `/lf`) — text-mode copying
-   already handles the common VFC/Stream/Variable cases correctly via
-   package `rms`, just without those specific overrides yet.
+8. 🔶 Polish (in progress): automated end-to-end CLI tests against a
+   synthetic image ✅; `copy`'s `/time` and `/ignore` qualifiers ✅; still
+   open: golden-file tests against real (non-synthetic) ODS-2 images,
+   explicit cross-platform CI verification, and `copy`'s remaining niche
+   qualifiers (`/dirs`, `/stream`, `/vfc`, `/crlf`, `/lf`) — text-mode
+   copying already handles the common VFC/Stream/Variable cases correctly
+   via package `rms`, just without those specific overrides yet.
 
 Explicitly out of scope for now (future work): write/create support,
 ODS-5 support, raw physical device mounting.
