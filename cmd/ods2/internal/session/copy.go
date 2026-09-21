@@ -1,7 +1,9 @@
 package session
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,27 +21,24 @@ func init() {
 			MinAbbrev:  4,
 			MinArgs:    2,
 			MaxArgs:    2,
-			Qualifiers: []string{"quiet", "verbose", "test", "binary"},
+			Qualifiers: []string{"quiet", "verbose", "test", "binary", "time", "ignore"},
 			Run:        cmdCopy,
 		},
 	)
 }
 
 // cmdCopy implements `copy source-spec destination [/quiet] [/verbose]
-// [/test] [/binary]`, copying one or more files off a mounted volume onto
-// the host filesystem. destination is always host (not VMS) path syntax —
-// this project, like the reference implementation, never writes back to
-// an ODS-2 volume.
+// [/test] [/binary] [/time] [/ignore]`, copying one or more files off a
+// mounted volume onto the host filesystem. destination is always host
+// (not VMS) path syntax — this project, like the reference
+// implementation, never writes back to an ODS-2 volume.
 //
 // A subset of the reference implementation's full qualifier set: /dirs
 // (mirror source subdirectories as host directories while also
-// materializing .DIR entries), /stream and /vfc (format-specific raw-copy
-// tweaks), /ignore (fall back to raw bytes on a corrupt record instead of
-// stopping), /time (preserve the source file's date on the copy), and
-// /crlf/lf (force a specific line-ending convention) are not implemented
-// yet; text-mode copying already handles the common VFC/Stream/Variable
-// cases correctly via package rms, just without those specific
-// overrides.
+// materializing .DIR entries) and /stream/vfc/crlf/lf (format-specific
+// copy tweaks) are not implemented yet; text-mode copying already
+// handles the common VFC/Stream/Variable cases correctly via package rms,
+// just without those specific overrides.
 func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 	spec, err := filespec.Parse(args[0], s.Default)
 	if err != nil {
@@ -68,6 +67,8 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 	verbose := quals.Has("verbose")
 	test := quals.Has("test")
 	binary := quals.Has("binary")
+	preserveTime := quals.Has("time")
+	ignore := quals.Has("ignore")
 
 	for _, m := range matches {
 		outPath := resolveDestination(dest, m, s.Delim)
@@ -82,8 +83,15 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 			fmt.Fprintf(s.Stdout, "%%COPY-I-COPYING, copying %s to %s\n", sourceName, outPath)
 		}
 
-		if err := copyOneFile(vol, m, outPath, binary); err != nil {
+		f, err := copyOneFile(vol, m, outPath, binary, ignore)
+		if err != nil {
 			return fmt.Errorf("copy: %s: %w", sourceName, err)
+		}
+
+		if preserveTime {
+			if err := preserveFileTime(outPath, f); err != nil && verbose {
+				fmt.Fprintf(s.Stdout, "%%COPY-W-NOTIME, could not preserve date on %s: %v\n", outPath, err)
+			}
 		}
 
 		if !quiet {
@@ -92,6 +100,17 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 	}
 
 	return nil
+}
+
+// preserveFileTime sets outPath's modification (and access) time to f's
+// own revision date, for /time.
+func preserveFileTime(outPath string, f *volume.File) error {
+	ident, err := f.Header.Ident()
+	if err != nil {
+		return err
+	}
+	t := ident.RevisionDate.Time()
+	return os.Chtimes(outPath, t, t)
 }
 
 // destIsDirectory reports whether dest already names an existing host
@@ -138,23 +157,49 @@ func resolveDestination(dest string, m filespec.Match, delim byte) string {
 
 // copyOneFile copies one matched file's content to outPath: raw bytes in
 // /binary mode, or the same text-mode rendering `type` produces
-// otherwise (see typeFile).
-func copyOneFile(vol *volume.Volume, m filespec.Match, outPath string, binary bool) error {
+// otherwise (see typeFile). It returns the opened volume.File (so the
+// caller can use its header for /time) even when an error occurs, since
+// the header itself was successfully read regardless of what happened
+// afterward.
+//
+// If ignore is set and text-mode copying hits a corrupt record
+// (rms.ErrCorruptRecord), copyOneFile restarts the destination file from
+// scratch in raw/binary mode rather than leaving a partially-written
+// text-mode file behind. This is a simplified stand-in for the reference
+// implementation's own /IGNORE behavior (which switches to raw mode and
+// resumes from exactly where the corruption was found): this project's
+// rms.Reader doesn't expose how many bytes it had already consumed at
+// the point of failure, so "restart the whole file in raw mode" is what's
+// implemented instead — still recovers the file's bytes losslessly, just
+// without preserving whatever partial record-oriented formatting the
+// good portion of the file would otherwise have gotten.
+func copyOneFile(vol *volume.Volume, m filespec.Match, outPath string, binary, ignore bool) (*volume.File, error) {
 	f, err := vol.OpenFID(m.Fid)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	out, err := os.Create(outPath)
 	if err != nil {
-		return err
+		return f, err
 	}
 	defer out.Close()
 
 	if binary {
-		return copyBinary(out, f)
+		return f, copyBinary(out, f)
 	}
-	return typeFile(out, f)
+
+	err = typeFile(out, f)
+	if err != nil && ignore && errors.Is(err, rms.ErrCorruptRecord) {
+		if _, seekErr := out.Seek(0, io.SeekStart); seekErr != nil {
+			return f, seekErr
+		}
+		if truncErr := out.Truncate(0); truncErr != nil {
+			return f, truncErr
+		}
+		return f, copyBinary(out, f)
+	}
+	return f, err
 }
 
 // copyBinary copies a file's exact valid bytes (see rms.FileByteLength)

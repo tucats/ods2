@@ -24,6 +24,7 @@ import (
 
 	"github.com/tucats/ods2/diskimage"
 	"github.com/tucats/ods2/ondisk"
+	"github.com/tucats/ods2/vmstime"
 )
 
 // MemContainer is an in-memory diskimage.Container backed by a plain
@@ -138,8 +139,17 @@ type FileHeaderFixture struct {
 	// HighWaterMark at all (see ondisk.FileHeader.IdentOffset's
 	// documentation); leave this 0 (the default) for a fixture that
 	// doesn't care about high-water behavior, which disables the check
-	// entirely.
+	// entirely. It also positions the file identification (IDENT) area
+	// RevisionDate below is written into -- set it to a real,
+	// non-colliding word offset (e.g. 40, the same value commonly used to
+	// enable high-water-mark behavior) whenever RevisionDate is used.
 	IdentOffset uint8
+
+	// RevisionDate, if nonzero, is written into the file's IDENT area
+	// (see ondisk.FileHeader.Ident) at IdentOffset's position, for tests
+	// exercising behavior that reads a file's dates (such as `copy`'s
+	// /time qualifier).
+	RevisionDate vmstime.VMSTime
 
 	FileChar      uint32
 	HighWaterMark uint32
@@ -239,6 +249,16 @@ func BuildFileHeaderBytes(t testing.TB, f FileHeaderFixture) []byte {
 	if f.MapBytes != nil {
 		start := int(f.MapOffsetWords) * 2
 		copy(b[start:start+len(f.MapBytes)], f.MapBytes)
+	}
+
+	if f.RevisionDate != 0 {
+		// identOffRevDate mirrors ondisk/ident.go's own (private) offset
+		// of RevisionDate within the IDENT area: 30 bytes in, after the
+		// 20-byte filename, 2-byte revision counter, and 8-byte creation
+		// date that precede it.
+		const identOffRevDate = 30
+		identStart := int(f.IdentOffset) * 2
+		binary.LittleEndian.PutUint64(b[identStart+identOffRevDate:], uint64(f.RevisionDate))
 	}
 
 	sum, err := ondisk.Checksum(b)
