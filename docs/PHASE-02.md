@@ -1832,6 +1832,73 @@ continuing to behave exactly as before this subtask (no regression to
 
 No pre-existing bugs were found in the code this subtask built on.
 
+**Follow-up: real `/HOST` source support.** A user hitting `copy go.sum
+dua1:*.* /verbose` after this subtask shipped got a confusing
+`%ODS2-E-ERROR, copy: go.sum not found` — exactly the gap this subtask's
+own write-up called out (it shipped as volume → volume, not the
+host → volume its title promised): `cmdCopy` always parses `source-spec`
+as a VMS spec against the mounted volume, so a bare host filename that
+happens to also be a syntactically valid (if nonexistent) VMS name just
+looks like a typo for a volume file, never a host path.
+
+Added a `/HOST` qualifier (`cmd/ods2/internal/session/copy.go`) rather
+than guessing the direction from context: with it, `source-spec` is a
+literal host path (single file, no wildcard expansion) and `destination`
+must resolve to a volume via the existing `volumeDestination` — a
+non-volume destination under `/HOST` is rejected outright, since
+host → host isn't this command's job. `cmdCopyFromHost` mirrors
+`cmdCopy`'s own volume-destination branch closely: `resolveVolumeDest`
+was factored out of that branch (directory + bitmap-cache resolution) so
+both paths share it; `volumeDestName` is reused as-is for the
+`*`/`%`-substitution rule, fed a synthetic `filespec.Match{Name, Type}`
+built from the host path's base name (`hostBaseNameType`, splitting on the
+last `.`, same convention `splitNameTypeVersion` already uses — but,
+unlike every other name in this project, upper-cased: a host base name is
+ordinary host-filesystem text with no VMS casing convention behind it at
+all, so the auto-derived name is upper-cased to look like a real VMS name
+rather than merely resembling one, the same normalization real VMS's own
+DCL applies to unquoted command-line text. This is the one place in the
+whole project that upper-cases a name at all — every *typed* VMS name
+elsewhere is still used exactly as given, matching case-insensitively).
+`/BINARY` writes the
+host file's exact bytes block-by-block (`copyHostRawToVolume`, the
+`/HOST` counterpart of `copyRawToVolume`); the text-mode default
+(`copyHostRecordsToVolume`) reads the host file as plain lines — CRLF
+normalized to LF — and writes each as a `Stream_LF` record via
+`rms.Writer`, needing none of `writeRecords`' VMS-record-format-aware
+logic since a host file has no record structure of its own to interpret.
+
+**A real, pre-existing bug surfaced while manually verifying this fix,
+unrelated to `/HOST` itself:** reading back a `/BINARY`-created
+(`Undefined`-format) file via `TYPE` — or via a plain, non-`/BINARY`
+`COPY` off the volume — corrupts it whenever its length isn't an exact
+multiple of 512 bytes, and errors outright once record parsing runs past
+the last real byte. Root cause: `rms.Reader` (`rms/reader.go`) treats
+`RecordFormatUndefined` exactly like `RecordFormatFixed` — one
+block-sized "record" per read — with no awareness that `/BINARY`'s own
+writer (`copyOneFileToVolume`/`copyHostFileToVolume`) already recorded the
+file's true byte length via `CloseWithFinalByte`. Reproduced with no
+`/HOST` involved at all, purely through this subtask's original
+volume → volume `/BINARY` direction, so it predates this follow-up
+entirely — it was simply never exercised by subtask 16's own tests, which
+only round-tripped `/BINARY` back through `COPY` (a plain block-by-block
+copy, per `copyBinary`/`rms.FileByteLength`, that never goes through
+`rms.Reader` at all) rather than `TYPE`. Documented as a known limitation
+in `COMMANDS.md`'s `COPY` section rather than fixed here — an `rms.Reader`
+fix is unrelated in scope to `/HOST`'s own write-side addition, and
+deserves its own change and tests.
+
+Tests (`cmd/ods2/internal/session/copyfromhost_test.go`) reuse
+`newVolumeDestTestSession`'s fixture and cover: default text-mode copy
+reading back correctly through `TYPE`, landing as genuine `Stream_LF`;
+`/BINARY` round-tripping through `COPY ... /BINARY` back to a host path
+(not `TYPE` — see the bug above) and matching the source's exact bytes;
+a wildcard volume destination taking the host file's own base name,
+upper-cased; a second copy to the same name/type getting the next
+version; a non-volume destination rejected; a missing or directory host
+source rejected; `/TEST` writing nothing; and CRLF-to-LF normalization,
+including a final line with no trailing newline at all.
+
 ---
 
 ## Testing strategy

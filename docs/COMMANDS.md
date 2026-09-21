@@ -305,19 +305,32 @@ rejected instead of picking one arbitrarily.
 
 ```text
 COPY source-spec destination [/QUIET] [/VERBOSE] [/TEST] [/BINARY] [/TIME]
-     [/IGNORE] [/DIRS] [/STREAM] [/VFC] [/CRLF] [/LF]
+     [/IGNORE] [/DIRS] [/STREAM] [/VFC] [/CRLF] [/LF] [/HOST]
 ```
 
-Copies one or more files off the volume. `source-spec` always names files
-on an already-mounted volume; `destination` is usually a **host path** (the
-original, and still the most common, direction), but may instead be VMS
-syntax (`device:[dir]name.type`) naming a location on a *different* (or
-the same) volume that's mounted `/WRITE` — in which case the copy goes
+Copies one file (or, without `/HOST`, one or more files) onto a
+destination. Without `/HOST` (the original, and still the most common
+form), `source-spec` always names one or more files on an already-mounted
+volume, and `destination` is usually a **host path**, but may instead be
+VMS syntax (`device:[dir]name.type`) naming a location on a *different*
+(or the same) volume that's mounted `/WRITE` — in which case the copy goes
 volume-to-volume instead of onto the host filesystem. A `destination`
 string is only ever treated as VMS syntax if the text before its first
 `:` actually names a currently mounted device; anything else (including
 every ordinary host path, which typically has no `:` at all) is a host
 path exactly as before.
+
+With `/HOST`, `source-spec` is flipped instead: it names a single plain
+**host file** (never a file already on a mounted volume, and never a
+wildcard), and `destination` must be VMS syntax naming a location on a
+volume mounted `/WRITE` — this is how a file gets *onto* a volume in the
+first place. `/HOST` needs its own explicit qualifier because a bare name
+like `go.sum` is a syntactically valid (if possibly nonexistent) VMS file
+spec too — without `/HOST`, `copy go.sum DUA1:*.*` looks for a file named
+`go.sum` on your *current default volume*, not the host file of that name
+in your shell's working directory. A `/HOST` copy onto a plain host
+`destination` (rather than a mounted volume) is rejected outright — that
+direction is what your shell's own file-copy tools are for.
 
 For a **host** `destination`, it can be:
 
@@ -356,6 +369,26 @@ file itself used — the simplest text convention to target without
 negotiating a full record-format/carriage-control choice on the write
 side.
 
+`/HOST` shares that same restricted qualifier set for the same reason,
+since its destination is always a volume too: only `/QUIET`, `/VERBOSE`,
+`/TEST`, and `/BINARY` apply. Without `/BINARY`, the destination is
+created `Stream_LF` and the host file's text is copied in, one line at a
+time, with any `\r\n` line endings normalized to plain `\n` (a bare `\r`
+with no following `\n` is left alone) — the host file doesn't need a
+trailing newline on its last line for that line to still come across
+intact. With `/BINARY`, the destination is created `Undefined` and the
+host file's exact bytes are copied through unchanged. The destination
+name/type comes from `destSpec`'s own name/type if it gave one (applying
+the same `*`/`%` wildcard-substitution rule as any other volume
+destination, and — like any other VMS name typed directly into this
+tool — used exactly as typed, whatever case that is), or otherwise from
+the host file's own base name, **upper-cased** — e.g. copying `go.sum` to
+`DUA1:*.*` creates `DUA1:[dir]GO.SUM`, not `DUA1:[dir]go.sum`. A host
+file's name is ordinary host-filesystem text with no VMS convention
+behind its case at all; upper-casing it to look like a normal VMS name is
+the equivalent of what real VMS's own DCL does to unquoted command-line
+text automatically.
+
 Qualifiers:
 
 - `/QUIET` — don't print the `%COPY-S-COPIED` confirmation line per file.
@@ -390,6 +423,8 @@ Qualifiers:
   default `\n`. Mutually exclusive with `/LF`.
 - `/LF` — use `\n` line endings (the default; mainly useful to say so
   explicitly). Mutually exclusive with `/CRLF`.
+- `/HOST` — `source-spec` names a plain host file instead of a file on a
+  mounted volume; see above. Requires a volume `destination`.
 
 ```text
 ODS2> copy *.txt ./extracted/ /verbose
@@ -407,6 +442,27 @@ ODS2> copy foo.txt DUA1:*.* /verbose
 %COPY-I-COPYING, copying FOO.TXT;1 to DUA1:[000000]FOO.TXT
 %COPY-S-COPIED, FOO.TXT;1 copied to DUA1:[000000]FOO.TXT;1
 ```
+
+Copying a plain host file *onto* a volume mounted `/WRITE` with `/HOST`
+(note the reversed direction — the volume is now the destination, not the
+source):
+
+```text
+ODS2> mount dua1 /write
+%MOUNT-I-MOUNTED, Volume SCRATCH mounted on DUA1
+ODS2> copy go.sum DUA1:*.* /verbose /host
+%COPY-I-COPYING, copying go.sum to DUA1:[000000]GO.SUM
+%COPY-S-COPIED, go.sum copied to DUA1:[000000]GO.SUM;1
+```
+
+**A `/BINARY` caveat:** a file `/BINARY` creates (in either write
+direction) is stored `Undefined`-format. `TYPE`, and a plain (non-`/BINARY`)
+`COPY` reading it back, currently misreads an `Undefined`-format file as
+if it were fixed-length records the width of one block — harmless for a
+file whose length happens to be an exact multiple of 512 bytes, but it
+garbles (and eventually errors on) one that isn't. Read a `/BINARY` file
+back with `COPY ... /BINARY` (to a host path), not `TYPE`, until this is
+fixed.
 
 ### SEARCH
 

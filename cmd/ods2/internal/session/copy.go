@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -23,7 +24,7 @@ func init() {
 			MaxArgs:   2,
 			Qualifiers: []string{
 				"quiet", "verbose", "test", "binary", "time", "ignore",
-				"dirs", "stream", "vfc", "crlf", "lf",
+				"dirs", "stream", "vfc", "crlf", "lf", "host",
 			},
 			Run: cmdCopy,
 		},
@@ -33,15 +34,23 @@ func init() {
 // cmdCopy implements `copy source-spec destination` with the reference
 // implementation's full qualifier set (see COMMANDS.md for user-facing
 // documentation of each one): /QUIET, /VERBOSE, /TEST, /BINARY, /TIME,
-// /IGNORE, /DIRS, /STREAM, /VFC, /CRLF, /LF. destination is usually a host
-// path, as in the reference implementation, but may instead be VMS syntax
-// (device:[dir]name.type) naming a location on a volume mounted /WRITE —
-// see volumeDestination — in which case copying goes the other direction,
-// from this session's already-mounted source volume onto that one. Only
-// /QUIET, /VERBOSE, /TEST, and /BINARY carry over to that direction:
-// /TIME (no host mtime to preserve), /IGNORE, /DIRS, and the line-ending
-// qualifiers are host-file-format concerns with no obvious volume-side
-// equivalent (see copyOneFileToVolume/copyRecordsToVolume).
+// /IGNORE, /DIRS, /STREAM, /VFC, /CRLF, /LF, /HOST. destination is usually
+// a host path, as in the reference implementation, but may instead be VMS
+// syntax (device:[dir]name.type) naming a location on a volume mounted
+// /WRITE — see volumeDestination — in which case copying goes the other
+// direction, from this session's already-mounted source volume onto that
+// one. Only /QUIET, /VERBOSE, /TEST, and /BINARY carry over to that
+// direction: /TIME (no host mtime to preserve), /IGNORE, /DIRS, and the
+// line-ending qualifiers are host-file-format concerns with no obvious
+// volume-side equivalent (see copyOneFileToVolume/copyRecordsToVolume).
+//
+// /HOST flips source-spec's own interpretation instead: with it,
+// source-spec names a plain host file rather than a file on the mounted
+// volume — see cmdCopyFromHost. Without an explicit qualifier for this,
+// there would be no reliable way to tell "copy this host file" apart from
+// "copy this file already on the volume", since a bare name like
+// "go.sum" is a syntactically valid (if possibly nonexistent) VMS file
+// spec too.
 //
 // /VFC is accepted for command-line compatibility but has no effect:
 // unlike the reference implementation (where VFC interpretation is
@@ -49,6 +58,14 @@ func init() {
 // file's carriage control, the same as `type` does — there is no
 // "un-interpreted" text mode to opt out of.
 func cmdCopy(s *Session, args []string, quals Qualifiers) error {
+	if quals.Has("crlf") && quals.Has("lf") {
+		return fmt.Errorf("copy: /crlf and /lf are mutually exclusive")
+	}
+
+	if quals.Has("host") {
+		return cmdCopyFromHost(s, args, quals)
+	}
+
 	spec, err := filespec.Parse(args[0], s.Default)
 	if err != nil {
 		return fmt.Errorf("copy: %w", err)
@@ -77,10 +94,6 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 		return fmt.Errorf("copy: %s.%s matches %d files; destination must be a directory or contain '*' to copy more than one file", spec.Name, spec.Type, len(matches))
 	}
 
-	if quals.Has("crlf") && quals.Has("lf") {
-		return fmt.Errorf("copy: /crlf and /lf are mutually exclusive")
-	}
-
 	opts := copyOptions{
 		binary:     quals.Has("binary"),
 		ignore:     quals.Has("ignore"),
@@ -105,15 +118,7 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 	var destBm *volume.Bitmap
 	var destIb *volume.IndexBitmap
 	if toVolume && !test {
-		destDir, err = filespec.ResolveDirectory(destVol, destSpec.Dirs)
-		if err != nil {
-			return fmt.Errorf("copy: %w", err)
-		}
-		destBm, err = destDir.Device.Bitmap()
-		if err != nil {
-			return fmt.Errorf("copy: %w", err)
-		}
-		destIb, err = destDir.Device.IndexBitmap()
+		destDir, destBm, destIb, err = resolveVolumeDest(destVol, destSpec)
 		if err != nil {
 			return fmt.Errorf("copy: %w", err)
 		}
@@ -261,6 +266,122 @@ func volumeDestName(destSpec filespec.Spec, m filespec.Match) (name, typ string)
 		typ = destSpec.Type
 	}
 	return name, typ
+}
+
+// resolveVolumeDest resolves a volume destination's target Directory and
+// its device's bitmap caches, the one-time setup a volume destination
+// needs before any file is written into it (shared by cmdCopy's own
+// volume branch and cmdCopyFromHost).
+func resolveVolumeDest(destVol *volume.Volume, destSpec filespec.Spec) (*volume.Directory, *volume.Bitmap, *volume.IndexBitmap, error) {
+	destDir, err := filespec.ResolveDirectory(destVol, destSpec.Dirs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	destBm, err := destDir.Device.Bitmap()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	destIb, err := destDir.Device.IndexBitmap()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return destDir, destBm, destIb, nil
+}
+
+// cmdCopyFromHost implements copy's /HOST direction: args[0] names a plain
+// host file (rather than a file spec on the mounted volume — see cmdCopy's
+// own doc comment for why this needs an explicit qualifier at all), copied
+// onto destination, which must be VMS syntax naming a location on a volume
+// mounted /WRITE (see volumeDestination). Copying a host file onto the
+// host filesystem isn't this command's job under /HOST — that's what the
+// shell's own file-copy tools are for — so a non-volume destination is
+// rejected with a clear error rather than silently falling back to an
+// ordinary host-to-host copy.
+//
+// Only /QUIET, /VERBOSE, /TEST, and /BINARY apply here, the same subset
+// cmdCopy's own volume-destination direction supports and for the same
+// reasons (see its doc comment): a plain host file has no VMS record
+// format, revision date, or subdirectory structure of its own for /TIME,
+// /IGNORE, /DIRS, or the line-ending qualifiers to act on.
+func cmdCopyFromHost(s *Session, args []string, quals Qualifiers) error {
+	hostPath := args[0]
+
+	info, err := os.Stat(hostPath)
+	if err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("copy: %s: is a directory, not a file", hostPath)
+	}
+
+	destVol, destSpec, toVolume, err := volumeDestination(s, args[1])
+	if err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	if !toVolume {
+		return fmt.Errorf("copy: /host requires destination to name a location on a mounted volume (device:[dir]name.type)")
+	}
+
+	hostName, hostType := hostBaseNameType(hostPath)
+	name, typ := volumeDestName(destSpec, filespec.Match{Name: hostName, Type: hostType})
+	destName := (filespec.Spec{Device: destSpec.Device, Dirs: destSpec.Dirs, Name: name, Type: typ}).String()
+
+	test := quals.Has("test")
+	if test {
+		fmt.Fprintf(s.Stdout, "%%COPY-I-TEST, would copy %s to %s\n", hostPath, destName)
+		return nil
+	}
+	if quals.Has("verbose") {
+		fmt.Fprintf(s.Stdout, "%%COPY-I-COPYING, copying %s to %s\n", hostPath, destName)
+	}
+
+	destDir, destBm, destIb, err := resolveVolumeDest(destVol, destSpec)
+	if err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+
+	src, err := os.Open(hostPath)
+	if err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	defer src.Close()
+
+	version, err := copyHostFileToVolume(destVol, destDir, destBm, destIb, name, typ, src, info.Size(), quals.Has("binary"))
+	if err != nil {
+		return fmt.Errorf("copy: %s: %w", hostPath, err)
+	}
+
+	if !quals.Has("quiet") {
+		destVersion := (filespec.Spec{Device: destSpec.Device, Dirs: destSpec.Dirs, Name: name, Type: typ, Version: fmt.Sprint(version)}).String()
+		fmt.Fprintf(s.Stdout, "%%COPY-S-COPIED, %s copied to %s\n", hostPath, destVersion)
+	}
+	return nil
+}
+
+// hostBaseNameType splits a host path's base name into a VMS-style
+// name/type pair, the same way an ordinary file spec's text is split into
+// name and type (see splitNameTypeVersion): on the LAST '.', so a name
+// with several dots (e.g. "archive.tar.gz") keeps every earlier one as
+// part of the name. A base name with no '.' at all gets an empty type,
+// exactly like a VMS file with no type.
+//
+// The result is always upper-cased, unlike the rest of this project's
+// name handling (which never upper-cases text typed directly as VMS
+// syntax, since matching is already case-insensitive throughout). A host
+// base name is different: it's ordinary host-filesystem text with no VMS
+// convention behind its case at all (typically lower- or mixed-case on
+// this project's target platforms), so left alone it would produce a
+// file that merely *looks* unlike anything real VMS ever wrote. Real
+// VMS's own DCL upper-cases unquoted command-line text uniformly for
+// exactly this reason; upper-casing just this one host-sourced name is
+// the narrow equivalent for /HOST, without changing how any *typed* VMS
+// name elsewhere in this project is handled.
+func hostBaseNameType(path string) (name, typ string) {
+	base := filepath.Base(path)
+	if idx := strings.LastIndexByte(base, '.'); idx != -1 {
+		return strings.ToUpper(base[:idx]), strings.ToUpper(base[idx+1:])
+	}
+	return strings.ToUpper(base), ""
 }
 
 // copyDirEntry handles one matched directory entry under /DIRS: it
@@ -476,6 +597,106 @@ func copyOneFileToVolume(destVol *volume.Volume, destDir *volume.Directory, dest
 		return 0, fmt.Errorf("looking up newly created %s: %w", fullName, err)
 	}
 	return entry.Version, nil
+}
+
+// copyHostFileToVolume copies src's content into a brand-new file
+// name.typ in destDir — the /HOST-source counterpart of
+// copyOneFileToVolume (see its own doc comment for the shared parts of
+// this design), reading from a plain host *os.File instead of an
+// already-open volume.File. binary selects the same two modes: /BINARY
+// creates an Undefined-format file and copies src's exact bytes through
+// unchanged (copyHostRawToVolume); otherwise the destination is created
+// Stream_LF and src's text is reframed into individual records
+// (copyHostRecordsToVolume).
+func copyHostFileToVolume(destVol *volume.Volume, destDir *volume.Directory, destBm *volume.Bitmap, destIb *volume.IndexBitmap, name, typ string, src *os.File, size int64, binary bool) (uint16, error) {
+	fullName := name + "." + typ
+
+	recAttr := ondisk.RecAttr{Format: ondisk.RecordFormatStreamLF}
+	if binary {
+		recAttr = ondisk.RecAttr{Format: ondisk.RecordFormatUndefined, MaxRecordSize: ondisk.BlockSize}
+	}
+
+	dst, err := destVol.CreateFile(destDir, fullName, recAttr, destBm, destIb)
+	if err != nil {
+		return 0, fmt.Errorf("creating %s: %w", fullName, err)
+	}
+
+	if binary {
+		err = copyHostRawToVolume(dst, src, size)
+	} else {
+		err = copyHostRecordsToVolume(dst, src)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("writing %s: %w", fullName, err)
+	}
+
+	entry, err := destDir.Lookup(fullName, 0)
+	if err != nil {
+		return 0, fmt.Errorf("looking up newly created %s: %w", fullName, err)
+	}
+	return entry.Version, nil
+}
+
+// copyHostRawToVolume copies src's exact bytes to dst block by block (the
+// /BINARY case for a /HOST source), zero-padding the final partial block
+// the same way a whole-block write always must, then records dst's true
+// byte length via CloseWithFinalByte — the /HOST-source counterpart of
+// copyRawToVolume, reading from a plain io.Reader with a known size
+// instead of a volume.File whose valid length comes from
+// rms.FileByteLength.
+func copyHostRawToVolume(dst *volume.File, src io.Reader, size int64) error {
+	buf := make([]byte, ondisk.BlockSize)
+	remaining := size
+
+	for vbn := uint32(1); remaining > 0; vbn++ {
+		n, err := io.ReadFull(src, buf)
+		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return err
+		}
+		for i := n; i < len(buf); i++ {
+			buf[i] = 0
+		}
+		if err := dst.WriteBlock(vbn, buf); err != nil {
+			return err
+		}
+		remaining -= int64(n)
+	}
+
+	return dst.CloseWithFinalByte(uint16(size % ondisk.BlockSize))
+}
+
+// copyHostRecordsToVolume reframes src's plain host text as a Stream_LF
+// file on dst (the default, non-/BINARY case for a /HOST source): split on
+// '\n', trimming a trailing '\r' so CRLF-terminated host text works the
+// same as LF-terminated text, and each line becomes one Stream_LF record
+// via rms.Writer. Unlike copyRecordsToVolume (a volume source, whose
+// original record format/carriage-control needs writeRecords' full
+// per-format logic to interpret), a plain host file has no VMS record
+// structure of its own to reframe — it's already linear text.
+func copyHostRecordsToVolume(dst *volume.File, src io.Reader) error {
+	w, err := rms.NewWriter(dst)
+	if err != nil {
+		return err
+	}
+
+	reader := bufio.NewReader(src)
+	for {
+		line, readErr := reader.ReadString('\n')
+		if len(line) > 0 {
+			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			if err := w.Put([]byte(line)); err != nil {
+				return err
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return readErr
+		}
+	}
+
+	return w.Close()
 }
 
 // copyRawToVolume copies src's exact valid bytes (see rms.FileByteLength)
