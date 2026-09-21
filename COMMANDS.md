@@ -204,7 +204,8 @@ rejected instead of picking one arbitrarily.
 ### COPY
 
 ```text
-COPY source-spec destination [/QUIET] [/VERBOSE] [/TEST] [/BINARY] [/TIME] [/IGNORE]
+COPY source-spec destination [/QUIET] [/VERBOSE] [/TEST] [/BINARY] [/TIME]
+     [/IGNORE] [/DIRS] [/STREAM] [/VFC] [/CRLF] [/LF]
 ```
 
 Copies one or more files off the volume onto the host filesystem.
@@ -237,19 +238,32 @@ Qualifiers:
   the default text mode, don't fail: restart the file from scratch as a
   raw binary copy instead, recovering its bytes losslessly (without the
   interrupted portion's text formatting).
+- `/DIRS` — when `source-spec` matches files in more than one directory
+  (a wildcarded directory component, or `...`), mirror each file's source
+  subdirectory path under `destination` instead of flattening everything
+  into one directory, creating host directories as needed. Also causes
+  matched `.DIR` entries themselves to be materialized as host
+  directories; without `/DIRS`, `.DIR` entries are skipped entirely
+  rather than copied as if they were ordinary files.
+- `/STREAM` — for a Stream-format source file, copy its exact original
+  bytes instead of scanning for line delimiters and re-writing them with
+  this tool's own line-ending convention. Without it, a Stream file's
+  line endings are normalized the same way `/BINARY` would bypass
+  entirely, but only stream-format files are affected.
+- `/VFC` — accepted for compatibility; has no effect. Unlike the original
+  VMS tool (where VFC interpretation is opt-in), this tool's default text
+  mode always expands a VFC file's carriage control, the same as `TYPE`
+  does, so there's no separate "raw" mode to opt into.
+- `/CRLF` — use `\r\n` line endings in text-mode output instead of the
+  default `\n`. Mutually exclusive with `/LF`.
+- `/LF` — use `\n` line endings (the default; mainly useful to say so
+  explicitly). Mutually exclusive with `/CRLF`.
 
 ```text
 ODS2> copy *.txt ./extracted/ /verbose
 %COPY-I-COPYING, copying FOO.TXT;1 to ./extracted/FOO.TXT;1
 %COPY-S-COPIED, FOO.TXT;1 copied to ./extracted/FOO.TXT;1
 ```
-
-**Not yet implemented:** `/DIRS` (mirror source subdirectories as host
-directories while copying recursively), `/STREAM` and `/VFC`
-(format-specific raw-copy tweaks), and `/CRLF`/`/LF` (force a specific
-line-ending convention on output). Default text-mode copying already
-handles Fixed/Variable/VFC/Stream content correctly; these qualifiers
-would only add finer control over the exact output framing.
 
 ### SEARCH
 
