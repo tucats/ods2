@@ -192,6 +192,46 @@ ODS2> mount myvolume.dsk
 %MOUNT-I-MOUNTED, Volume MYVOL mounted on myvolume.dsk
 ```
 
+### ANALYZE/DISK
+
+```text
+ANALYZE device /DISK [/REPAIR]
+```
+
+Checks a mounted volume's storage bitmap (`BITMAP.SYS`) for consistency:
+it walks every in-use file on `device`, works out which blocks its own
+headers say it occupies, and compares that against what `BITMAP.SYS`
+actually records. Two kinds of discrepancy are reported: a block the
+bitmap marks free that some file actually uses (a corruption risk — a
+future allocation could silently overwrite that file's data), and a block
+the bitmap marks allocated that no file actually claims (merely
+reclaimable space, not dangerous).
+
+`/DISK` is required — it's the only structure type this command checks
+(real VMS's `ANALYZE` also supports unrelated modes like `/RMS_FILE` this
+project doesn't implement). `device` must already be mounted (see
+`MOUNT`); this command doesn't take a host path directly.
+
+- `/REPAIR` — in addition to reporting, rewrites `BITMAP.SYS` to match the
+  computed-correct state. Requires `device` to be mounted `/WRITE`.
+
+Only a single-device volume is supported — `ANALYZE/DISK` against a
+mounted volume set (several devices mounted together) fails with a clear
+error.
+
+```text
+ODS2> mount myvolume.dsk /write
+%MOUNT-I-MOUNTED, Volume MYVOL mounted on myvolume.dsk
+ODS2> analyze myvolume.dsk /disk
+%ANALYZE-W-DISCREP, 1 discrepancy(ies) found (400 cluster(s) examined)
+  cluster 57 (LBN 57-57) is marked allocated but is not used by any file
+ODS2> analyze myvolume.dsk /disk /repair
+%ANALYZE-W-DISCREP, 1 discrepancy(ies) found and repaired (400 cluster(s) examined)
+  cluster 57 (LBN 57-57) is marked allocated but is not used by any file
+ODS2> analyze myvolume.dsk /disk
+%ANALYZE-I-CLEAN, no discrepancies found (400 cluster(s) examined)
+```
+
 ### DIRECTORY (DIR)
 
 ```text

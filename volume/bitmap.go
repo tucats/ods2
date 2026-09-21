@@ -77,6 +77,25 @@ func OpenBitmap(dev *Device) (*Bitmap, error) {
 		return nil, fmt.Errorf("volume: opening storage bitmap: device is not open for write")
 	}
 
+	bm, err := loadBitmap(dev)
+	if err != nil {
+		return nil, err
+	}
+	bm.container = container
+
+	return bm, nil
+}
+
+// loadBitmap reads dev's storage bitmap (BITMAP.SYS) into memory exactly
+// as OpenBitmap does, but without requiring dev to be open for write --
+// shared by OpenBitmap itself (which adds that requirement, since it's the
+// only path that can ever Flush a mutation back) and ANALYZE/DISK's
+// read-only diagnostic pass (analyze.go), which only ever needs to inspect
+// BITMAP.SYS's on-disk bits, never mutate them, and so has no need to
+// require write access just to run. The returned Bitmap's container field
+// is left nil; calling Flush on it would panic, which is intentional --
+// nothing that obtains a Bitmap this way is expected to ever call it.
+func loadBitmap(dev *Device) (*Bitmap, error) {
 	header, err := readFileHeaderViaIndex(dev, dev.IndexFile.Extents, ondisk.BitmapFileFid)
 	if err != nil {
 		return nil, fmt.Errorf("volume: opening storage bitmap: %w", err)
@@ -128,7 +147,6 @@ func OpenBitmap(dev *Device) (*Bitmap, error) {
 	return &Bitmap{
 		dev:           dev,
 		file:          file,
-		container:     container,
 		scb:           scb,
 		clusterSize:   clusterSize,
 		totalClusters: totalClusters,

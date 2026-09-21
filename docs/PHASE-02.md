@@ -90,7 +90,7 @@ expose.
 | 12 | `volume`+`cmd`: `INITIALIZE` | Done |
 | 13 | `rms`: record writer | Done |
 | 14 | `cmd/ods2`: `MOUNT /WRITE` + `DISMOUNT` wiring | Done |
-| 15 | `cmd/ods2`: `ANALYZE/DISK` | Not started |
+| 15 | `cmd/ods2`: `ANALYZE/DISK` | Done |
 | 16 | `cmd/ods2`: `COPY` host → volume direction (stretch goal) | Not started |
 
 Legend: **Not started** / **In progress** / **Done** (commit `abc1234`) /
@@ -1565,6 +1565,143 @@ hand-corrupted in a test fixture (a bit flipped to "free" under a block a
 real file uses, and separately a bit left "allocated" under space nothing
 uses), reports exactly those two discrepancies; with `/REPAIR`, produces a
 `BITMAP.SYS` that a follow-up `ANALYZE/DISK` (no `/REPAIR`) reports clean.
+
+**Shipped.** The core logic lives in `volume` (`volume/analyze.go`), not
+`cmd/ods2` — `AnalyzeDisk(dev *Device) (*DiskReport, error)` for the
+read-only pass and `RepairDisk(dev *Device) (*DiskReport, error)` for
+`/REPAIR` — with `cmd/ods2/internal/session/analyze.go` a thin command
+wrapper around both, matching how `INITIALIZE`'s own command/library split
+(subtask 12) already works.
+
+One real simplification over the subtask write-up's original sketch:
+there's no need to separately chase "its directory's own extents, and any
+extension segments" the way the write-up above describes. An extension
+header segment occupies its **own** header slot with its **own** file
+number and its **own** retrieval-pointer map (confirmed by re-reading
+subtask 8's `linkNewExtensionSegment`: the new segment's Fid comes from
+`ib.FindFreeSlot()`, an ordinary, independent slot allocation, not
+anything derived from the primary file's own number) — so simply walking
+*every* file number `1..MaxFiles` and decoding whichever slots currently
+hold a genuinely in-use header already visits every block any file, primary
+or extension segment alike, actually claims, exactly once each. No
+`ExtensionFid`-chain walk (the way `buildFile` resolves one specific file's
+complete extent list) is needed at all here, because this pass isn't
+resolving any one file — it's visiting every header slot regardless of
+which file it belongs to.
+
+A gap the original write-up didn't anticipate: the boot block (LBN 0) and
+the volume's home block (`HomeBlock.HomeLBN`) are reserved space that
+exists *before* any file does, so no file's retrieval pointers ever claim
+them — but `Initialize` (subtask 12) correctly marks them allocated in
+`BITMAP.SYS` regardless (its own `reservedExtent` covers LBN 0 through the
+master file directory's block). Without accounting for this separately,
+`AnalyzeDisk` would misreport those two blocks as reclaimable on *every*
+volume, including a freshly `Initialize`d one — caught by this subtask's
+own primary acceptance test before it shipped. Fixed by unconditionally
+treating LBN 0 through `HomeBlock.HomeLBN` as allocated, independent of
+what any file's headers claim. A real volume's alternate/backup home block
+and index-file copies (`HomeBlock.AlternateHomeLBN`/`AlternateIndexLBN`),
+where present, are **not** currently given the same treatment — this
+project's own `Initialize` never writes them, so no test fixture exercises
+that gap; documented on `AnalyzeDisk` itself as a known limitation worth
+revisiting if `ANALYZE/DISK` is ever run against a real volume that has
+them (`testdata/rq0-ra92.dsk`, say), rather than guessed at without a real
+example to confirm the exact reserved region's size against.
+
+`OpenBitmap` (subtask 6) requires a `diskimage.WritableContainer` — sensible
+for its own purpose (nothing obtained through it can ever be flushed
+otherwise), but wrong for `AnalyzeDisk`'s read-only pass, which needs to
+work against a volume mounted without `/WRITE` too (only `/REPAIR` should
+need write access). Resolved by factoring `OpenBitmap`'s body into a new,
+unexported `loadBitmap(dev *Device) (*Bitmap, error)` that reads
+`BITMAP.SYS` into memory without checking (or storing) a container at all;
+`OpenBitmap` itself becomes that fast-fail write check followed by a
+`loadBitmap` call. `AnalyzeDisk` calls `loadBitmap` directly, so it never
+needs write access; `RepairDisk` only reaches for `dev.Bitmap()` (which
+does still require it) after confirming there's actually something to fix,
+so running `/REPAIR` against an already-clean, read-only-mounted volume is
+still a safe no-op that never touches the write path at all.
+
+Every in-use header's own retrieval pointers are trusted as-is; a header
+slot that doesn't decode cleanly (checksum mismatch) or whose stored Fid
+doesn't match its own slot number is treated as free (contributes no
+claimed blocks) rather than guessed at — a corrupt *header*, as opposed to
+a corrupt *bitmap*, isn't what this subtask's own scope covers (the
+per-file safety checks subtask 7's `FindFreeSlot` already performs are
+what catch that class of inconsistency), and a bitmap-consistency pass
+that silently patched over an unreadable header would risk computing a
+wrong "truth" to repair *against*. If a legitimately in-use header's own
+map area fails to decode (`RetrievalPointers()` returning an error),
+`AnalyzeDisk` fails loudly with that error instead of proceeding on
+incomplete information, on the same "surface it, don't guess" principle
+subtask 7's own `FindFreeSlot` already established for a bitmap/header
+mismatch.
+
+`BitmapDiscrepancy` additionally records `ClaimedByFile`, the file number
+whose retrieval pointers claim a "marked free but used" cluster (0 for the
+"marked allocated but unused" case, where by definition no file claims
+it) — not called for explicitly by the write-up above, but a small,
+essentially-free addition once the per-cluster claimant is already being
+tracked to build the computed bitmap in the first place, and genuinely
+useful in `ANALYZE/DISK`'s own printed output (`cmd/ods2/internal/session/
+analyze.go`) for pointing at *which* file's data was at risk.
+
+`cmd/ods2`'s own `analyze.go` registers a single-word command, `analyze`,
+with `disk` and `repair` as ordinary qualifiers (`Qualifiers: []string{
+"disk", "repair"}`) — not a two-word verb the way `SET DEFAULT`/`SHOW
+DEFAULT` are, and not a literal `"analyze/disk"` table entry either. This
+follows the same normalization `MOUNT`/`WRITE` and `INITIALIZE`/`CLUSTER`
+already established: this project's own command-line tokenizer
+(`tokenize.go`) recognizes a `/name` qualifier anywhere on the line
+regardless of spacing, so `ANALYZE device /DISK` and `ANALYZE/DISK device`
+parse identically — gluing `/DISK` onto the verb with no space (the way
+real DCL usually writes it, and the way this document itself refers to the
+command throughout) works fine, but isn't the only accepted spelling.
+Unlike `/WRITE`, `/DISK` is *required* here, not optional: it's the only
+`ANALYZE` mode this project implements (real VMS's `ANALYZE` also has
+unrelated modes like `/RMS_FILE` this project has no reason to support),
+and requiring it keeps the command self-documenting rather than letting a
+bare `ANALYZE device` silently mean the same thing. `ANALYZE/DISK` is
+deliberately **not** registered as a one-shot subcommand (`main.go`'s
+`oneShotCommands`) — like `MOUNT`/`DISMOUNT`/`INITIALIZE`, its argument is
+a device name that must already be mounted, not a host path to mount
+automatically, and one-shot mode's fixed `mount <image>` (no `/WRITE`)
+couldn't support `/REPAIR` regardless.
+
+A mounted volume set (more than one `Device`) is rejected by
+`cmd/ods2/internal/session/analyze.go` itself, before either device is
+ever touched, matching this phase's own non-goal scoping of `ANALYZE/DISK`
+to single-device volumes (see this document's own non-goals section) —
+`volume.AnalyzeDisk`/`RepairDisk` themselves take a single `*Device`, so
+there's no ambiguity for the command layer to resolve about which member
+of a set to check.
+
+Tests: `volume/analyze_test.go` builds its fixture the way this phase's
+`Testing strategy` section calls for (`Initialize` + `Mount` + `CreateFile`,
+not hand-rolled bytes), and covers exactly this subtask's own test plan —
+zero discrepancies on a known-good, freshly written volume; a real file's
+own data cluster hand-flipped free (plus, independently, an unused cluster
+hand-flipped allocated) reported as exactly two discrepancies, correctly
+classified in each direction, with the used-cluster one correctly
+attributing `ClaimedByFile`; `/REPAIR`'s fix confirmed via a completely
+independent follow-up `AnalyzeDisk` call (a fresh on-disk re-read, not an
+in-memory check); `/REPAIR` on an already-clean volume never touching
+write-only state at all; `/REPAIR` against a read-only-mounted device
+failing with a clear error; and `AnalyzeDisk` against a never-mounted
+`Device` failing cleanly instead of a nil-pointer panic. One test-writing
+subtlety worth recording: hand-corrupting a bitmap by freeing a real file's
+cluster and then calling `Bitmap.FindFree` to pick an unrelated cluster to
+over-allocate has to find that second cluster *before* freeing the first
+— otherwise `FindFree`'s first-fit scan can pick the very cluster just
+freed, and the two edits cancel out into an undetectable net-zero
+"corruption," which is exactly what happened on this test's first attempt.
+`cmd/ods2/internal/session/analyze_test.go` covers the command-layer
+wiring on top (qualifier requirement, unmounted/multi-device rejection,
+and the full report → repair → re-verify cycle's output through
+`cmdAnalyze`), leaning on `volume/analyze_test.go`'s own coverage for the
+underlying analysis logic itself rather than duplicating it.
+
+No pre-existing bugs were found in the code this subtask built on.
 
 ### 16. `cmd/ods2`: `COPY` host → volume direction (stretch goal)
 
