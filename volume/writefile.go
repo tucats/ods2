@@ -116,9 +116,39 @@ func (f *File) WriteBlock(vbn uint32, data []byte) error {
 // idempotent — calling it again after it has already run is also a no-op —
 // so callers can defer Close unconditionally without needing to know in
 // advance whether a given File is writable.
+//
+// Close is exactly CloseWithFinalByte(0) — see that method's doc comment
+// for the one case where a caller needs something other than this
+// whole-block convention.
 func (f *File) Close() error {
+	return f.CloseWithFinalByte(0)
+}
+
+// CloseWithFinalByte is Close's counterpart for a caller that needs
+// FirstFreeByte to land at a precise offset within the last block written,
+// rather than Close's own whole-block convention of always recording data
+// as ending exactly on a block boundary.
+//
+// WriteBlock only ever writes whole ondisk.BlockSize blocks — there's no
+// way to give it a final block that's only partly real data. A caller that
+// tracks its own exact byte length as it writes (package rms's Writer,
+// docs/PHASE-02.md subtask 13, is the motivating case: individual records
+// routinely end partway through a block) can still write that final block
+// through WriteBlock, zero-padding it out to full size itself, and then
+// call CloseWithFinalByte instead of Close to record the block's true,
+// partial extent: finalByte is the offset, within the highest virtual
+// block WriteBlock has been asked to write (see maxWrittenVBN), of the
+// first byte past the file's real content — exactly what ends up in
+// RecordAttributes.FirstFreeByte itself. finalByte 0 means "the file's
+// data ends exactly on a block boundary", i.e. Close's own convention —
+// which is why Close is defined as CloseWithFinalByte(0) rather than
+// duplicating this method's body.
+func (f *File) CloseWithFinalByte(finalByte uint16) error {
 	if f.bm == nil || f.ib == nil {
 		return nil
+	}
+	if finalByte >= ondisk.BlockSize {
+		return fmt.Errorf("volume: closing file %v: finalByte %d is not a valid offset within a %d-byte block", f.Header.Fid, finalByte, ondisk.BlockSize)
 	}
 
 	container, ok := f.Device.Container.(diskimage.WritableContainer)
@@ -131,6 +161,14 @@ func (f *File) Close() error {
 	h.RecordAttributes.FirstFreeByte = 0
 	if f.maxWrittenVBN > 0 {
 		h.RecordAttributes.EndOfFileBlock = f.maxWrittenVBN + 1
+		if finalByte != 0 {
+			// The highest block actually written isn't fully real data --
+			// record it, and only it, as the last block of the file,
+			// instead of the one past it that the whole-block convention
+			// above assumed.
+			h.RecordAttributes.EndOfFileBlock = f.maxWrittenVBN
+			h.RecordAttributes.FirstFreeByte = finalByte
+		}
 		if h.HighWaterMark < f.maxWrittenVBN+1 {
 			h.HighWaterMark = f.maxWrittenVBN + 1
 		}

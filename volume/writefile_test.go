@@ -323,6 +323,137 @@ func TestVolumeCreateFileEndToEnd(t *testing.T) {
 	}
 }
 
+// TestFileCloseWithFinalByteRecordsPartialBlock covers CloseWithFinalByte's
+// reason for existing (added alongside package rms's record writer,
+// docs/PHASE-02.md subtask 13): a caller that tracks its own exact byte
+// length can record FirstFreeByte precisely within the last block actually
+// written, rather than Close's own always-whole-block convention.
+func TestFileCloseWithFinalByteRecordsPartialBlock(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	f, err := CreateHeader(dev, ib, NewFileHeader{Name: "PARTIAL.DAT", Directory: ondisk.Fid{Num: 4, Seq: 4}})
+	if err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+	if err := f.OpenForWrite(bm, ib); err != nil {
+		t.Fatalf("OpenForWrite: %v", err)
+	}
+	if err := f.WriteBlock(1, blockOf(0x11)); err != nil {
+		t.Fatalf("WriteBlock(1): %v", err)
+	}
+	if err := f.WriteBlock(2, blockOf(0x22)); err != nil {
+		t.Fatalf("WriteBlock(2): %v", err)
+	}
+
+	// Only the first 100 bytes of VBN 2 are real content -- the rest of
+	// that block is zero-padding WriteBlock's "exactly one block" contract
+	// required, not part of the file's logical data.
+	if err := f.CloseWithFinalByte(100); err != nil {
+		t.Fatalf("CloseWithFinalByte: %v", err)
+	}
+	if got, want := f.Header.RecordAttributes.EndOfFileBlock, uint32(2); got != want {
+		t.Errorf("EndOfFileBlock = %d, want %d", got, want)
+	}
+	if got, want := f.Header.RecordAttributes.FirstFreeByte, uint16(100); got != want {
+		t.Errorf("FirstFreeByte = %d, want %d", got, want)
+	}
+	if got, want := f.UsedBlocks(), uint32(2); got != want {
+		t.Errorf("UsedBlocks() = %d, want %d", got, want)
+	}
+
+	// Independent re-open confirms this actually reached disk, not just
+	// f's own in-memory copy.
+	vol := &Volume{Devices: []*Device{dev}}
+	reopened, err := vol.OpenFID(f.Header.Fid)
+	if err != nil {
+		t.Fatalf("OpenFID: %v", err)
+	}
+	if got, want := reopened.Header.RecordAttributes.FirstFreeByte, uint16(100); got != want {
+		t.Errorf("reopened FirstFreeByte = %d, want %d", got, want)
+	}
+	if got, want := reopened.Header.RecordAttributes.EndOfFileBlock, uint32(2); got != want {
+		t.Errorf("reopened EndOfFileBlock = %d, want %d", got, want)
+	}
+}
+
+// TestFileCloseIsCloseWithFinalByteZero confirms Close's documented
+// equivalence to CloseWithFinalByte(0) actually holds for the whole-block
+// case: closing after writing whole blocks with no explicit final-byte
+// offset must produce exactly the FirstFreeByte-0 convention Close's own
+// doc comment describes.
+func TestFileCloseIsCloseWithFinalByteZero(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	f, err := CreateHeader(dev, ib, NewFileHeader{Name: "WHOLE.DAT", Directory: ondisk.Fid{Num: 4, Seq: 4}})
+	if err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+	if err := f.OpenForWrite(bm, ib); err != nil {
+		t.Fatalf("OpenForWrite: %v", err)
+	}
+	if err := f.WriteBlock(1, blockOf(0x33)); err != nil {
+		t.Fatalf("WriteBlock(1): %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got, want := f.Header.RecordAttributes.EndOfFileBlock, uint32(2); got != want {
+		t.Errorf("EndOfFileBlock = %d, want %d", got, want)
+	}
+	if got, want := f.Header.RecordAttributes.FirstFreeByte, uint16(0); got != want {
+		t.Errorf("FirstFreeByte = %d, want %d", got, want)
+	}
+}
+
+func TestFileCloseWithFinalByteRejectsOutOfRangeOffset(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	f, err := CreateHeader(dev, ib, NewFileHeader{Name: "BAD.DAT", Directory: ondisk.Fid{Num: 4, Seq: 4}})
+	if err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+	if err := f.OpenForWrite(bm, ib); err != nil {
+		t.Fatalf("OpenForWrite: %v", err)
+	}
+
+	if err := f.CloseWithFinalByte(ondisk.BlockSize); err == nil {
+		t.Fatal("CloseWithFinalByte(BlockSize): want error, got nil")
+	}
+}
+
 func TestFileCloseIsIdempotent(t *testing.T) {
 	dev, container := newWritableHeaderTestVolume(t)
 	setIndexBitmapBits(t, container, []uint32{1, 2, 3})

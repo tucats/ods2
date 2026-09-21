@@ -88,7 +88,7 @@ expose.
 | 10 | `volume`: file write API (open-for-write, CreateFile, WriteBlock) | Done |
 | 11 | `volume`: Dismount flush | Done |
 | 12 | `volume`+`cmd`: `INITIALIZE` | Done |
-| 13 | `rms`: record writer | Not started |
+| 13 | `rms`: record writer | Done |
 | 14 | `cmd/ods2`: `MOUNT /WRITE` + `DISMOUNT` wiring | Not started |
 | 15 | `cmd/ods2`: `ANALYZE/DISK` | Not started |
 | 16 | `cmd/ods2`: `COPY` host → volume direction (stretch goal) | Not started |
@@ -1417,6 +1417,60 @@ blocks directly via `File.WriteBlock`.
 `rms.Reader`, confirm round-trip fidelity — including VFC's carriage-
 control byte handling, matching the level of care Phase 1's `TYPE`/`COPY`
 already put into reading it correctly.
+
+**Shipped**, as `rms/writer.go`. `NewWriter(f *volume.File) (*Writer,
+error)` mirrors `NewReader`'s own format dispatch and validation exactly;
+`(*Writer) Put(record []byte) error` frames one record per call the same
+way `Reader.Next()` reads one back (2-byte length prefix for Variable/VFC,
+a delimiter appended after every Stream record, no framing at all for
+Fixed/Undefined beyond the exact-size check), buffering framed bytes and
+flushing a full `ondisk.BlockSize` chunk out via `File.WriteBlock` as soon
+as one accumulates — no caching beyond that one in-flight partial block,
+matching subtask 10's "no write-back caching for file data" rule.
+`(*Writer) Close() error` zero-pads and flushes whatever partial block is
+left buffered, then finalizes the header.
+
+The one real design gap this subtask actually had to close: subtask 10's
+own write-up flagged that `File.Close()` only ever records `FirstFreeByte`
+as 0 (data ending exactly on a block boundary), and explicitly expected "a
+future record-aware writer... to build its own bookkeeping on top rather
+than this being `WriteBlock`'s job." Rather than have `rms.Writer` reach
+into `volume`'s unexported header-rewrite machinery (`writeHeader`/
+`existingAreas`, package-private and rightly so), `volume.File` gained one
+new exported method, `CloseWithFinalByte(finalByte uint16) error`, and
+`Close()` was redefined as exactly `CloseWithFinalByte(0)`: `finalByte` is
+the offset within the highest block `WriteBlock` was asked to write of the
+first byte past the file's real content, i.e. precisely
+`RecordAttributes.FirstFreeByte`'s own on-disk meaning, sidestepping
+`Close`'s whole-block-only assumption without duplicating any of its
+`HighWaterMark`/disarm/error-handling logic. This is exactly the kind of
+in-scope "found while building on it" fix the subtask 10 write-up
+anticipated, not a bug in subtask 10's own shipped behavior (nothing before
+this subtask needed partial-final-block accuracy).
+
+Tests live in both packages: `volume/writefile_test.go` gained direct
+coverage of `CloseWithFinalByte` itself (a partial final block's
+`EndOfFileBlock`/`FirstFreeByte`/`UsedBlocks()` all correct and durable
+across an independent re-`OpenFID`; `Close()`'s continued equivalence to
+`CloseWithFinalByte(0)`; an out-of-range `finalByte` rejected). `rms`'s own
+`writer_test.go` builds a genuinely writable volume from scratch for each
+test via the public `diskimage.Create` + `volume.Initialize` + `volume.
+Mount` + `volume.Volume.CreateFile` path (subtask 12) — package `volume`'s
+own writable test fixtures are unexported and unreachable from a different
+package — then round-trips every format (Fixed, Variable, VFC, all three
+Stream variants) through `Writer` and a fresh `Reader` on an independently
+re-opened `File`, plus: a record spanning a block boundary (200 fixed
+4-byte records, forcing `append`'s flush-mid-`Put` path), data landing
+exactly on a block boundary (confirming `Writer` reproduces `Close`'s own
+whole-block convention rather than diverging from it), a wrong-sized fixed
+record and an over-length Variable record both rejected, `MaxRecordSize` 0
+rejected (`Reader`'s equivalent case treats it as an already-empty file
+instead, since reading has no "further calls would be meaningless" failure
+mode the way writing does), an empty file closing exactly like a
+freshly-created one, and `Close` idempotent with `Put` afterward rejected.
+
+No pre-existing bugs were found in the code this subtask built on, beyond
+the already-anticipated `Close`/`FirstFreeByte` gap above.
 
 ### 14. `cmd/ods2`: `MOUNT /WRITE` + `DISMOUNT` wiring
 
