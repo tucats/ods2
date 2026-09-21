@@ -128,10 +128,11 @@ func OpenIndexBitmap(dev *Device) (*IndexBitmap, error) {
 }
 
 // headerVBN returns the virtual block number, within INDEXF.SYS, of the
-// on-disk header slot for the given (1-based) file number — the same
-// arithmetic readFileHeaderViaIndex uses to locate any file's header.
+// on-disk header slot for the given (1-based) file number -- see the
+// package-level fileHeaderVBN (file.go), shared by every piece of this
+// package that needs to locate a header slot.
 func (ib *IndexBitmap) headerVBN(fileNumber uint32) uint32 {
-	return fileNumber - 1 + uint32(ib.dev.Home.IndexBitmapVBN) + uint32(ib.dev.Home.IndexBitmapSize)
+	return fileHeaderVBN(ib.dev.Home, fileNumber)
 }
 
 // FindFreeSlot returns the file number of one free header slot, skipping

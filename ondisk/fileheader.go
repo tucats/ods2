@@ -19,6 +19,19 @@ const (
 // FileHeaderSize is the number of bytes a FileHeader occupies on disk.
 const FileHeaderSize = BlockSize
 
+// FileHeaderStructureLevel is the on-disk value every ODS-2 file header
+// (primary or extension segment) carries in its StructureLevel field: 513
+// decimal, which splits into structure level 2, version 1 when read as two
+// separate bytes (the low byte, 1, is the version; the high byte, 2, is the
+// level). This is a different value from HomeBlock.StructureLevel's own
+// 0x0102 ("ODS-2, version 1.2") -- the volume as a whole and an individual
+// file header are versioned independently on real VMS, and both values are
+// genuine on-disk convention (confirmed against the reference
+// implementation's update_addhead(), which writes this same 513 into every
+// header it creates), not something this project is free to pick for
+// itself.
+const FileHeaderStructureLevel uint16 = 513
+
 // FileHeader describes one file (or directory, or one of a volume's own
 // bookkeeping files — on ODS-2 those are all just files with particular
 // characteristics) via a single 512-byte block within the volume's index

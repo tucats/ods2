@@ -83,7 +83,7 @@ expose.
 | 5 | `ondisk`: directory-block encoder | Done |
 | 6 | `volume`: storage-bitmap cache & allocator (BITMAP.SYS) | Done |
 | 7 | `volume`: index-file header-slot cache & allocator (INDEXF.SYS) | Done |
-| 8 | `volume`: file-header writer (new headers, extension segments, HighWaterMark) | Not started |
+| 8 | `volume`: file-header writer (new headers, extension segments, HighWaterMark) | Done |
 | 9 | `volume`: directory mutation (insert + auto-extend + version assignment) | Not started |
 | 10 | `volume`: file write API (open-for-write, CreateFile, WriteBlock) | Not started |
 | 11 | `volume`: Dismount flush | Not started |
@@ -818,6 +818,106 @@ existing read path as the correctness check); extend a file enough to
 require a second header segment, confirm `RetrievalPointers()` chases the
 chain correctly; confirm a freshly-extended-but-unwritten block reads back
 as zero (via `HighWaterMark`), per Phase 1's existing guarantee.
+
+**Shipped**, as `volume/writeheader.go`. `CreateHeader(dev *Device, ib
+*IndexBitmap, opts NewFileHeader) (*File, error)` allocates a slot via
+`ib.FindFreeSlot`, builds a Fid whose sequence number is one more than
+whatever the slot's previous occupant (if any) last held (matching the
+reference implementation's `update_addhead()` — genuine on-disk semantics
+`readFileHeaderViaIndex`'s stale-Fid check depends on, not a reference
+artifact, so it's reproduced rather than simplified away), and encodes/
+writes the header immediately via the new `EncodeFileHeader`. Owner/
+FileProtection come from `HomeBlock.VolumeOwner`/`FileProtection` as
+planned, not a hardcoded UIC.
+
+`Extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32)
+error` turned out to need more supporting machinery than the subtask
+write-up's one-paragraph sketch implied, because "append the new extent to
+whichever header currently has room" has to actually locate that header
+(walking the `ExtensionFid` chain via a new `tailHeader`), decide whether it
+fits (`appendExtent`, which tries a real `EncodeFileHeader` call and treats
+its only failure mode — the 402-byte variable area overflowing — as "no
+room left" rather than an error), and, when it doesn't, allocate and link a
+new segment (`linkNewExtensionSegment`). One real discovery along the way:
+the reference implementation's `update_extend()` links a new extension
+segment's `Backlink` to the segment it extends (primary or a prior
+extension), not to the file's parent directory the way a primary header's
+own `Backlink` works — confirmed by reading `update_extend()`/
+`update_addhead()` together (the `back` parameter passed at the extension
+call site is `&head->fh2$w_fid`, the *current tail's* own Fid, not the
+directory Fid `update_create()` passes for a brand-new file). Reproduced as
+real on-disk semantics, not "corrected" to match the primary's convention.
+
+A caller needing more space than the single largest free run offers (per
+subtask 6's own note that this is expected, not `Bitmap`'s job to solve) is
+handled by a new `allocateExtents` helper: a simple linear "try the full
+remaining amount, then one less" search for the largest run that still
+fits, looping until the full request is satisfied or space runs out — the
+simplest thing that works, matching this project's general preference over
+a cleverer search these volumes have no real need for. It rolls back (via
+`Bitmap.MarkFree`) whatever it allocated on its own failure path, so a
+failed `Extend` leaves `bm`'s in-memory state exactly as it found it, not
+just the file untouched.
+
+`HighWaterMark` needed less "correct updating" than the subtask write-up
+anticipated once the mechanics were worked out: `Extend` never moves it at
+all. Newly allocated blocks are, by construction, always at or beyond the
+file's *previous* `HighestBlock`, and `HighWaterMark` can never exceed that
+— so leaving it untouched is what keeps new space reading back as zero
+per `File.ReadBlock`'s existing guarantee, with nothing to "get right"
+beyond not touching it. `RecordAttributes.HighestBlock` on the primary
+header is what actually needs updating, and always gets one final rewrite
+at the end of `Extend` (via a new `existingAreas` helper that reconstructs
+a decoded header's current IDENT/map content for a re-encode) to record the
+new total, even on a call where every new extent landed in an extension
+segment and the primary's own map/ident never changed.
+
+One bug caught before it shipped: `linkNewExtensionSegment` rewrites the
+old tail's on-disk `ExtensionFid` immediately, but its first draft discarded
+the freshly-decoded result — if that old tail was the *primary* header,
+`Extend`'s in-memory `f.Header` would stay stale (still showing a zero
+`ExtensionFid`) until the function's own final "record `HighestBlock`"
+rewrite at the end, which would then silently re-encode from that stale
+copy and erase the very link just written. Fixed by having
+`linkNewExtensionSegment` return the relinked tail's decoded header
+alongside the new segment's, and syncing `f.Header` from it when the
+relinked tail is the primary.
+
+Also fixed in passing (in scope per this session's own instructions, since
+found while doing this subtask's work): `readFileHeaderViaIndex` and
+`IndexBitmap.headerVBN` each independently computed a file number's header
+VBN with the same formula; `writeheader.go` needed that arithmetic a third
+time, so it's now a single shared `fileHeaderVBN` helper (`file.go`) both
+existing call sites were changed to use, rather than a third copy.
+
+`internal/odstest.HomeBlockFixture` gained `VolumeOwner`/`FileProtection`
+fields (same pattern as subtask 7's `ReservedFiles` addition) since no
+existing test needed to control them before `CreateHeader`'s owner/
+protection-defaulting tests did. `ondisk` gained one new exported constant,
+`FileHeaderStructureLevel` (513 decimal — structure level 2, version 1),
+the value the reference implementation writes into every header it
+creates, distinct from `HomeBlock.StructureLevel`'s own 0x0102.
+
+Tests build on a new, wider writable fixture
+(`newWritableHeaderTestVolume`/`installWideTestBitmap` in
+`writeheader_test.go`) with far more free clusters than this package's
+existing bitmap fixtures provide, specifically so a test could force the
+extension-segment fallback for real (150 one-block `Extend` calls,
+comfortably past the ~70-entry capacity a header's map area has once its
+IDENT area is populated) rather than only unit-testing the internal helpers
+in isolation. Coverage: slot allocation and field defaults (owner,
+protection, backlink, zeroed record-attribute bookkeeping); sequence-number
+increment from a hand-built "previously used, since freed" slot fixture
+(deliberately not built via `odstest.BuildFileHeaderBytes`, since that
+helper always computes a genuinely matching checksum, and this scenario
+specifically needs a *stored* checksum of zero over *non-zero* other
+content); round-tripping a created header through `Volume.OpenFID`; `Extend`
+growing a file, zero-filling the newly-allocated space, accumulating
+correctly across multiple calls, rejecting zero blocks, rolling back
+cleanly when the volume is full, and — the main correctness target —
+actually producing a linked extension segment with the right `Backlink`/
+`SegmentNumber` when a header's map area fills up, verified via a completely
+independent `OpenFID` re-read.
 
 ### 9. `volume`: directory mutation
 

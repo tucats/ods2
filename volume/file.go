@@ -226,19 +226,27 @@ func buildFile(dev *Device, primary ondisk.FileHeader) (*File, error) {
 	return f, nil
 }
 
+// fileHeaderVBN returns the virtual block number, within INDEXF.SYS, of the
+// on-disk header slot for the given (1-based) file number: the header area
+// immediately follows the volume's index bitmap (see
+// HomeBlock.IndexBitmapVBN/IndexBitmapSize), so file number N's header is
+// N-1 blocks past the start of that area. Shared by every piece of this
+// package that needs to locate a header slot -- reading one
+// (readFileHeaderViaIndex), scanning for a free one (IndexBitmap), and
+// writing one (CreateHeader/Extend, in writeheader.go) all need the exact
+// same arithmetic to agree on where a given file number's header actually
+// lives.
+func fileHeaderVBN(home ondisk.HomeBlock, fileNumber uint32) uint32 {
+	return fileNumber - 1 + uint32(home.IndexBitmapVBN) + uint32(home.IndexBitmapSize)
+}
+
 // readFileHeaderViaIndex locates and decodes the on-disk FileHeader for
 // fid, given the Extents of INDEXF.SYS (on the same device as fid) needed
-// to find it.
-//
-// A file's header lives at a specific virtual block within INDEXF.SYS,
-// computed from its file number and the volume's index-bitmap location —
-// the header area immediately follows the index bitmap (see
-// HomeBlock.IndexBitmapVBN/IndexBitmapSize), so file number N's header is
-// N-1 blocks past the start of that area. That virtual block number is
-// then resolved to a physical block through INDEXF.SYS's own extents, the
-// same way any other file's data would be.
+// to find it. That virtual block number is then resolved to a physical
+// block through INDEXF.SYS's own extents, the same way any other file's
+// data would be.
 func readFileHeaderViaIndex(dev *Device, indexExtents []ExtentLocation, fid ondisk.Fid) (ondisk.FileHeader, error) {
-	vbn := fid.Number() - 1 + uint32(dev.Home.IndexBitmapVBN) + uint32(dev.Home.IndexBitmapSize)
+	vbn := fileHeaderVBN(dev.Home, fid.Number())
 
 	buf, err := readExtents(dev, indexExtents, vbn)
 	if err != nil {

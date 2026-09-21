@@ -99,6 +99,15 @@ type HomeBlockFixture struct {
 	IdxBitmapSize uint16
 	MaxFiles      uint32
 	ReservedFiles uint16
+
+	// VolumeOwner and FileProtection become HomeBlock.VolumeOwner/
+	// FileProtection -- the default owner UIC and protection mask
+	// volume.CreateHeader (see docs/PHASE-02.md subtask 8) applies to every
+	// newly-created file, rather than the reference implementation's
+	// hardcoded UIC. Left at their zero values by every fixture that
+	// doesn't care, same as every other field here.
+	VolumeOwner    ondisk.Uic
+	FileProtection uint16
 }
 
 // BuildHomeBlockBytes assembles a syntactically valid, correctly
@@ -119,6 +128,8 @@ func BuildHomeBlockBytes(t testing.TB, f HomeBlockFixture) []byte {
 		IndexBitmapSize:      f.IdxBitmapSize,
 		ReservedFiles:        f.ReservedFiles,
 		RelativeVolumeNumber: f.Rvn,
+		VolumeOwner:          f.VolumeOwner,
+		FileProtection:       f.FileProtection,
 		Format:               ondisk.HomeBlockFormatID,
 	})
 	if err != nil {
