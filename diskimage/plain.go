@@ -30,6 +30,22 @@ func (p *plainImage) ReadBlock(lbn uint32, buf []byte) error {
 	return err
 }
 
+func (p *plainImage) WriteBlock(lbn uint32, buf []byte) error {
+	if lbn >= p.blocks {
+		return ErrBlockOutOfRange
+	}
+	if len(buf) < BlockSize {
+		return ErrBufferTooSmall
+	}
+
+	// WriteAt, like ReadAt above, writes at an absolute file offset without
+	// touching the file's current position, so callers can write blocks in
+	// any order (e.g. following a file's retrieval pointers, or extending a
+	// file past its previous end) without needing a Seek in between.
+	_, err := p.f.WriteAt(buf[:BlockSize], int64(lbn)*BlockSize)
+	return err
+}
+
 func (p *plainImage) Blocks() uint32 {
 	return p.blocks
 }

@@ -224,3 +224,188 @@ func TestOpenRejectsMissingFile(t *testing.T) {
 		t.Fatal("Open on missing file: want error, got nil")
 	}
 }
+
+func TestPlainImageWriteBlock(t *testing.T) {
+	blocks := [][]byte{blockFilledWith(0xAA), blockFilledWith(0xBB), blockFilledWith(0xCC)}
+	path := writeFile(t, "plain.img", buildPlainImage(blocks))
+
+	c, err := OpenFormatWritable(path, FormatPlain)
+	if err != nil {
+		t.Fatalf("OpenFormatWritable: %v", err)
+	}
+	defer c.Close()
+
+	// Overwrite the first and last blocks; leave the middle one alone, to
+	// confirm WriteBlock doesn't disturb neighboring blocks.
+	if err := c.WriteBlock(0, blockFilledWith(0x11)); err != nil {
+		t.Fatalf("WriteBlock(0): %v", err)
+	}
+	if err := c.WriteBlock(2, blockFilledWith(0x33)); err != nil {
+		t.Fatalf("WriteBlock(2): %v", err)
+	}
+
+	want := [][]byte{blockFilledWith(0x11), blockFilledWith(0xBB), blockFilledWith(0x33)}
+	for i, w := range want {
+		got := make([]byte, BlockSize)
+		if err := c.ReadBlock(uint32(i), got); err != nil {
+			t.Fatalf("ReadBlock(%d): %v", i, err)
+		}
+		if !bytes.Equal(got, w) {
+			t.Fatalf("block %d after write does not match what was written", i)
+		}
+	}
+}
+
+func TestPlainImageWriteBlockOutOfRange(t *testing.T) {
+	path := writeFile(t, "plain.img", buildPlainImage([][]byte{blockFilledWith(1)}))
+	c, err := OpenFormatWritable(path, FormatPlain)
+	if err != nil {
+		t.Fatalf("OpenFormatWritable: %v", err)
+	}
+	defer c.Close()
+
+	if err := c.WriteBlock(1, blockFilledWith(2)); !errors.Is(err, ErrBlockOutOfRange) {
+		t.Fatalf("WriteBlock(1) error = %v, want ErrBlockOutOfRange", err)
+	}
+}
+
+func TestPlainImageWriteBlockBufferTooSmall(t *testing.T) {
+	path := writeFile(t, "plain.img", buildPlainImage([][]byte{blockFilledWith(1)}))
+	c, err := OpenFormatWritable(path, FormatPlain)
+	if err != nil {
+		t.Fatalf("OpenFormatWritable: %v", err)
+	}
+	defer c.Close()
+
+	buf := make([]byte, BlockSize-1)
+	if err := c.WriteBlock(0, buf); !errors.Is(err, ErrBufferTooSmall) {
+		t.Fatalf("WriteBlock with short buffer error = %v, want ErrBufferTooSmall", err)
+	}
+}
+
+func TestOpenWritableAutoDetectsPlainImage(t *testing.T) {
+	path := writeFile(t, "plain.img", buildPlainImage([][]byte{blockFilledWith(1)}))
+
+	c, err := OpenWritable(path)
+	if err != nil {
+		t.Fatalf("OpenWritable: %v", err)
+	}
+	defer c.Close()
+
+	if _, ok := c.(*plainImage); !ok {
+		t.Fatalf("OpenWritable auto-detected %T, want *plainImage", c)
+	}
+}
+
+func TestOpenWritableRejectsRawCD(t *testing.T) {
+	blocks := make([][]byte, blocksPerSector)
+	for i := range blocks {
+		blocks[i] = blockFilledWith(byte(i))
+	}
+	path := writeFile(t, "raw.img", buildRawCDImage(blocks))
+
+	if _, err := OpenWritable(path); err == nil {
+		t.Fatal("OpenWritable on raw CD-ROM image: want error, got nil")
+	}
+}
+
+func TestRawCDImageDoesNotImplementWritableContainer(t *testing.T) {
+	var c Container = &rawCDImage{}
+	if _, ok := c.(WritableContainer); ok {
+		t.Fatal("*rawCDImage unexpectedly implements WritableContainer")
+	}
+}
+
+func TestCreateProducesZeroFilledContainerOfExactSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new.img")
+
+	const wantBlocks = 4
+	c, err := Create(path, wantBlocks)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer c.Close()
+
+	if got := c.Blocks(); got != wantBlocks {
+		t.Fatalf("Blocks() = %d, want %d", got, wantBlocks)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got, want := info.Size(), int64(wantBlocks*BlockSize); got != want {
+		t.Fatalf("file size = %d, want %d", got, want)
+	}
+
+	buf := make([]byte, BlockSize)
+	for i := uint32(0); i < wantBlocks; i++ {
+		if err := c.ReadBlock(i, buf); err != nil {
+			t.Fatalf("ReadBlock(%d): %v", i, err)
+		}
+		for _, b := range buf {
+			if b != 0 {
+				t.Fatalf("block %d of a freshly Created container is not zero-filled", i)
+			}
+		}
+	}
+}
+
+func TestCreateThenWriteBlockRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new.img")
+
+	c, err := Create(path, 2)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer c.Close()
+
+	want := blockFilledWith(0x42)
+	if err := c.WriteBlock(1, want); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+
+	got := make([]byte, BlockSize)
+	if err := c.ReadBlock(1, got); err != nil {
+		t.Fatalf("ReadBlock: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("ReadBlock after WriteBlock returned wrong data")
+	}
+}
+
+func TestCreateTruncatesExistingFile(t *testing.T) {
+	// Create on a path that already holds a file with different (larger)
+	// contents than the new size should truncate it, not append to or
+	// merge with the old contents.
+	path := writeFile(t, "existing.img", buildPlainImage([][]byte{
+		blockFilledWith(0xFF), blockFilledWith(0xFF), blockFilledWith(0xFF),
+	}))
+
+	c, err := Create(path, 1)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer c.Close()
+
+	if got, want := c.Blocks(), uint32(1); got != want {
+		t.Fatalf("Blocks() = %d, want %d", got, want)
+	}
+
+	buf := make([]byte, BlockSize)
+	if err := c.ReadBlock(0, buf); err != nil {
+		t.Fatalf("ReadBlock(0): %v", err)
+	}
+	for _, b := range buf {
+		if b != 0 {
+			t.Fatal("Create did not zero the truncated file's remaining block")
+		}
+	}
+}
+
+func TestCreateRejectsZeroBlocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new.img")
+	if _, err := Create(path, 0); err == nil {
+		t.Fatal("Create(path, 0): want error, got nil")
+	}
+}

@@ -76,7 +76,7 @@ expose.
 | # | Subtask | Status |
 |---|---|---|
 | 0 | Phase 1 bugfix: `Directory.List()` on partially-allocated directories | Done |
-| 1 | `diskimage`: writable containers | Not started |
+| 1 | `diskimage`: writable containers | Done |
 | 2 | `ondisk`: fixed-layout encoders (HomeBlock, FileHeader, Fid, Uic, Ident, RecAttr) | Not started |
 | 3 | `ondisk`: retrieval-pointer encoder | Not started |
 | 4 | `ondisk`: storage-bitmap bit-packing + SCB encoder | Not started |
@@ -356,6 +356,20 @@ and last block; `Create` produces exactly the requested size, zero-filled;
 attempting to obtain a `WritableContainer` from a raw-CD-opened container
 fails cleanly (type assertion, or an explicit `OpenWritable`/error path —
 exact shape TBD when this subtask starts).
+
+**Shipped.** Went with the explicit-function shape rather than a type
+assertion on a `Container` from the existing `Open`: `OpenWritable`/
+`OpenFormatWritable` open the file `O_RDWR` themselves and reject a
+detected raw-CD image with a clear error before ever handing back a
+container, rather than letting a caller successfully type-assert a
+read-only-backed `*rawCDImage`/`*plainImage` and then fail confusingly on
+the first `WriteBlock`. The size/raw-CD-sync-pattern detection logic that
+`OpenFormat` already had was factored out into a private `detectFormat`
+helper shared by both the read-only and read-write open paths, so the two
+can't drift on what counts as "looks like a raw CD image." `Create` uses
+`os.Truncate` to size the new file, which is zero-filled ("sparse") by the
+OS on every platform this project targets — no explicit zero-byte writes
+needed.
 
 ### 2. `ondisk`: fixed-layout encoders
 
