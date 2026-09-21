@@ -79,7 +79,7 @@ expose.
 | 1 | `diskimage`: writable containers | Done |
 | 2 | `ondisk`: fixed-layout encoders (HomeBlock, FileHeader, Fid, Uic, Ident, RecAttr) | Done |
 | 3 | `ondisk`: retrieval-pointer encoder | Done |
-| 4 | `ondisk`: storage-bitmap bit-packing + SCB encoder | Not started |
+| 4 | `ondisk`: storage-bitmap bit-packing + SCB encoder | Done |
 | 5 | `ondisk`: directory-block encoder | Not started |
 | 6 | `volume`: storage-bitmap cache & allocator (BITMAP.SYS) | Not started |
 | 7 | `volume`: index-file header-slot cache & allocator (INDEXF.SYS) | Not started |
@@ -519,6 +519,36 @@ not an implementation artifact.
 
 **Tests:** set/clear/test round-trip across byte boundaries; SCB
 encode/decode round-trip.
+
+**Shipped.** `EncodeStorageControlBlock` is a direct inverse of
+`DecodeStorageControlBlock`, following the same pattern as
+`EncodeHomeBlock`/`EncodeFileHeader`: every field is replayed onto disk
+except `Checksum`, which is always computed fresh, and `VolumeLockName`
+(the SCB's one fixed-width text field) goes through the existing
+`encodePaddedString`, so an oversized name is rejected rather than
+truncated.
+
+The bit-packing helpers landed in a new file, `ondisk/bitmap.go`, rather
+than in `scb.go` — they're conceptually part of `BITMAP.SYS` but operate
+on the bitmap *bits* (the blocks that follow the SCB), not the SCB
+structure itself, and neither had a natural home in an existing file.
+`BitmapTest`/`BitmapSet`/`BitmapClear` take the caller-owned, already
+correctly-sized decoded-bitmap buffer directly (`bits []byte`) plus a
+0-based cluster number, packing one bit per cluster, LSB-first within each
+byte (`bits[cluster/8]`, bit `cluster%8`) — free/allocated polarity (1 =
+free) is kept from the reference implementation as a genuine on-disk
+convention, but the word-sized, host-endianness-dependent packing scheme
+around it is not (see [What we're deliberately not
+porting](#what-were-deliberately-not-porting-from-the-c-reference)). None
+of the three functions bounds-check `cluster` against `len(bits)`
+themselves — an out-of-range call panics via an ordinary slice-index
+panic, treated as a caller bug (subtask 6 owns sizing the buffer to cover
+every valid cluster) rather than something worth an `error` return for
+every call site to check. This byte-oriented layout is still unconfirmed
+against a real volume's actual `BITMAP.SYS` bytes, per the caveat already
+called out in the table above — worth revisiting if `testdata/rq0-ra92.dsk`
+(or another writable real volume) turns out to have a live bitmap file
+worth decoding for comparison when subtask 6 lands.
 
 ### 5. `ondisk`: directory-block encoder
 

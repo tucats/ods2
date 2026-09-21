@@ -99,3 +99,43 @@ func DecodeStorageControlBlock(b []byte) (StorageControlBlock, error) {
 
 	return s, nil
 }
+
+// EncodeStorageControlBlock encodes s into its 512-byte on-disk
+// representation, computing Checksum (see Checksum) from the rest of the
+// block — whatever value s.Checksum itself holds is ignored, the same
+// convention EncodeHomeBlock and EncodeFileHeader use, since a checksum
+// only makes sense as the OUTPUT of encoding the rest of the block.
+//
+// The only way this can fail is VolumeLockName being too long for its
+// fixed 12-byte on-disk width; every other field is a fixed-width numeric
+// (or, for MountTime, quadword-timestamp) value with no validity
+// constraint this package enforces.
+func EncodeStorageControlBlock(s StorageControlBlock) ([]byte, error) {
+	b := make([]byte, BlockSize)
+
+	binary.LittleEndian.PutUint16(b[scbOffStrucLevel:], s.StructureLevel)
+	binary.LittleEndian.PutUint16(b[scbOffCluster:], s.ClusterSize)
+	binary.LittleEndian.PutUint32(b[scbOffVolSize:], s.VolumeSize)
+	binary.LittleEndian.PutUint32(b[scbOffBlkSize:], s.BlockSize)
+	binary.LittleEndian.PutUint32(b[scbOffSectors:], s.Sectors)
+	binary.LittleEndian.PutUint32(b[scbOffTracks:], s.Tracks)
+	binary.LittleEndian.PutUint32(b[scbOffCylinders:], s.Cylinders)
+	binary.LittleEndian.PutUint32(b[scbOffStatus:], s.Status)
+	binary.LittleEndian.PutUint32(b[scbOffStatus2:], s.Status2)
+	binary.LittleEndian.PutUint16(b[scbOffWriteCount:], s.WriteCount)
+	if err := encodePaddedString(b[scbOffLockName:scbOffLockName+12], s.VolumeLockName); err != nil {
+		return nil, fmt.Errorf("ondisk: encoding StorageControlBlock.VolumeLockName: %w", err)
+	}
+	encodeVMSTime(b[scbOffMountTime:], s.MountTime)
+	binary.LittleEndian.PutUint16(b[scbOffBackupRev:], s.BackupRevision)
+	binary.LittleEndian.PutUint64(b[scbOffGenerNum:], s.GenerationNumber)
+
+	sum, err := Checksum(b)
+	if err != nil {
+		// Unreachable given b's fixed length above.
+		return nil, err
+	}
+	binary.LittleEndian.PutUint16(b[scbOffChecksum:], sum)
+
+	return b, nil
+}

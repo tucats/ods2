@@ -65,3 +65,51 @@ func TestDecodeStorageControlBlockWrongSize(t *testing.T) {
 		t.Fatal("DecodeStorageControlBlock with wrong-size buffer: want error, got nil")
 	}
 }
+
+// TestEncodeStorageControlBlockRoundTrip confirms
+// Decode(Encode(s)) == s, including a correctly-computed checksum, for a
+// representative StorageControlBlock -- the same round-trip shape used
+// throughout this package's other Encode* tests.
+func TestEncodeStorageControlBlockRoundTrip(t *testing.T) {
+	in := StorageControlBlock{
+		StructureLevel:   0x0102,
+		ClusterSize:      4,
+		VolumeSize:       1_000_000,
+		BlockSize:        512,
+		Sectors:          63,
+		Tracks:           255,
+		Cylinders:        1024,
+		Status:           0x1,
+		Status2:          0x2,
+		WriteCount:       42,
+		VolumeLockName:   "MYVOLUME",
+		MountTime:        decodeVMSTime([]byte{0, 0, 0, 0, 0, 0, 0, 0}),
+		BackupRevision:   7,
+		GenerationNumber: 0x0102030405060708,
+	}
+
+	b, err := EncodeStorageControlBlock(in)
+	if err != nil {
+		t.Fatalf("EncodeStorageControlBlock: %v", err)
+	}
+
+	out, err := DecodeStorageControlBlock(b)
+	if err != nil {
+		t.Fatalf("DecodeStorageControlBlock(EncodeStorageControlBlock(in)): %v", err)
+	}
+
+	in.Checksum = out.Checksum // Checksum is an output of encoding, not an input.
+	if out != in {
+		t.Errorf("round trip = %+v, want %+v", out, in)
+	}
+}
+
+// TestEncodeStorageControlBlockLockNameTooLong confirms an oversized
+// VolumeLockName is rejected rather than silently truncated -- the same
+// convention EncodeHomeBlock's text fields use.
+func TestEncodeStorageControlBlockLockNameTooLong(t *testing.T) {
+	_, err := EncodeStorageControlBlock(StorageControlBlock{VolumeLockName: "THIS NAME IS WAY TOO LONG FOR TWELVE BYTES"})
+	if err == nil {
+		t.Fatal("EncodeStorageControlBlock with an oversized VolumeLockName: want error, got nil")
+	}
+}
