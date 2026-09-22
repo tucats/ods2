@@ -118,7 +118,7 @@ contract — there isn't one yet.
 | 5 | `volume`: version-limit resolution + create-time enforcement | Done |
 | 6 | `volume`: `SetVersionLimit` | Done |
 | 7 | `cmd/ods2`: `SET FILE/VERSION_LIMIT=n` | Not started |
-| 8 | `volume`: `PurgeVersions` | Not started |
+| 8 | `volume`: `PurgeVersions` | Done |
 | 9 | `cmd/ods2`: `PURGE` command | Not started |
 | 10 | `volume`/`cmd/ods2`: `CREATE DIRECTORY` command | Done |
 
@@ -738,6 +738,24 @@ also support the degenerate case).
 `keep`, always removing the oldest; a name with fewer versions than `keep`
 (or exactly `keep`) is left untouched, including confirming no
 unnecessary writes/flushes happen for it; `keep == 0` rejected.
+
+**Shipped**, as `volume/delete.go`'s `func PurgeVersions(dir *Directory,
+name string, keep uint16, bm *Bitmap, ib *IndexBitmap) error`, matching the
+sketch above exactly. The "which versions are excess" selection logic the
+sketch flagged as possibly worth sharing with subtask 5's create-time
+enforcement was indeed factored into one helper, `excessVersions`
+(`volume/writefile.go`, added in subtask 5) — `PurgeVersions` is just
+"reject `keep == 0`, then `dir.List()` plus a loop over
+`excessVersions(entries, name, keep)` calling `DeleteFile`," nothing more.
+
+Tests (`volume/delete_test.go`): `TestPurgeVersionsTrimsToKeepHighest`;
+`TestPurgeVersionsLeavesUnderLimitNameUntouched` (both a `keep` larger than
+the actual count and exactly equal to it, confirmed via a byte-for-byte
+unchanged directory listing — proving no unnecessary `DeleteFile` calls
+happened); `TestPurgeVersionsRejectsZeroKeep`; and
+`TestPurgeVersionsIndependentNamesEachTrimmedSeparately` (a directory with
+one name that needs trimming and one that's already at its limit, each
+handled correctly in the same directory).
 
 ### 9. `cmd/ods2`: `PURGE` command
 

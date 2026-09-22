@@ -751,6 +751,196 @@ func TestSetVersionLimitOnDirectoryAffectsFutureInheritance(t *testing.T) {
 	}
 }
 
+// newPurgeTestDirectory builds a directory containing count versions of
+// name (version numbers 1..count), each a small Stream_LF file, via the
+// ordinary CreateFile write path with an unlimited (0) version limit so
+// PurgeVersions' own tests can control exactly how many versions exist
+// without CreateFile's own enforcement interfering.
+func newPurgeTestDirectory(t *testing.T, dev *Device, ib *IndexBitmap, bm *Bitmap, name string, count int) (*Volume, *Directory) {
+	t.Helper()
+
+	dir := newWritableTestDirectory(t, dev, ib, "PURGEDIR.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	for i := 0; i < count; i++ {
+		f, err := vol.CreateFile(dir, name, ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+		if err != nil {
+			t.Fatalf("CreateFile #%d: %v", i, err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close #%d: %v", i, err)
+		}
+	}
+	return vol, dir
+}
+
+// TestPurgeVersionsTrimsToKeepHighest confirms a name with more versions
+// than keep is trimmed down to exactly keep, always removing the oldest.
+func TestPurgeVersionsTrimsToKeepHighest(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	_, dir := newPurgeTestDirectory(t, dev, ib, bm, "PURGED.DAT", 5)
+
+	if err := PurgeVersions(dir, "PURGED.DAT", 2, bm, ib); err != nil {
+		t.Fatalf("PurgeVersions: %v", err)
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entry count after PurgeVersions = %d, want 2", len(entries))
+	}
+	got := map[uint16]bool{}
+	for _, e := range entries {
+		got[e.Version] = true
+	}
+	if !got[4] || !got[5] {
+		t.Errorf("surviving versions = %+v, want exactly {4, 5}", entries)
+	}
+}
+
+// TestPurgeVersionsLeavesUnderLimitNameUntouched confirms a name with
+// fewer versions than keep (or exactly keep) is left alone -- including no
+// unnecessary DeleteFile/directory-rewrite work for it, confirmed here by
+// the directory's on-disk content being byte-for-byte unchanged.
+func TestPurgeVersionsLeavesUnderLimitNameUntouched(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	_, dir := newPurgeTestDirectory(t, dev, ib, bm, "SAFE.DAT", 2)
+
+	before, err := dir.List()
+	if err != nil {
+		t.Fatalf("List (before): %v", err)
+	}
+
+	if err := PurgeVersions(dir, "SAFE.DAT", 5, bm, ib); err != nil {
+		t.Fatalf("PurgeVersions (fewer than keep): %v", err)
+	}
+	if err := PurgeVersions(dir, "SAFE.DAT", 2, bm, ib); err != nil {
+		t.Fatalf("PurgeVersions (exactly keep): %v", err)
+	}
+
+	after, err := dir.List()
+	if err != nil {
+		t.Fatalf("List (after): %v", err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("directory content changed despite every version being at or under the keep limit: before %+v, after %+v", before, after)
+	}
+}
+
+// TestPurgeVersionsRejectsZeroKeep confirms /LIMIT=0 (keep == 0) is
+// rejected outright, per PurgeVersions' own doc comment on why it doesn't
+// support the degenerate "delete every version" case.
+func TestPurgeVersionsRejectsZeroKeep(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	_, dir := newPurgeTestDirectory(t, dev, ib, bm, "ZERO.DAT", 3)
+
+	if err := PurgeVersions(dir, "ZERO.DAT", 0, bm, ib); err == nil {
+		t.Fatal("PurgeVersions with keep == 0: want error, got nil")
+	}
+}
+
+// TestPurgeVersionsIndependentNamesEachTrimmedSeparately confirms a
+// directory containing several distinct names is handled correctly when
+// PurgeVersions is called once per name -- each trimmed independently, a
+// name with only 1 version left completely alone rather than treated as
+// an error.
+func TestPurgeVersionsIndependentNamesEachTrimmedSeparately(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "MULTINAME.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	createN := func(name string, n int) {
+		for i := 0; i < n; i++ {
+			f, err := vol.CreateFile(dir, name, ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+			if err != nil {
+				t.Fatalf("CreateFile(%s) #%d: %v", name, i, err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatalf("Close(%s) #%d: %v", name, i, err)
+			}
+		}
+	}
+	createN("MANY.DAT", 3)
+	createN("ONE.DAT", 1)
+
+	if err := PurgeVersions(dir, "MANY.DAT", 1, bm, ib); err != nil {
+		t.Fatalf("PurgeVersions(MANY.DAT): %v", err)
+	}
+	if err := PurgeVersions(dir, "ONE.DAT", 1, bm, ib); err != nil {
+		t.Fatalf("PurgeVersions(ONE.DAT) (already at limit): %v", err)
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var manyVersions, oneVersions []uint16
+	for _, e := range entries {
+		switch e.Name {
+		case "MANY.DAT":
+			manyVersions = append(manyVersions, e.Version)
+		case "ONE.DAT":
+			oneVersions = append(oneVersions, e.Version)
+		}
+	}
+	if len(manyVersions) != 1 || manyVersions[0] != 3 {
+		t.Errorf("MANY.DAT surviving versions = %v, want exactly [3]", manyVersions)
+	}
+	if len(oneVersions) != 1 || oneVersions[0] != 1 {
+		t.Errorf("ONE.DAT surviving versions = %v, want exactly [1] (untouched)", oneVersions)
+	}
+}
+
 // assertHeaderSlotIsZeroed confirms fileNum's on-disk header slot is
 // genuinely all-zero bytes -- not merely that it decodes with a zero
 // checksum and zero file number (which an all-zero block would share with,

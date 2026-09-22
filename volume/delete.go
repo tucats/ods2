@@ -256,6 +256,39 @@ func SetVersionLimit(f *File, limit uint16) error {
 	return nil
 }
 
+// PurgeVersions trims name's surviving versions in dir down to exactly
+// keep, deleting whatever oldest excess versions are needed via DeleteFile
+// — the API behind the PURGE command (docs/PHASE-03.md subtask 9).
+//
+// keep == 0 is rejected outright: VMS's own PURGE has no "/LIMIT=0 means
+// delete every version" meaning, and this project doesn't invent one
+// either — deleting every version of a name is exactly what `DELETE
+// name;*` (DeleteFile called once per surviving version) already provides,
+// cleanly, with no need for PurgeVersions to also support the degenerate
+// case.
+//
+// A name with keep or fewer surviving versions is left completely
+// untouched — no DeleteFile call, and therefore no directory rewrite or
+// bitmap mutation at all — rather than this function doing unnecessary
+// work just to arrive back at the same state.
+func PurgeVersions(dir *Directory, name string, keep uint16, bm *Bitmap, ib *IndexBitmap) error {
+	if keep == 0 {
+		return fmt.Errorf("volume: purging %s: /LIMIT must be at least 1 (DELETE %s;* removes every version)", name, name)
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		return fmt.Errorf("volume: purging %s: %w", name, err)
+	}
+
+	for _, v := range excessVersions(entries, name, keep) {
+		if err := DeleteFile(dir, name, v, bm, ib); err != nil {
+			return fmt.Errorf("volume: purging %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // isEmptyDirectory reports whether the directory file described by
 // primary — already confirmed by the caller (DeleteFile) to have the
 // FchDirectory characteristic set — currently has zero directory entries.
