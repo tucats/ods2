@@ -649,6 +649,108 @@ func TestDeleteFileRejectsMasterFileDirectory(t *testing.T) {
 	}
 }
 
+// TestSetVersionLimitRoundTripsOnPlainFile confirms setting a plain file's
+// VersionLimit sticks and is genuinely readable back through a completely
+// independent OpenFID, not just this call's own in-memory f.
+func TestSetVersionLimitRoundTripsOnPlainFile(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "SVLDIR.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	f, err := vol.CreateFile(dir, "TARGET.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := SetVersionLimit(f, 6); err != nil {
+		t.Fatalf("SetVersionLimit: %v", err)
+	}
+	if got := f.Header.RecordAttributes.VersionLimit; got != 6 {
+		t.Errorf("f.Header.RecordAttributes.VersionLimit after SetVersionLimit = %d, want 6", got)
+	}
+
+	reopened, err := vol.OpenFID(f.Header.Fid)
+	if err != nil {
+		t.Fatalf("OpenFID: %v", err)
+	}
+	if got := reopened.Header.RecordAttributes.VersionLimit; got != 6 {
+		t.Errorf("reopened VersionLimit = %d, want 6", got)
+	}
+
+	// Setting it back to 0 restores "unlimited".
+	if err := SetVersionLimit(f, 0); err != nil {
+		t.Fatalf("SetVersionLimit(0): %v", err)
+	}
+	reopenedAgain, err := vol.OpenFID(f.Header.Fid)
+	if err != nil {
+		t.Fatalf("OpenFID (after reset): %v", err)
+	}
+	if got := reopenedAgain.Header.RecordAttributes.VersionLimit; got != 0 {
+		t.Errorf("reopened VersionLimit after resetting to 0 = %d, want 0", got)
+	}
+}
+
+// TestSetVersionLimitOnDirectoryAffectsFutureInheritance confirms
+// SetVersionLimit works identically on a directory file -- per
+// docs/PHASE-03.md's "Version-limit design" point 1, a directory is just a
+// File whose header happens to have FchDirectory set, so the same
+// rewrite-one-header-field logic applies uniformly -- and that a
+// subsequently-created new name in it inherits the newly-set value (an
+// integration check with subtask 5's resolveVersionLimit).
+func TestSetVersionLimitOnDirectoryAffectsFutureInheritance(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "INHERIT.DIR")
+	if !dir.Header.IsDirectory() {
+		t.Fatal("test setup: fixture directory doesn't have FchDirectory set")
+	}
+
+	if err := SetVersionLimit(dir.File, 8); err != nil {
+		t.Fatalf("SetVersionLimit(directory): %v", err)
+	}
+	if got := dir.Header.RecordAttributes.VersionLimit; got != 8 {
+		t.Errorf("directory's own VersionLimit after SetVersionLimit = %d, want 8", got)
+	}
+
+	vol := &Volume{Devices: []*Device{dev}}
+	f, err := vol.CreateFile(dir, "CHILD.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := f.Header.RecordAttributes.VersionLimit; got != 8 {
+		t.Errorf("new file's inherited VersionLimit = %d, want 8 (the directory's newly-set default)", got)
+	}
+}
+
 // assertHeaderSlotIsZeroed confirms fileNum's on-disk header slot is
 // genuinely all-zero bytes -- not merely that it decodes with a zero
 // checksum and zero file number (which an all-zero block would share with,

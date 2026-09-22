@@ -116,7 +116,7 @@ contract — there isn't one yet.
 | 3 | `volume`: `DeleteFile` (ties 1+2 together) | Done |
 | 4 | `cmd/ods2`: `DELETE` command | Done |
 | 5 | `volume`: version-limit resolution + create-time enforcement | Done |
-| 6 | `volume`: `SetVersionLimit` | Not started |
+| 6 | `volume`: `SetVersionLimit` | Done |
 | 7 | `cmd/ods2`: `SET FILE/VERSION_LIMIT=n` | Not started |
 | 8 | `volume`: `PurgeVersions` | Not started |
 | 9 | `cmd/ods2`: `PURGE` command | Not started |
@@ -672,6 +672,25 @@ fresh `OpenFID`; setting a directory's limit and confirming a
 subsequently-created new name in it inherits that value (an integration
 check with subtask 5, once both exist); setting it back to 0 restores
 "unlimited" behavior.
+
+**Shipped**, as `volume/delete.go`'s `func SetVersionLimit(f *File, limit
+uint16) error`, matching the sketch above exactly — an immediate rewrite of
+`RecordAttributes.VersionLimit` via `existingAreas`/`writeHeader`, the same
+pattern `CloseWithFinalByte` already uses. No bitmap mutation is involved
+at all (one already-allocated header field changing in place), so unlike
+`DeleteFile`/`PurgeVersions` there's nothing for a caller to `Flush`
+afterward — reflected in [Where the new code
+lives](#where-the-new-code-lives)'s CLI counterpart (subtask 7) skipping
+the bitmap-flush step [Flush strategy](#flush-strategy) otherwise
+describes for this command, since nothing ever gets marked dirty in the
+first place.
+
+Tests (`volume/delete_test.go`): `TestSetVersionLimitRoundTripsOnPlainFile`
+(including setting it back to 0) and
+`TestSetVersionLimitOnDirectoryAffectsFutureInheritance` (an end-to-end
+check with `CreateFile`'s own subtask-5 inheritance logic, confirming a
+name created after the directory's limit is changed picks up the new
+value).
 
 ### 7. `cmd/ods2`: `SET FILE/VERSION_LIMIT=n`
 

@@ -218,6 +218,44 @@ func DeleteFile(dir *Directory, name string, version uint16, bm *Bitmap, ib *Ind
 	return nil
 }
 
+// SetVersionLimit rewrites f's own RecordAttributes.VersionLimit — the
+// only way, per docs/PHASE-03.md, to actually change a file's (or
+// directory's) version limit after it's been created; see
+// docs/PHASE-03.md's "Version-limit design" for why that field lives on
+// the file's own header rather than anywhere else. Works identically
+// whether f is a plain file or a directory: a directory is a File whose
+// header happens to also have FchDirectory set, and its own
+// RecordAttributes.VersionLimit is read exactly the same way (as the
+// default new names created directly inside it inherit — see
+// resolveVersionLimit, writefile.go) regardless of that bit.
+//
+// This is an immediate header rewrite, like CreateHeader/Extend and
+// unlike WriteBlock/Close's deferred bookkeeping — there is no bitmap
+// mutation involved at all (limit is just one field of an already-
+// allocated header being changed in place), so there's nothing here for a
+// caller to Flush afterward.
+func SetVersionLimit(f *File, limit uint16) error {
+	container, ok := f.Device.Container.(diskimage.WritableContainer)
+	if !ok {
+		return fmt.Errorf("volume: setting version limit for file %v: device is not open for write", f.Header.Fid)
+	}
+
+	h := f.Header
+	h.RecordAttributes.VersionLimit = limit
+
+	areas, err := existingAreas(h)
+	if err != nil {
+		return fmt.Errorf("volume: setting version limit for file %v: %w", f.Header.Fid, err)
+	}
+	decoded, err := writeHeader(f.Device, container, h.Fid.Number(), h, areas)
+	if err != nil {
+		return fmt.Errorf("volume: setting version limit for file %v: %w", f.Header.Fid, err)
+	}
+
+	f.Header = decoded
+	return nil
+}
+
 // isEmptyDirectory reports whether the directory file described by
 // primary — already confirmed by the caller (DeleteFile) to have the
 // FchDirectory characteristic set — currently has zero directory entries.
