@@ -26,7 +26,7 @@ func init() {
 // With no file spec, it lists everything in the current default directory
 // (equivalent to "*.*"). /full implies all three of the other qualifiers.
 func cmdDirectory(s *Session, args []string, quals Qualifiers) error {
-	specText := "*.*"
+	specText := "*.*;*"
 	if len(args) > 0 {
 		specText = args[0]
 	}
