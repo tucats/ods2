@@ -493,6 +493,40 @@ length mismatch, once one side runs out of lines the other still has).
 This is a basic positional comparison, not a minimal-edit-script diff —
 it doesn't try to realign after an inserted or deleted line.
 
+### DELETE
+
+```text
+DELETE file-spec
+```
+
+Deletes one or more files: reclaims every header slot and data extent
+their storage occupies and removes their directory entry(ies) (see
+docs/PHASE-03.md for how this differs from the reference implementation,
+whose own delete path is author-acknowledged broken).
+
+`file-spec` must include a version — `;n` for a specific version, or `;*`
+for every version of a matching name — and the name/type themselves may
+be wildcarded (`*.TXT;3`) to delete the same version across several
+names in one command. A bare `DELETE FOO.TXT`, or one ending in an empty
+`;` (`DELETE FOO.TXT;`), is rejected before anything is touched: unlike
+`DIRECTORY`'s own "no version means the highest one" convenience default,
+`DELETE` never guesses which version you meant, specifically so a
+mistyped command can't silently delete the newest version of every
+matching name.
+
+Requires the target volume to be mounted `/WRITE`. If several files
+match, `DELETE` deletes them one at a time and stops at the first
+failure; whatever it already deleted before that point stays deleted
+(its storage isn't re-allocated just because a later match failed).
+
+```text
+ODS2> delete foo.txt;1
+%DELETE-S-DELETED, FOO.TXT;1 deleted
+ODS2> delete old.txt;*
+%DELETE-S-DELETED, OLD.TXT;1 deleted
+%DELETE-S-DELETED, OLD.TXT;2 deleted
+```
+
 ### SET DEFAULT
 
 ```text

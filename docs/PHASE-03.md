@@ -114,7 +114,7 @@ contract — there isn't one yet.
 | 1 | `volume`: file & header-chain deallocation primitive | Done |
 | 2 | `volume`: `Directory.Remove` | Done |
 | 3 | `volume`: `DeleteFile` (ties 1+2 together) | Done |
-| 4 | `cmd/ods2`: `DELETE` command | Not started |
+| 4 | `cmd/ods2`: `DELETE` command | Done |
 | 5 | `volume`: version-limit resolution + create-time enforcement | Not started |
 | 6 | `volume`: `SetVersionLimit` | Not started |
 | 7 | `cmd/ods2`: `SET FILE/VERSION_LIMIT=n` | Not started |
@@ -534,6 +534,48 @@ errors cleanly. Session-level test (`cmd/ods2/main_test.go`'s existing
 pattern of copying a real writable test image into a temp directory before
 mutating it) exercising `DELETE` against `testdata/rq0-ra92.dsk`'s copy, the
 same real-volume validation approach PHASE-02.md leaned on throughout.
+
+**Shipped**, as `cmd/ods2/internal/session/delete.go`'s `Command{Name:
+"delete", ...}` + `cmdDelete`, matching the sketch above closely, with one
+deviation from the original test-plan sketch: rather than a
+`testdata/rq0-ra92.dsk`-based session test, `delete_test.go` builds its own
+writable fixture volume (`diskimage.Create` + `volume.Initialize`,
+following `copytovolume_test.go`'s existing `newVolumeDestTestSession`
+pattern) and populates it via `volume.CreateFile`. No existing test in this
+codebase actually copies `testdata/rq0-ra92.dsk` into a temp directory and
+mutates it — every write-path session test builds its own small synthetic
+volume instead, since `volume.Initialize` makes that just as cheap and
+keeps the fixture's exact layout (names, versions, directory structure)
+visible right next to the assertions that depend on it. `DeleteFile` itself
+already has its own real-volume-shaped coverage from subtask 3; this
+subtask's job is exercising the CLI layer on top of it (glob resolution,
+the version-required check, the confirmation message, multi-match error
+handling), which doesn't need a real VMS-written image to do meaningfully.
+
+Resolving each matched file's directory groups matches by directory path
+first (`groupMatchesByDir`, already shared with `DIRECTORY`'s own listing
+logic) rather than reopening a `Directory` once per match — relevant when
+a wildcarded name or directory component matches several files in the
+same directory. The two bitmap caches (`Device.Bitmap`/`IndexBitmap`) are
+resolved once, up front, and flushed exactly once via a `defer`, so a
+`DELETE *.TXT;3` that deletes some matches before failing on a later one
+still keeps whatever it already freed — the `defer` runs on every return
+path, not just the success one — and a flush failure is only surfaced if
+the loop itself didn't already fail for its own reason (mirroring
+`Volume.Dismount`'s own "report the first error, but still attempt
+everything" convention).
+
+Tests (`cmd/ods2/internal/session/delete_test.go`): a specific version
+deleted while its sibling versions and other names survive; `;*` removing
+every version of one name; a wildcarded name (`*.TXT;2`) deleting the same
+version across multiple distinct names in one command; a bare file spec
+and a trailing-`;` file spec both rejected without touching the directory;
+a nonexistent name and a nonexistent version each erroring cleanly; a
+deleted file's header slot reusable by a subsequent `CreateFile` after
+reopening the bitmap caches fresh (proving the flush genuinely reached
+disk, not just this process's cache); and an integration test through
+`Session.Execute` confirming the command is wired into the table and
+tokenizer correctly end to end.
 
 ### 5. `volume`: version-limit resolution + create-time enforcement
 
