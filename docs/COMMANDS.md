@@ -527,6 +527,37 @@ ODS2> delete old.txt;*
 %DELETE-S-DELETED, OLD.TXT;2 deleted
 ```
 
+### CREATE DIRECTORY
+
+```text
+CREATE DIRECTORY dir-spec [/VERSION=n]
+```
+
+Creates a new subdirectory. `dir-spec` is a bracketed directory path whose
+**last** component names the subdirectory being created; everything
+before it names the parent directory, which must already exist —
+`CREATE DIRECTORY [FOO.BAR]` creates `BAR.DIR` inside `[FOO]`, the same
+way real VMS's own `CREATE/DIRECTORY` works. `dir-spec` may be written
+relative to your current default (`[.BAR]`) the same as any other
+directory spec (see **Directories** above); it's an error for it to name
+a file (a trailing name/type/version, or a `...` recursive suffix) rather
+than a bare directory path.
+
+- `/VERSION=n` — sets the new directory's own default version limit
+  (`RecordAttributes.VersionLimit` — see `docs/PHASE-03.md`'s
+  "Version-limit design"), the value a name created directly inside it
+  later inherits if it doesn't specify its own limit. Without `/VERSION`,
+  the new directory inherits its **parent's** current version limit at
+  the moment of creation — a one-time snapshot, not a live link back to
+  the parent.
+
+```text
+ODS2> create directory [PROJECTS]
+%CREATE-S-CREATED, DUA0:[000000]PROJECTS.DIR;1 created
+ODS2> create directory [PROJECTS.SCRATCH] /version=1
+%CREATE-S-CREATED, DUA0:[PROJECTS]SCRATCH.DIR;1 created
+```
+
 ### SET DEFAULT
 
 ```text

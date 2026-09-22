@@ -120,6 +120,7 @@ contract — there isn't one yet.
 | 7 | `cmd/ods2`: `SET FILE/VERSION_LIMIT=n` | Not started |
 | 8 | `volume`: `PurgeVersions` | Not started |
 | 9 | `cmd/ods2`: `PURGE` command | Not started |
+| 10 | `volume`/`cmd/ods2`: `CREATE DIRECTORY` command | Done |
 
 Legend: **Not started** / **In progress** / **Done** (commit `abc1234`) /
 **Deferred** (with a reason).
@@ -706,3 +707,84 @@ begin with is correctly left alone under the default limit, not treated
 as an error); `/LIMIT=0` rejected (per subtask 8); session-level test
 against a copy of `testdata/rq0-ra92.dsk`, same real-volume validation
 approach as subtask 4.
+
+### 10. `volume`/`cmd/ods2`: `CREATE DIRECTORY` command
+
+**Depends on:** nothing new beyond what subtasks 1-4 already established
+(`Directory.Insert`, `CreateHeader`, the CLI's sub-verb dispatch pattern).
+
+Not part of this phase's original goals — added mid-phase by request,
+after subtask 4 landed, since deletion and version-limit enforcement are
+both far more useful to exercise interactively once you can actually
+build out a directory tree to test them against, rather than being
+confined to whatever `INITIALIZE` happens to create in `[000000]`.
+Tracked here rather than in a separate document because it's the same
+kind of work as everything else in this phase: new `volume`-level
+write-path API plus a CLI command on top of it.
+
+`func (vol *Volume) CreateDirectory(parent *Directory, name string,
+versionLimit uint16, bm *Bitmap, ib *IndexBitmap) (*Directory, error)`
+(`volume/writefile.go`, right after `CreateFile`, which it mirrors
+closely) — resolves the next version (`Directory.NextVersion`), allocates
+a header with `ondisk.FchDirectory` set and `RecordAttributes` carrying
+`versionLimit` (`CreateHeader`), and inserts the corresponding entry into
+`parent` (`Directory.Insert`). `name` must end in `.DIR`, checked up
+front: `filespec.Glob`'s own directory-walking logic
+(`matchingSubdirectories`) only ever descends into an entry whose name
+ends in that suffix, so a directory created under any other type would
+exist but be permanently unreachable by path. Unlike `CreateFile`, the
+result is never armed for writing (`OpenForWrite`) — a directory's
+content is only ever produced through `Directory.Insert`/`Remove`, not
+`WriteBlock`/`Close` — and needs no data blocks allocated up front either:
+a freshly created header has zero blocks, which `Directory.List` already
+reads as "no entries yet" (its walk is bounded by `UsedBlocks()`, which is
+0), and `Directory.Insert` already knows how to `Extend` a zero-block
+directory the first time something is added to it (proven by subtask 3's
+own `EMPTY.DIR` test fixture, which is exactly this shape).
+
+Resolving *what* `versionLimit` should be — an explicit override, or the
+parent's own current value — is deliberately left to the caller
+(`cmd/ods2/internal/session/create.go`'s `cmdCreateDirectory`), not
+`CreateDirectory` itself, the same separation-of-concerns `DeleteFile`
+(subtask 3) draws between "resolve intent" (the CLI layer) and "do the
+mechanical thing" (the `volume`-level primitive).
+
+`cmd/ods2/internal/session/create.go` adds a `create` command dispatching
+on a sub-verb (`cmdCreate` checks `args[0]` against `"directory"` via
+`matchesAbbrev`/`subverbMinAbbrev`, the exact pattern `cmdSet` already
+uses for `set default` and subtask 7 will extend for `set file`) — the
+only sub-verb this phase adds, but the shape leaves room for a future one
+without renaming anything. `create directory dir-spec [/VERSION=n]`
+parses `dir-spec` via `filespec.Parse`, rejects it if it names a file
+(trailing name/type/version) or uses `...`, and rejects an empty
+`Dirs` (targeting `[000000]` itself — there's no new name to create).
+The **last** component of the parsed `Dirs` becomes the new directory's
+own name; everything before it is resolved via `filespec.ResolveDirectory`
+to the (required to already exist) parent — matching real VMS's own
+`CREATE/DIRECTORY` semantics, where `[FOO.BAR]` creates `BAR.DIR` inside
+`[FOO]`. `/VERSION=n` is parsed the same `strconv.ParseUint` way subtask 7
+plans to for `/VERSION_LIMIT`; without it, the parent's own
+`RecordAttributes.VersionLimit` at the moment of creation is used, per
+[Version-limit design](#version-limit-design)'s "captured once, not a
+live link" rule (the same rule `CreateFile`'s own future version-limit
+resolution, subtask 5, will apply to an ordinary file's first version).
+Both bitmap caches are flushed once after creation succeeds, matching
+[Flush strategy](#flush-strategy).
+
+**Tests:** `volume/writefile_test.go` — end-to-end creation (version
+resolution, `FchDirectory` set, the requested version limit landing in
+the header, the new zero-block directory immediately accepting an
+`Insert` of its own, and a second `CreateDirectory` of the same name
+correctly getting version 2 rather than colliding); a non-`.DIR` name
+rejected without touching the parent; a `versionLimit` of 0 round-tripping
+as 0 rather than being special-cased. `cmd/ods2/internal/session/
+create_test.go` — creation at the top level (`[NEWDIR]`) inheriting the
+MFD's own (default, 0) version limit; an explicit `/VERSION` overriding
+inheritance; a two-step test proving inheritance picks up a genuinely
+non-zero parent value (create a parent with `/VERSION=4`, then a child
+with no `/VERSION` of its own, confirm the child got 4 — stronger than
+only testing the untouched-default-is-0 case); nesting inside an
+already-existing directory; a missing parent, a trailing file spec, an
+unbracketed bare name, and `[000000]` (no new name given) each rejected
+with a clear error; an invalid `/VERSION` value rejected; an unrecognized
+`create` object rejected; an integration test through `Session.Execute`.

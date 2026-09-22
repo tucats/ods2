@@ -2,6 +2,7 @@ package volume
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/tucats/ods2/diskimage"
 	"github.com/tucats/ods2/ondisk"
@@ -226,4 +227,85 @@ func (vol *Volume) CreateFile(dir *Directory, name string, recAttr ondisk.RecAtt
 	}
 
 	return f, nil
+}
+
+// CreateDirectory creates a brand-new subdirectory named name inside
+// parent — CreateFile's counterpart for the "directory" kind of file
+// rather than an ordinary one, following the same shape: resolve the next
+// version (Directory.NextVersion), allocate and write a header for it
+// (CreateHeader, with ondisk.FchDirectory set), and insert the
+// corresponding directory entry (Directory.Insert).
+//
+// name must end in ".DIR" — not just a cosmetic convention, but the exact
+// suffix filespec.Glob's own directory-walking logic
+// (matchingSubdirectories) checks for when it decides whether a directory
+// entry names a subdirectory worth descending into. A directory created
+// under any other type would exist and even open correctly, but would be
+// invisible to every other command that navigates by directory path
+// (SET DEFAULT, DIRECTORY [subdir], and so on).
+//
+// Unlike CreateFile, the returned Directory is never armed for writing
+// (OpenForWrite): a directory's data is never produced by WriteBlock/
+// Close calls, only by Directory.Insert/Remove, which manage their own
+// on-disk block layout directly. A freshly created directory therefore
+// starts with zero data blocks allocated — Directory.List already treats
+// that as simply "no entries yet" (see its own doc comment on bounding
+// the walk by UsedBlocks, which is 0 here), and Directory.Insert already
+// knows how to Extend a zero-block directory the first time something is
+// inserted into it.
+//
+// versionLimit becomes the new directory file's own
+// RecordAttributes.VersionLimit (docs/PHASE-03.md's "Version-limit
+// design" explains why a directory's default version limit for the names
+// created inside it lives on the directory file's own header, exactly
+// like an ordinary file's). Resolving what value that should actually be
+// — an explicit override, or inherited from parent's own current
+// VersionLimit — is the caller's job; CreateDirectory just stores
+// whatever it's given.
+func (vol *Volume) CreateDirectory(parent *Directory, name string, versionLimit uint16, bm *Bitmap, ib *IndexBitmap) (*Directory, error) {
+	if !strings.HasSuffix(strings.ToUpper(name), ".DIR") {
+		return nil, fmt.Errorf("volume: creating directory %s: name must end in \".DIR\"", name)
+	}
+
+	version, err := parent.NextVersion(name)
+	if err != nil {
+		return nil, fmt.Errorf("volume: creating directory %s: %w", name, err)
+	}
+
+	f, err := CreateHeader(parent.Device, ib, NewFileHeader{
+		Name:            name,
+		Directory:       parent.Header.Fid,
+		Characteristics: ondisk.FchDirectory,
+		RecordAttributes: ondisk.RecAttr{
+			// Variable-length records — matching the format this project's
+			// own Initialize gives every directory file it builds
+			// (000000.DIR, the master file directory itself), which in
+			// turn matches what a real VMS-written volume uses: a
+			// directory's records (one per distinct name, holding however
+			// many versions that name currently has) vary in length from
+			// one another. Nothing in this package actually reads a
+			// directory's data through this format field the way rms.Reader
+			// would for an ordinary file — Directory.List/Insert/Remove
+			// decode raw directory blocks directly — but a wrong value here
+			// would still be a lie about the file's own on-disk format.
+			Format:       ondisk.RecordFormatVariable,
+			VersionLimit: versionLimit,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("volume: creating directory %s;%d: %w", name, version, err)
+	}
+
+	if err := parent.Insert(name, version, f.Header.Fid, bm, ib); err != nil {
+		return nil, fmt.Errorf("volume: creating directory %s;%d: %w", name, version, err)
+	}
+
+	dir, err := f.Directory()
+	if err != nil {
+		// Unreachable: Characteristics: ondisk.FchDirectory above is
+		// exactly what File.Directory() itself checks before it will
+		// reinterpret a File as a Directory.
+		return nil, fmt.Errorf("volume: creating directory %s;%d: %w", name, version, err)
+	}
+	return dir, nil
 }

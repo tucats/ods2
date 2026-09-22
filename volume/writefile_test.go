@@ -490,3 +490,153 @@ func TestFileCloseIsIdempotent(t *testing.T) {
 		t.Error("WriteBlock after Close: want error, got nil")
 	}
 }
+
+// TestVolumeCreateDirectoryEndToEnd exercises CreateDirectory itself:
+// version resolution, header allocation with FchDirectory set, the
+// requested version limit landing in the new header, and directory
+// insertion into the parent -- followed by confirming the brand-new
+// (zero-block) directory behaves like any other empty directory and can
+// immediately accept an Insert of its own.
+func TestVolumeCreateDirectoryEndToEnd(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	parent := newWritableTestDirectory(t, dev, ib, "PARENT.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	sub, err := vol.CreateDirectory(parent, "SUB.DIR", 5, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateDirectory: %v", err)
+	}
+
+	if !sub.Header.IsDirectory() {
+		t.Error("CreateDirectory's result doesn't have the directory characteristic set")
+	}
+	if got := sub.Header.RecordAttributes.VersionLimit; got != 5 {
+		t.Errorf("VersionLimit = %d, want 5", got)
+	}
+	if entries, err := sub.List(); err != nil || len(entries) != 0 {
+		t.Errorf("brand-new directory's List() = %v, %v, want empty, nil", entries, err)
+	}
+
+	entry, err := parent.Lookup("SUB.DIR", 0)
+	if err != nil {
+		t.Fatalf("Lookup(SUB.DIR) in parent: %v", err)
+	}
+	if entry.Version != 1 {
+		t.Errorf("first CreateDirectory's directory entry version = %d, want 1", entry.Version)
+	}
+	if entry.Fid != sub.Header.Fid {
+		t.Errorf("parent's directory entry Fid = %v, want %v", entry.Fid, sub.Header.Fid)
+	}
+
+	// The new (zero-block) directory must immediately accept an Insert of
+	// its own -- Directory.Insert already knows how to Extend a zero-block
+	// directory the first time something is added to it (see
+	// CreateDirectory's own doc comment).
+	childFid := ondisk.Fid{Num: 90, Seq: 1}
+	if err := sub.Insert("CHILD.TXT", 1, childFid, bm, ib); err != nil {
+		t.Fatalf("Insert into brand-new directory: %v", err)
+	}
+	childEntries, err := sub.List()
+	if err != nil {
+		t.Fatalf("List after Insert: %v", err)
+	}
+	if len(childEntries) != 1 || childEntries[0].Name != "CHILD.TXT" {
+		t.Errorf("List after Insert = %+v, want a single CHILD.TXT entry", childEntries)
+	}
+
+	// A second CreateDirectory with the same name must get the next
+	// version, not overwrite/collide with the first -- matching CreateFile's
+	// own auto-versioning behavior (TestVolumeCreateFileEndToEnd above).
+	second, err := vol.CreateDirectory(parent, "SUB.DIR", 5, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateDirectory (second version): %v", err)
+	}
+	secondEntry, err := parent.Lookup("SUB.DIR", 0)
+	if err != nil {
+		t.Fatalf("Lookup(SUB.DIR) after second CreateDirectory: %v", err)
+	}
+	if secondEntry.Version != 2 {
+		t.Errorf("second CreateDirectory's directory entry version = %d, want 2", secondEntry.Version)
+	}
+	if second.Header.Fid == sub.Header.Fid {
+		t.Error("second CreateDirectory's Fid collides with the first version's")
+	}
+}
+
+// TestCreateDirectoryRejectsNameWithoutDirType confirms CreateDirectory
+// refuses a name that doesn't end in ".DIR" before allocating anything --
+// a directory entry under any other type would exist but be invisible to
+// every directory-path-walking command (see CreateDirectory's own doc
+// comment for why this matters beyond cosmetics).
+func TestCreateDirectoryRejectsNameWithoutDirType(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	parent := newWritableTestDirectory(t, dev, ib, "PARENT.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	if _, err := vol.CreateDirectory(parent, "SUB.TXT", 0, bm, ib); err == nil {
+		t.Fatal("CreateDirectory with a non-.DIR name: want error, got nil")
+	}
+
+	entries, err := parent.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("parent directory content changed after rejected CreateDirectory: %+v", entries)
+	}
+}
+
+// TestCreateDirectoryZeroVersionLimitMeansUnlimited confirms a versionLimit
+// of 0 round-trips as 0 (VMS's own "unlimited" convention, docs/PHASE-03.md's
+// "Version-limit design") rather than CreateDirectory silently treating it
+// as "inherit from somewhere" -- that resolution is entirely the caller's
+// job, not this function's.
+func TestCreateDirectoryZeroVersionLimitMeansUnlimited(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	parent := newWritableTestDirectory(t, dev, ib, "PARENT.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	sub, err := vol.CreateDirectory(parent, "SUB.DIR", 0, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateDirectory: %v", err)
+	}
+	if got := sub.Header.RecordAttributes.VersionLimit; got != 0 {
+		t.Errorf("VersionLimit = %d, want 0", got)
+	}
+}
