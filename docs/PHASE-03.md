@@ -115,7 +115,7 @@ contract — there isn't one yet.
 | 2 | `volume`: `Directory.Remove` | Done |
 | 3 | `volume`: `DeleteFile` (ties 1+2 together) | Done |
 | 4 | `cmd/ods2`: `DELETE` command | Done |
-| 5 | `volume`: version-limit resolution + create-time enforcement | Not started |
+| 5 | `volume`: version-limit resolution + create-time enforcement | Done |
 | 6 | `volume`: `SetVersionLimit` | Not started |
 | 7 | `cmd/ods2`: `SET FILE/VERSION_LIMIT=n` | Not started |
 | 8 | `volume`: `PurgeVersions` | Not started |
@@ -614,6 +614,44 @@ change for every existing caller that never sets a limit; changing the
 directory's default between creating two different, unrelated names
 produces the expected different limits on each (proving the "captured
 once" rule from the design section, not a live re-read).
+
+**Shipped**, as two new package-level helpers in `volume/writefile.go` —
+`resolveVersionLimit(dir *Directory, name string, version uint16)
+(uint16, error)` and `enforceVersionLimit(dir *Directory, name string,
+limit uint16, bm *Bitmap, ib *IndexBitmap) error` — called from `CreateFile`
+right after computing `version` and right after `Insert` succeeds,
+respectively, matching the sketch above almost exactly. `recAttr`'s own
+`VersionLimit` field is unconditionally overwritten with the resolved
+value before `CreateHeader` is called, so a caller's `ondisk.RecAttr`
+argument genuinely has no say over it, per the design section.
+
+One deviation from the original sketch's open question ("worth checking
+whether `List()` or `NextVersion()` should be extended to hand back the
+previous version directly"): rather than extending either,
+`resolveVersionLimit` uses the fact that `NextVersion` always returns the
+name's actual highest existing version plus one — regardless of gaps left
+by earlier deletions — so `version-1` *is* the immediately-previous
+version's own number, and a single `dir.Lookup(name, version-1)` (plus one
+header read) gets its `VersionLimit` directly. No changes to
+`Directory.List`/`NextVersion` were needed.
+
+`enforceVersionLimit` and subtask 8's `PurgeVersions` (delete.go) share one
+selection helper, `excessVersions(entries []ondisk.DirEntry, name string,
+keep uint16) []uint16` (`volume/writefile.go`) — lists `name`'s current
+version numbers, sorted ascending, and returns everything past the newest
+`keep` of them (nil if there's nothing to trim) — exactly the "worth
+checking whether this should be one shared helper" question subtask 8's
+own write-up raised, resolved by writing it once, up front.
+
+Tests (`volume/writefile_test.go`): `TestCreateFileFirstVersionInheritsDirectoryDefault`,
+`TestCreateFileLaterVersionCarriesForwardPreviousVersionLimit` (including
+changing the directory's default in between, to prove the carried-forward
+value doesn't silently track a live default),
+`TestCreateFileVersionLimitZeroNeverDeletesAnything`,
+`TestCreateFileAutoDeletesOldestExcessVersions` (creating 4 versions
+against a limit of 2, confirming the count never exceeds 2 at any point
+and the two survivors are always the newest), and
+`TestCreateFileDirectoryDefaultChangeProducesDifferentLimitsForDifferentNames`.
 
 ### 6. `volume`: `SetVersionLimit`
 

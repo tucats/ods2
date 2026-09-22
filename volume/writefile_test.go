@@ -610,6 +610,268 @@ func TestCreateDirectoryRejectsNameWithoutDirType(t *testing.T) {
 	}
 }
 
+// newWritableTestDirectoryWithVersionLimit is newWritableTestDirectory
+// (directory_test.go) with an explicit starting
+// RecordAttributes.VersionLimit on the directory file's own header —
+// needed by subtask 5's tests below, which exercise CreateFile's
+// version-limit resolution against a directory whose default isn't the
+// zero-value "unlimited".
+func newWritableTestDirectoryWithVersionLimit(t *testing.T, dev *Device, ib *IndexBitmap, name string, versionLimit uint16) *Directory {
+	t.Helper()
+
+	f, err := CreateHeader(dev, ib, NewFileHeader{
+		Name:             name,
+		Directory:        ondisk.Fid{Num: 4, Seq: 4},
+		Characteristics:  ondisk.FchDirectory,
+		RecordAttributes: ondisk.RecAttr{VersionLimit: versionLimit},
+	})
+	if err != nil {
+		t.Fatalf("CreateHeader(%s): %v", name, err)
+	}
+	dir, err := f.Directory()
+	if err != nil {
+		t.Fatalf("Directory(): %v", err)
+	}
+	return dir
+}
+
+// TestCreateFileFirstVersionInheritsDirectoryDefault confirms a brand-new
+// name's very first version (NextVersion == 1) carries forward the
+// directory's own current VersionLimit at the moment of creation, per
+// docs/PHASE-03.md's "Version-limit design" point 2.
+func TestCreateFileFirstVersionInheritsDirectoryDefault(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectoryWithVersionLimit(t, dev, ib, "LIMDIR.DIR", 3)
+	vol := &Volume{Devices: []*Device{dev}}
+
+	f, err := vol.CreateFile(dir, "ONE.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if got := f.Header.RecordAttributes.VersionLimit; got != 3 {
+		t.Errorf("first version's VersionLimit = %d, want 3 (dir's default)", got)
+	}
+}
+
+// TestCreateFileLaterVersionCarriesForwardPreviousVersionLimit confirms a
+// name's second (and later) version carries forward whatever VersionLimit
+// its own immediately-previous version already had -- NOT the directory's
+// current default, which may have changed since -- per docs/PHASE-03.md's
+// "Version-limit design" point 2's "captured once, not a live link" rule.
+func TestCreateFileLaterVersionCarriesForwardPreviousVersionLimit(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectoryWithVersionLimit(t, dev, ib, "LIMDIR.DIR", 3)
+	vol := &Volume{Devices: []*Device{dev}}
+
+	first, err := vol.CreateFile(dir, "TWO.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile (version 1): %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close (version 1): %v", err)
+	}
+
+	// Change the directory's own default AFTER the first version was
+	// created -- the second version must still carry forward the FIRST
+	// version's own captured value (3), not this new default.
+	if err := SetVersionLimit(dir.File, 9); err != nil {
+		t.Fatalf("SetVersionLimit (directory default): %v", err)
+	}
+
+	second, err := vol.CreateFile(dir, "TWO.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile (version 2): %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close (version 2): %v", err)
+	}
+
+	if got := second.Header.RecordAttributes.VersionLimit; got != 3 {
+		t.Errorf("second version's VersionLimit = %d, want 3 (carried forward from version 1, not the directory's new default of 9)", got)
+	}
+}
+
+// TestCreateFileVersionLimitZeroNeverDeletesAnything confirms a limit of 0
+// (both the directory's default and every version's own captured value)
+// means "unlimited" and CreateFile never auto-deletes anything -- matching
+// Phase 2's own behavior with zero observable change for every existing
+// caller that never sets a limit.
+func TestCreateFileVersionLimitZeroNeverDeletesAnything(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "UNLIM.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	for i := 0; i < 5; i++ {
+		f, err := vol.CreateFile(dir, "MANY.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+		if err != nil {
+			t.Fatalf("CreateFile #%d: %v", i, err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close #%d: %v", i, err)
+		}
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 5 {
+		t.Errorf("directory entries for MANY.DAT = %d, want 5 (no auto-deletion under an unlimited version limit)", len(entries))
+	}
+}
+
+// TestCreateFileAutoDeletesOldestExcessVersions covers the core subtask 5
+// scenario: creating past a nonzero version limit auto-deletes the correct
+// (oldest) excess version(s), and never more than needed, once the count
+// exceeds the limit.
+func TestCreateFileAutoDeletesOldestExcessVersions(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectoryWithVersionLimit(t, dev, ib, "CAP.DIR", 2)
+	vol := &Volume{Devices: []*Device{dev}}
+
+	for i := 0; i < 4; i++ {
+		f, err := vol.CreateFile(dir, "CAPPED.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+		if err != nil {
+			t.Fatalf("CreateFile #%d: %v", i, err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close #%d: %v", i, err)
+		}
+
+		entries, err := dir.List()
+		if err != nil {
+			t.Fatalf("List after CreateFile #%d: %v", i, err)
+		}
+		wantCount := i + 1
+		if wantCount > 2 {
+			wantCount = 2
+		}
+		if len(entries) != wantCount {
+			t.Fatalf("after creating version %d, directory has %d entries, want %d (limit 2)", i+1, len(entries), wantCount)
+		}
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List (final): %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("final directory entry count = %d, want exactly 2", len(entries))
+	}
+	// The two SURVIVING versions must be the two highest (3 and 4) -- the
+	// oldest excess ones (1 and 2) are what should have been deleted.
+	got := map[uint16]bool{}
+	for _, e := range entries {
+		got[e.Version] = true
+	}
+	if !got[3] || !got[4] {
+		t.Errorf("surviving versions = %v, want exactly {3, 4}", entries)
+	}
+}
+
+// TestCreateFileDirectoryDefaultChangeProducesDifferentLimitsForDifferentNames
+// confirms resolveVersionLimit genuinely captures the directory's default
+// AT CREATION TIME for each distinct name, rather than sharing one
+// resolved value across every name ever created in the directory --
+// changing the directory's default between creating two unrelated names
+// must produce two different first-version limits.
+func TestCreateFileDirectoryDefaultChangeProducesDifferentLimitsForDifferentNames(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectoryWithVersionLimit(t, dev, ib, "CHANGING.DIR", 4)
+	vol := &Volume{Devices: []*Device{dev}}
+
+	alpha, err := vol.CreateFile(dir, "ALPHA.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile(ALPHA.DAT): %v", err)
+	}
+	if err := alpha.Close(); err != nil {
+		t.Fatalf("Close(ALPHA.DAT): %v", err)
+	}
+
+	if err := SetVersionLimit(dir.File, 7); err != nil {
+		t.Fatalf("SetVersionLimit: %v", err)
+	}
+
+	beta, err := vol.CreateFile(dir, "BETA.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile(BETA.DAT): %v", err)
+	}
+	if err := beta.Close(); err != nil {
+		t.Fatalf("Close(BETA.DAT): %v", err)
+	}
+
+	if got := alpha.Header.RecordAttributes.VersionLimit; got != 4 {
+		t.Errorf("ALPHA.DAT's VersionLimit = %d, want 4 (dir's default when it was created)", got)
+	}
+	if got := beta.Header.RecordAttributes.VersionLimit; got != 7 {
+		t.Errorf("BETA.DAT's VersionLimit = %d, want 7 (dir's default when IT was created)", got)
+	}
+}
+
 // TestCreateDirectoryZeroVersionLimitMeansUnlimited confirms a versionLimit
 // of 0 round-trips as 0 (VMS's own "unlimited" convention, docs/PHASE-03.md's
 // "Version-limit design") rather than CreateDirectory silently treating it
