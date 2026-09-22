@@ -113,7 +113,7 @@ contract — there isn't one yet.
 |---|---|---|
 | 1 | `volume`: file & header-chain deallocation primitive | Done |
 | 2 | `volume`: `Directory.Remove` | Done |
-| 3 | `volume`: `DeleteFile` (ties 1+2 together) | Not started |
+| 3 | `volume`: `DeleteFile` (ties 1+2 together) | Done |
 | 4 | `cmd/ods2`: `DELETE` command | Not started |
 | 5 | `volume`: version-limit resolution + create-time enforcement | Not started |
 | 6 | `volume`: `SetVersionLimit` | Not started |
@@ -460,6 +460,52 @@ both caches. Also: deleting one version of a multi-version name leaves
 the others completely intact and independently readable via `OpenFID` —
 the regression case for this API accidentally sharing state across
 versions of the same name that it shouldn't.
+
+**Shipped**, as `volume/delete.go`'s `func DeleteFile(dir *Directory, name
+string, version uint16, bm *Bitmap, ib *IndexBitmap) error`, matching the
+sketch above — a plain package function rather than a `*Volume` method,
+since (per the single-device write-path scope this phase inherits
+unchanged from Phase 2) `dir.Device` alone is always the right device to
+resolve the target file's header against; there's no `vol` receiver to
+thread a multi-device lookup through here that `freeFileStorage` doesn't
+already avoid the same way.
+
+Two safety checks were added beyond the original sketch, both caught
+during review rather than planned up front:
+
+- **The volume's master file directory can never be deleted**, checked
+  purely from the resolved entry's Fid (`ondisk.MasterFileDirectoryFid`)
+  before anything else is even read — there's no scenario where deleting
+  it is recoverable or meaningful, since every other piece of this
+  project (`Volume.OpenDirectory`, `filespec.ResolveDirectory`'s root,
+  a future `ANALYZE/DISK`'s own walk) assumes it's always there to start
+  from.
+- **A directory file can only be deleted while empty.** If the resolved
+  header has `FchDirectory` set, `DeleteFile` resolves its full data
+  (`buildFile`) and `List`s its entries, refusing outright if even one is
+  found — deleting a non-empty directory would orphan whatever it still
+  names, since nothing would ever reach those entries again through an
+  ordinary directory walk once the one entry leading here is gone. Both
+  checks run before `Directory.Remove` is ever called, so a rejected
+  delete leaves the volume provably untouched, not just "safe by
+  accident."
+
+Tests (`volume/delete_test.go`) cover: version 0 rejected without touching
+`dir`/`bm`/`ib` at all; end-to-end delete of a single-segment and a
+multi-segment file (the latter forcing a real extension segment the same
+way subtask 1's own tests do), each confirmed via `Directory.List`,
+`IndexBitmap.FindFreeSlot`, and `Bitmap.FindFree` after an explicit
+`Flush` of both caches — accounting for the one cluster the target
+directory's own first `Insert` permanently consumes growing it from 0 to
+1 block, which `Directory.Remove` never gives back (this phase's own
+directory-shrink-back non-goal); deleting one version of a multi-version
+name leaving its siblings' directory entries and data completely intact;
+deleting a nonexistent name/version erroring without modifying the
+directory; a non-empty directory's deletion rejected with both the parent
+directory's entry and the subdirectory's own content left untouched; an
+empty directory deleted exactly like any other file; and the master file
+directory's deletion rejected purely from its Fid, before any header is
+even read.
 
 ### 4. `cmd/ods2`: `DELETE` command
 

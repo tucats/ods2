@@ -2,6 +2,7 @@ package volume
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 
 	"github.com/tucats/ods2/ondisk"
@@ -174,6 +175,477 @@ func TestFreeFileStorageRejectsReadOnlyDevice(t *testing.T) {
 	err := freeFileStorage(vol.Devices[0], ondisk.FileHeader{}, nil, nil)
 	if err == nil {
 		t.Fatal("freeFileStorage on a read-only device: want error, got nil")
+	}
+}
+
+// TestDeleteFileRejectsVersionZero confirms DeleteFile enforces the same
+// "an exact version is always required" rule Directory.Remove itself
+// enforces, and does so before ever touching dir/bm/ib -- all three are
+// deliberately nil here, which would panic if DeleteFile tried to do
+// anything with them before this check.
+func TestDeleteFileRejectsVersionZero(t *testing.T) {
+	if err := DeleteFile(nil, "FOO.TXT", 0, nil, nil); err == nil {
+		t.Fatal("DeleteFile with version 0: want error, got nil")
+	}
+}
+
+// TestDeleteFileEndToEndSingleSegment covers the core subtask 3 scenario
+// for a small, single-segment file: create it through the ordinary
+// CreateFile write path, delete it through DeleteFile, and confirm every
+// piece of storage it owned is genuinely reclaimed -- the directory no
+// longer lists it, its former header slot is reusable, and its former data
+// extent is reusable -- all checked after an explicit Flush of both
+// caches, matching how a real DELETE command (subtask 4) would leave
+// things before dismounting.
+func TestDeleteFileEndToEndSingleSegment(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "TESTDIR.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	f, err := vol.CreateFile(dir, "GONE.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile: %v", err)
+	}
+	if err := f.WriteBlock(1, blockOf(0x5A)); err != nil {
+		t.Fatalf("WriteBlock(1): %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	fileNumber := f.Header.Fid.Number()
+
+	if err := DeleteFile(dir, "GONE.DAT", 1, bm, ib); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("directory List() after DeleteFile = %+v, want empty", entries)
+	}
+
+	if err := bm.Flush(); err != nil {
+		t.Fatalf("Bitmap.Flush: %v", err)
+	}
+	if err := ib.Flush(); err != nil {
+		t.Fatalf("IndexBitmap.Flush: %v", err)
+	}
+
+	ib2, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap (fresh): %v", err)
+	}
+	got, err := ib2.FindFreeSlot()
+	if err != nil {
+		t.Fatalf("FindFreeSlot after DeleteFile: %v", err)
+	}
+	if got != fileNumber {
+		t.Errorf("FindFreeSlot after DeleteFile = %d, want the file's own former slot %d", got, fileNumber)
+	}
+	assertHeaderSlotIsZeroed(t, container, uint16(fileNumber))
+
+	bm2, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap (fresh): %v", err)
+	}
+	// Only wideFreeClusters-1, not the full wideFreeClusters, is expected
+	// back: dir's own first Insert (inside CreateFile, above) grew it from
+	// 0 to 1 block, permanently consuming one cluster of the wide free
+	// range for the directory's own content -- Directory.Remove never
+	// shrinks a directory's block ALLOCATION back down (see
+	// docs/PHASE-03.md's non-goals), only its logical entry count, so that
+	// one cluster is never coming back in this test. Finding the other
+	// wideFreeClusters-1 clusters free again as one contiguous run proves
+	// the deleted file's own single data block was genuinely reclaimed.
+	if _, err := bm2.FindFree(wideFreeClusters - 1); err != nil {
+		t.Errorf("FindFree(%d) after DeleteFile: %v (data extent was not fully reclaimed)", wideFreeClusters-1, err)
+	}
+}
+
+// TestDeleteFileEndToEndMultiSegment is the same scenario as above, but
+// against a file with a real extension-header segment (forced by
+// extending it one block at a time, the same trick
+// TestFreeFileStorageReclaimsMultiSegmentFile uses), confirming DeleteFile
+// -- not just freeFileStorage directly -- walks the WHOLE chain, freeing
+// the extension segment's own header slot too.
+func TestDeleteFileEndToEndMultiSegment(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "TESTDIR.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	f, err := vol.CreateFile(dir, "SEG.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile: %v", err)
+	}
+
+	const calls = 150
+	for i := 0; i < calls; i++ {
+		if err := f.WriteBlock(uint32(i+1), blockOf(byte(i))); err != nil {
+			t.Fatalf("WriteBlock #%d: %v", i, err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if f.Header.ExtensionFid.IsZero() {
+		t.Fatal("test setup: primary header has no extension segment after enough writes to fill its map area")
+	}
+	primaryFileNumber := f.Header.Fid.Number()
+	extensionFileNumber := f.Header.ExtensionFid.Number()
+
+	if err := DeleteFile(dir, "SEG.DAT", 1, bm, ib); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+
+	if err := bm.Flush(); err != nil {
+		t.Fatalf("Bitmap.Flush: %v", err)
+	}
+	if err := ib.Flush(); err != nil {
+		t.Fatalf("IndexBitmap.Flush: %v", err)
+	}
+
+	assertHeaderSlotIsZeroed(t, container, uint16(primaryFileNumber))
+	assertHeaderSlotIsZeroed(t, container, uint16(extensionFileNumber))
+
+	ib2, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap (fresh): %v", err)
+	}
+	first, err := ib2.FindFreeSlot()
+	if err != nil {
+		t.Fatalf("FindFreeSlot (1st): %v", err)
+	}
+	if err := ib2.MarkAllocated(first); err != nil {
+		t.Fatalf("MarkAllocated(%d): %v", first, err)
+	}
+	second, err := ib2.FindFreeSlot()
+	if err != nil {
+		t.Fatalf("FindFreeSlot (2nd): %v", err)
+	}
+	gotSlots := map[uint32]bool{first: true, second: true}
+	if !gotSlots[primaryFileNumber] || !gotSlots[extensionFileNumber] {
+		t.Errorf("free slots after DeleteFile = {%d, %d}, want both %d (primary) and %d (extension)",
+			first, second, primaryFileNumber, extensionFileNumber)
+	}
+
+	bm2, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap (fresh): %v", err)
+	}
+	// wideFreeClusters-1, not the full wideFreeClusters, for the same
+	// reason TestDeleteFileEndToEndSingleSegment's own check does: dir's
+	// first Insert permanently consumed one cluster growing it from 0 to
+	// 1 block, which Directory.Remove never gives back (see
+	// docs/PHASE-03.md's non-goals on directory storage shrink-back).
+	if _, err := bm2.FindFree(wideFreeClusters - 1); err != nil {
+		t.Errorf("FindFree(%d) after DeleteFile: %v (extents across both segments were not fully reclaimed)", wideFreeClusters-1, err)
+	}
+}
+
+// TestDeleteFileLeavesOtherVersionsIntact is the regression case the
+// subtask's own write-up calls out by name: deleting one version of a
+// multi-version name must not disturb any sibling version's directory
+// entry or its independent readability via OpenFID.
+func TestDeleteFileLeavesOtherVersionsIntact(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "TESTDIR.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	first, err := vol.CreateFile(dir, "MULTI.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile (version 1): %v", err)
+	}
+	if err := first.WriteBlock(1, blockOf(0x11)); err != nil {
+		t.Fatalf("WriteBlock(1) on version 1: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close (version 1): %v", err)
+	}
+
+	second, err := vol.CreateFile(dir, "MULTI.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile (version 2): %v", err)
+	}
+	if err := second.WriteBlock(1, blockOf(0x22)); err != nil {
+		t.Fatalf("WriteBlock(1) on version 2: %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close (version 2): %v", err)
+	}
+	secondFid := second.Header.Fid
+
+	if err := DeleteFile(dir, "MULTI.DAT", 1, bm, ib); err != nil {
+		t.Fatalf("DeleteFile(;1): %v", err)
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Version != 2 {
+		t.Fatalf("List() after deleting version 1 = %+v, want exactly version 2", entries)
+	}
+
+	reopened, err := vol.OpenFID(secondFid)
+	if err != nil {
+		t.Fatalf("OpenFID(version 2) after deleting version 1: %v", err)
+	}
+	buf := make([]byte, ondisk.BlockSize)
+	if err := reopened.ReadBlock(1, buf); err != nil {
+		t.Fatalf("ReadBlock(1) on surviving version 2: %v", err)
+	}
+	if !bytes.Equal(buf, blockOf(0x22)) {
+		t.Error("surviving version 2's content changed after deleting version 1")
+	}
+}
+
+// TestDeleteFileNonexistentEntryErrors confirms deleting a (name, version)
+// that isn't present is reported as an error and leaves the directory's
+// on-disk content untouched, mirroring
+// TestDirectoryRemoveNonexistentEntryErrors's own check one layer down.
+func TestDeleteFileNonexistentEntryErrors(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "TESTDIR.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	f, err := vol.CreateFile(dir, "REAL.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+	if err != nil {
+		t.Fatalf("CreateFile: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	before, err := dir.List()
+	if err != nil {
+		t.Fatalf("List (before): %v", err)
+	}
+
+	if err := DeleteFile(dir, "MISSING.DAT", 1, bm, ib); err == nil {
+		t.Error("DeleteFile of a nonexistent name: want error, got nil")
+	}
+	if err := DeleteFile(dir, "REAL.DAT", 7, bm, ib); err == nil {
+		t.Error("DeleteFile of a nonexistent version: want error, got nil")
+	}
+
+	after, err := dir.List()
+	if err != nil {
+		t.Fatalf("List (after): %v", err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("directory content changed after failed DeleteFile calls: before %+v, after %+v", before, after)
+	}
+}
+
+// TestDeleteFileRejectsNonEmptyDirectory confirms DeleteFile refuses to
+// delete a directory file that still has at least one entry in it,
+// leaving both the parent directory's own entry for it and the
+// subdirectory's content completely untouched. Without this check,
+// deleting a non-empty directory would orphan whatever it still names --
+// nothing would ever reach those entries again through an ordinary
+// directory walk once the one entry pointing at this directory is gone.
+func TestDeleteFileRejectsNonEmptyDirectory(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	parent := newWritableTestDirectory(t, dev, ib, "PARENT.DIR")
+
+	subFile, err := CreateHeader(dev, ib, NewFileHeader{
+		Name:            "SUB.DIR",
+		Directory:       parent.Header.Fid,
+		Characteristics: ondisk.FchDirectory,
+	})
+	if err != nil {
+		t.Fatalf("CreateHeader(SUB.DIR): %v", err)
+	}
+	if err := parent.Insert("SUB.DIR", 1, subFile.Header.Fid, bm, ib); err != nil {
+		t.Fatalf("Insert(SUB.DIR): %v", err)
+	}
+
+	subDir, err := subFile.Directory()
+	if err != nil {
+		t.Fatalf("Directory(): %v", err)
+	}
+	childFid := ondisk.Fid{Num: 60, Seq: 1}
+	if err := subDir.Insert("CHILD.TXT", 1, childFid, bm, ib); err != nil {
+		t.Fatalf("Insert(CHILD.TXT) into subdirectory: %v", err)
+	}
+
+	beforeParent, err := parent.List()
+	if err != nil {
+		t.Fatalf("List (parent, before): %v", err)
+	}
+
+	if err := DeleteFile(parent, "SUB.DIR", 1, bm, ib); err == nil {
+		t.Fatal("DeleteFile of a non-empty directory: want error, got nil")
+	}
+
+	afterParent, err := parent.List()
+	if err != nil {
+		t.Fatalf("List (parent, after): %v", err)
+	}
+	if !reflect.DeepEqual(beforeParent, afterParent) {
+		t.Errorf("parent directory content changed after rejected DeleteFile: before %+v, after %+v", beforeParent, afterParent)
+	}
+
+	childEntries, err := subDir.List()
+	if err != nil {
+		t.Fatalf("List (subdirectory, after): %v", err)
+	}
+	if len(childEntries) != 1 || childEntries[0].Name != "CHILD.TXT" {
+		t.Errorf("subdirectory content changed after rejected DeleteFile: %+v", childEntries)
+	}
+}
+
+// TestDeleteFileAllowsEmptyDirectory confirms an empty directory file is
+// deleted exactly like any other file once DeleteFile has confirmed it has
+// no entries -- the same end-to-end reclamation TestDeleteFileEndToEnd*
+// already exercises for ordinary files, just with FchDirectory set.
+func TestDeleteFileAllowsEmptyDirectory(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	parent := newWritableTestDirectory(t, dev, ib, "PARENT.DIR")
+
+	subFile, err := CreateHeader(dev, ib, NewFileHeader{
+		Name:            "EMPTY.DIR",
+		Directory:       parent.Header.Fid,
+		Characteristics: ondisk.FchDirectory,
+	})
+	if err != nil {
+		t.Fatalf("CreateHeader(EMPTY.DIR): %v", err)
+	}
+	if err := parent.Insert("EMPTY.DIR", 1, subFile.Header.Fid, bm, ib); err != nil {
+		t.Fatalf("Insert(EMPTY.DIR): %v", err)
+	}
+	subFileNumber := subFile.Header.Fid.Number()
+
+	if err := DeleteFile(parent, "EMPTY.DIR", 1, bm, ib); err != nil {
+		t.Fatalf("DeleteFile of an empty directory: %v", err)
+	}
+
+	entries, err := parent.List()
+	if err != nil {
+		t.Fatalf("List (parent, after): %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("parent directory List() after deleting EMPTY.DIR = %+v, want empty", entries)
+	}
+
+	if err := bm.Flush(); err != nil {
+		t.Fatalf("Bitmap.Flush: %v", err)
+	}
+	if err := ib.Flush(); err != nil {
+		t.Fatalf("IndexBitmap.Flush: %v", err)
+	}
+	assertHeaderSlotIsZeroed(t, container, uint16(subFileNumber))
+}
+
+// TestDeleteFileRejectsMasterFileDirectory confirms DeleteFile refuses to
+// delete the volume's master file directory outright, purely from its
+// fixed Fid -- before ever trying to resolve or read whatever header that
+// Fid actually names (the entry inserted below doesn't point at a real
+// directory header at all, which would fail loudly if DeleteFile got far
+// enough to try reading it).
+func TestDeleteFileRejectsMasterFileDirectory(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "TESTDIR.DIR")
+	if err := dir.Insert("MFD.DIR", 1, ondisk.MasterFileDirectoryFid, bm, ib); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	if err := DeleteFile(dir, "MFD.DIR", 1, bm, ib); err == nil {
+		t.Fatal("DeleteFile targeting the master file directory: want error, got nil")
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("directory content changed after rejected DeleteFile: %+v", entries)
 	}
 }
 

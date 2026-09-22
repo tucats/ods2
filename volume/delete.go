@@ -16,8 +16,8 @@ import (
 // docs/PHASE-03.md's "Ordering for safety without journaling" for why
 // removing a file's directory entry (Directory.Remove) is always done
 // separately, and strictly BEFORE this function is ever called — the
-// caller (DeleteFile, a later subtask) is responsible for that ordering;
-// this function only knows how to reclaim what a header chain describes.
+// caller (DeleteFile, below) is responsible for that ordering; this
+// function only knows how to reclaim what a header chain describes.
 //
 // For each segment in the chain, in order: every extent in its
 // retrieval-pointer map is marked free in bm (Bitmap.MarkFree), the
@@ -90,4 +90,158 @@ func freeFileStorage(dev *Device, primary ondisk.FileHeader, bm *Bitmap, ib *Ind
 	}
 
 	return nil
+}
+
+// DeleteFile removes one specific (name, version) file from dir and fully
+// reclaims everything it owned — the API docs/PHASE-03.md's Goals section
+// describes as "precisely reversing what CreateHeader/Extend/
+// Directory.Insert did to create the file in the first place." It ties
+// together Directory.Remove (directory.go) and freeFileStorage (above) in
+// the exact order the design doc's "Ordering for safety without
+// journaling" section works through in detail; see that section for why
+// the order matters and what happens if this is interrupted partway
+// through.
+//
+// name is the file's combined "NAME.TYPE" text, matching every other
+// Directory method that takes a name (Insert, Lookup, NextVersion,
+// Remove) and the same combined-name convention CreateFile's own callers
+// already use — it is NOT split into separate name/type parts anywhere in
+// this package.
+//
+// Unlike Directory.Lookup, version 0 is never accepted here as a "highest
+// version" convenience — exactly like Directory.Remove itself, an exact
+// version is always required, so a caller can never delete the wrong
+// version of a name by relying on an implicit default. (The DELETE
+// command, docs/PHASE-03.md subtask 4, enforces the same rule one layer
+// up: a bare "DELETE name" with no version at all is rejected before it
+// ever reaches here.) This is checked before anything else, so a caller's
+// mistake is reported without even reading the file's header.
+//
+// The volume's master file directory (MFD — the fixed, always-present
+// top-level directory every other directory and file is ultimately
+// reached from, identified by the fixed file number ondisk.
+// MasterFileDirectoryFid.Number()) can never be deleted, full stop, even
+// if it happens to be empty. There's no design-doc precedent to fall back
+// on for what "an unmounted volume with no MFD at all" would even mean —
+// every other piece of this package (Volume.OpenDirectory,
+// filespec.ResolveDirectory's root, ANALYZE/DISK's own walk) assumes the
+// MFD is always there to start from — so this is refused unconditionally
+// rather than treated as an ordinary (if unusual) empty-directory delete.
+//
+// If the file being deleted is itself a directory (its header has the
+// FchDirectory characteristic set — see ondisk.FileHeader.IsDirectory), it
+// is only ever deleted while EMPTY: still containing even one entry (a
+// file or a subdirectory) is rejected outright, before anything is
+// removed. VMS itself enforces the same rule, for the same reason —
+// deleting a non-empty directory would orphan every file/subdirectory it
+// still names: each one's own header would keep pointing back at this
+// directory's Fid (via Backlink) as its parent, but nothing would ever
+// find them again through an ordinary directory walk starting from the
+// volume's master file directory, since the one directory entry that led
+// here would be gone. Reclaiming an empty directory's own storage once
+// it's confirmed empty works exactly like reclaiming any other file's —
+// there's nothing directory-specific about steps 4-5 below.
+//
+// The steps, strictly in this order:
+//
+//  1. Look up the (name, version) entry to learn its Fid, and refuse
+//     outright if that Fid is the MFD's own fixed file number.
+//  2. Read the primary FileHeader through that Fid (readFileHeaderViaIndex)
+//     — this has to happen BEFORE the directory entry naming the file is
+//     removed, since nothing else will be able to find the file's header
+//     once step 4 below succeeds.
+//  3. If that header is itself a directory, resolve its full data
+//     (buildFile) and List its entries; refuse with an error, before
+//     touching anything, if even one entry is found.
+//  4. Directory.Remove the (name, version) entry. Once this returns
+//     successfully, the file is unambiguously gone from every reader's
+//     point of view, regardless of whether step 5 below ever completes —
+//     see the design-doc section named above for why this ordering, not
+//     the reverse, keeps a crash's worst case bounded to a recoverable
+//     orphan rather than a directory entry pointing at corrupt-looking,
+//     already-zeroed header content.
+//  5. freeFileStorage walks the file's complete header-extension chain
+//     (primary segment plus every extension segment, if any) and returns
+//     every header slot and every data extent it owns to ib/bm.
+//
+// A failure in step 5, after step 4 has already succeeded, is returned as
+// an error but is NOT rolled back — there is no way to "undo" a
+// directory-entry removal that has already been written to disk, so
+// rolling back only the reclamation half wouldn't restore a consistent
+// state anyway (again, see the design-doc section above). The caller's
+// command layer (DELETE/PURGE, subtasks 4/9) is expected to report such an
+// error and move on to (or stop before) its next target, rather than treat
+// it as fatal to the whole operation.
+//
+// bm and ib mutations this makes (via freeFileStorage) are in-memory only
+// until their own Flush is called — Directory.Remove's own directory-block
+// rewrites, by contrast, are immediate, unbuffered writes, matching every
+// other directory mutation in this package.
+func DeleteFile(dir *Directory, name string, version uint16, bm *Bitmap, ib *IndexBitmap) error {
+	if version == 0 {
+		return fmt.Errorf("volume: deleting %s: a specific version is required (0 is not a valid version)", name)
+	}
+
+	entry, err := dir.Lookup(name, version)
+	if err != nil {
+		return fmt.Errorf("volume: deleting %s;%d: %w", name, version, err)
+	}
+
+	if entry.Fid.Number() == ondisk.MasterFileDirectoryFid.Number() {
+		return fmt.Errorf("volume: deleting %s;%d: the volume's master file directory cannot be deleted", name, version)
+	}
+
+	dev := dir.Device
+	primary, err := readFileHeaderViaIndex(dev, dev.IndexFile.Extents, entry.Fid)
+	if err != nil {
+		return fmt.Errorf("volume: deleting %s;%d: %w", name, version, err)
+	}
+
+	if primary.IsDirectory() {
+		empty, err := isEmptyDirectory(dev, primary)
+		if err != nil {
+			return fmt.Errorf("volume: deleting %s;%d: %w", name, version, err)
+		}
+		if !empty {
+			return fmt.Errorf("volume: deleting %s;%d: directory is not empty", name, version)
+		}
+	}
+
+	if err := dir.Remove(name, version, bm, ib); err != nil {
+		return fmt.Errorf("volume: deleting %s;%d: %w", name, version, err)
+	}
+
+	if err := freeFileStorage(dev, primary, bm, ib); err != nil {
+		return fmt.Errorf("volume: deleting %s;%d: directory entry removed, but reclaiming its storage failed: %w", name, version, err)
+	}
+
+	return nil
+}
+
+// isEmptyDirectory reports whether the directory file described by
+// primary — already confirmed by the caller (DeleteFile) to have the
+// FchDirectory characteristic set — currently has zero directory entries.
+// It resolves the directory's complete data (buildFile, the same
+// retrieval-pointer walk every other file's data is read through) rather
+// than trusting anything in the header alone, since a directory's entry
+// count isn't itself a header field — the only way to know is to actually
+// read and decode its data blocks (Directory.List).
+func isEmptyDirectory(dev *Device, primary ondisk.FileHeader) (bool, error) {
+	f, err := buildFile(dev, primary)
+	if err != nil {
+		return false, fmt.Errorf("resolving directory %v's data extents: %w", primary.Fid, err)
+	}
+
+	d, err := f.Directory()
+	if err != nil {
+		// Unreachable: the caller has already confirmed primary.IsDirectory()
+		// is true, which is exactly what File.Directory() itself checks.
+		return false, err
+	}
+
+	entries, err := d.List()
+	if err != nil {
+		return false, fmt.Errorf("listing directory %v's entries: %w", primary.Fid, err)
+	}
+	return len(entries) == 0, nil
 }
