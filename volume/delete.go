@@ -127,6 +127,10 @@ func freeFileStorage(dev *Device, primary ondisk.FileHeader, bm *Bitmap, ib *Ind
 // filespec.ResolveDirectory's root, ANALYZE/DISK's own walk) assumes the
 // MFD is always there to start from — so this is refused unconditionally
 // rather than treated as an ordinary (if unusual) empty-directory delete.
+// INDEXF.SYS and BITMAP.SYS (ondisk.IndexFileFid, ondisk.BitmapFileFid) get
+// the identical unconditional refusal, and for the identical reason: the
+// volume as a whole depends on both of them existing, so there is no
+// meaningful state for the volume to be in without them.
 //
 // If the file being deleted is itself a directory (its header has the
 // FchDirectory characteristic set — see ondisk.FileHeader.IsDirectory), it
@@ -145,7 +149,8 @@ func freeFileStorage(dev *Device, primary ondisk.FileHeader, bm *Bitmap, ib *Ind
 // The steps, strictly in this order:
 //
 //  1. Look up the (name, version) entry to learn its Fid, and refuse
-//     outright if that Fid is the MFD's own fixed file number.
+//     outright if that Fid's file number is the MFD's, INDEXF.SYS's, or
+//     BITMAP.SYS's own fixed file number.
 //  2. Read the primary FileHeader through that Fid (readFileHeaderViaIndex)
 //     — this has to happen BEFORE the directory entry naming the file is
 //     removed, since nothing else will be able to find the file's header
@@ -189,6 +194,27 @@ func DeleteFile(dir *Directory, name string, version uint16, bm *Bitmap, ib *Ind
 
 	if entry.Fid.Number() == ondisk.MasterFileDirectoryFid.Number() {
 		return fmt.Errorf("volume: deleting %s;%d: the volume's master file directory cannot be deleted", name, version)
+	}
+
+	// INDEXF.SYS (file number 1) and BITMAP.SYS (file number 2) are the
+	// volume's own index file and storage-allocation bitmap — see
+	// ondisk.IndexFileFid and ondisk.BitmapFileFid. Every other structure on
+	// the volume, including every other file's own header, is only
+	// reachable through these two: INDEXF.SYS is where every file header
+	// (including the volume's own) physically lives, and BITMAP.SYS is the
+	// sole record of which blocks are free versus allocated. Deleting
+	// either would not just lose one file's data, it would make the entire
+	// volume unreadable to any ODS-2 implementation, VMS or otherwise — so
+	// this refuses unconditionally, the same way the MFD check above does.
+	//
+	// This check is deliberately keyed on file number (entry.Fid.Number()),
+	// not on the directory entry's name, per the guard's own requirement:
+	// a caller cannot bypass it by renaming these files (ODS-2 has no
+	// concept of a file being unrenameable, but the file number identifying
+	// INDEXF.SYS/BITMAP.SYS never changes regardless of what name any
+	// directory happens to list them under).
+	if n := entry.Fid.Number(); n == ondisk.IndexFileFid.Number() || n == ondisk.BitmapFileFid.Number() {
+		return fmt.Errorf("volume: deleting %s;%d: the volume's index file and storage bitmap cannot be deleted", name, version)
 	}
 
 	dev := dir.Device

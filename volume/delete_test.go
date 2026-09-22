@@ -649,6 +649,58 @@ func TestDeleteFileRejectsMasterFileDirectory(t *testing.T) {
 	}
 }
 
+// TestDeleteFileRejectsReservedBookkeepingFiles confirms DeleteFile refuses
+// to delete INDEXF.SYS or BITMAP.SYS, exactly like
+// TestDeleteFileRejectsMasterFileDirectory confirms for the MFD -- purely
+// from the fixed Fid each is looked up under, and regardless of what name
+// the directory entry pointing at that Fid actually uses. That last part is
+// the point of this test: the entries below are deliberately inserted under
+// names that don't match INDEXF.SYS/BITMAP.SYS at all, proving the guard is
+// keyed on file number, not on recognizing a reserved filename.
+func TestDeleteFileRejectsReservedBookkeepingFiles(t *testing.T) {
+	cases := []struct {
+		name string
+		fid  ondisk.Fid
+	}{
+		{name: "NOTINDEXF.SYS", fid: ondisk.IndexFileFid},
+		{name: "NOTBITMAP.SYS", fid: ondisk.BitmapFileFid},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dev, container := newWritableHeaderTestVolume(t)
+			setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+			installWideTestBitmap(t, container)
+
+			ib, err := OpenIndexBitmap(dev)
+			if err != nil {
+				t.Fatalf("OpenIndexBitmap: %v", err)
+			}
+			bm, err := OpenBitmap(dev)
+			if err != nil {
+				t.Fatalf("OpenBitmap: %v", err)
+			}
+
+			dir := newWritableTestDirectory(t, dev, ib, "TESTDIR.DIR")
+			if err := dir.Insert(c.name, 1, c.fid, bm, ib); err != nil {
+				t.Fatalf("Insert: %v", err)
+			}
+
+			if err := DeleteFile(dir, c.name, 1, bm, ib); err == nil {
+				t.Fatalf("DeleteFile targeting fid %v: want error, got nil", c.fid)
+			}
+
+			entries, err := dir.List()
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if len(entries) != 1 {
+				t.Errorf("directory content changed after rejected DeleteFile: %+v", entries)
+			}
+		})
+	}
+}
+
 // TestSetVersionLimitRoundTripsOnPlainFile confirms setting a plain file's
 // VersionLimit sticks and is genuinely readable back through a completely
 // independent OpenFID, not just this call's own in-memory f.
