@@ -119,7 +119,7 @@ contract — there isn't one yet.
 | 6 | `volume`: `SetVersionLimit` | Done |
 | 7 | `cmd/ods2`: `SET FILE/VERSION_LIMIT=n` | Done |
 | 8 | `volume`: `PurgeVersions` | Done |
-| 9 | `cmd/ods2`: `PURGE` command | Not started |
+| 9 | `cmd/ods2`: `PURGE` command | Done |
 | 10 | `volume`/`cmd/ods2`: `CREATE DIRECTORY` command | Done |
 
 Legend: **Not started** / **In progress** / **Done** (commit `abc1234`) /
@@ -823,6 +823,38 @@ begin with is correctly left alone under the default limit, not treated
 as an error); `/LIMIT=0` rejected (per subtask 8); session-level test
 against a copy of `testdata/rq0-ra92.dsk`, same real-volume validation
 approach as subtask 4.
+
+**Shipped**, as `cmd/ods2/internal/session/purge.go`'s `Command{Name:
+"purge", ...}` + `cmdPurge`, matching the sketch closely, with the same
+test-fixture deviation subtask 4's own write-up already explains: rather
+than a `testdata/rq0-ra92.dsk`-based session test, `purge_test.go` builds
+its own writable fixture volume (`diskimage.Create` + `volume.Initialize`,
+following `newDeleteTestSession`'s exact pattern) — no session test in
+this codebase copies the real test image into a temp directory to mutate
+it; every write-path command's own tests build a small synthetic volume
+instead.
+
+A version in the typed file-spec is never rejected the way `DELETE`
+rejects a *missing* one — it's simply overridden: `spec.Version` is
+unconditionally set to `"*"` right after parsing, before `filespec.Glob`
+ever runs, so `PURGE` always considers every surviving version of a
+matched name regardless of what (if anything) followed a `;`. Distinct
+names within each directory are resolved via a small new helper,
+`distinctNames(matches []filespec.Match) []string` (`purge.go`) — `Glob`'s
+flat match list has one entry per surviving version, so a name with
+several versions appears several times; `PurgeVersions` only needs calling
+once per distinct name, not once per match, since it resolves every
+version itself via `Directory.List`.
+
+Tests (`cmd/ods2/internal/session/purge_test.go`):
+`TestCmdPurgeDefaultLimitKeepsOnlyHighestVersion`;
+`TestCmdPurgeExplicitLimitKeepsThatManyVersions`;
+`TestCmdPurgeGlobCoversMultipleDistinctNames` (a bare `PURGE` with no
+file-spec at all, defaulting to `*.*` and correctly leaving every
+single-version name — including `INITIALIZE`'s own reserved system files —
+untouched); `TestCmdPurgeInvalidLimitRejected`; `TestCmdPurgeZeroLimitRejected`
+(confirming the directory is left byte-for-byte unchanged); the
+confirmation message; and an integration test through `Session.Execute`.
 
 ### 10. `volume`/`cmd/ods2`: `CREATE DIRECTORY` command
 
