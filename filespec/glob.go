@@ -53,6 +53,7 @@ func Glob(vol *volume.Volume, spec Spec) ([]Match, error) {
 	if namePattern == "" {
 		namePattern = "*"
 	}
+
 	typePattern := spec.Type
 	if typePattern == "" {
 		typePattern = "*"
@@ -71,13 +72,16 @@ func Glob(vol *volume.Volume, spec Spec) ([]Match, error) {
 	}
 
 	var all []Match
+
 	for _, node := range nodes {
 		found, err := globInDirectory(node, namePattern, typePattern, versionSel)
 		if err != nil {
 			return nil, err
 		}
+
 		all = append(all, found...)
 	}
+
 	return all, nil
 }
 
@@ -93,15 +97,19 @@ func walkDirs(vol *volume.Volume, dirPath []string) ([]dirNode, error) {
 	}
 
 	current := []dirNode{{dir: root}}
+
 	for _, component := range dirPath {
 		var next []dirNode
+
 		for _, node := range current {
 			children, err := matchingSubdirectories(vol, node, component)
 			if err != nil {
 				return nil, err
 			}
+
 			next = append(next, children...)
 		}
+
 		current = next
 	}
 
@@ -126,6 +134,7 @@ func ResolveDirectory(vol *volume.Volume, dirs []string) (*volume.Directory, err
 	if err != nil {
 		return nil, err
 	}
+
 	switch len(nodes) {
 	case 0:
 		return nil, fmt.Errorf("filespec: directory %s not found", formatDirPath(dirs))
@@ -150,6 +159,7 @@ func expandRecursive(vol *volume.Volume, nodes []dirNode) ([]dirNode, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		all = append(all, children...)
 		queue = append(queue, children...)
 	}
@@ -169,14 +179,17 @@ func matchingSubdirectories(vol *volume.Volume, node dirNode, namePattern string
 	}
 
 	var dirEntries []ondisk.DirEntry
+
 	for _, e := range entries {
 		if strings.HasSuffix(strings.ToUpper(e.Name), ".DIR") {
 			dirEntries = append(dirEntries, e)
 		}
 	}
+
 	dirEntries = selectVersions(dirEntries, versionSelector{kind: versionHighest})
 
-	var children []dirNode
+	children := make([]dirNode, 0, len(dirEntries))
+
 	for _, e := range dirEntries {
 		name, _ := splitEntryNameType(e.Name)
 		if !matchWildcard(namePattern, name) {
@@ -187,6 +200,7 @@ func matchingSubdirectories(vol *volume.Volume, node dirNode, namePattern string
 		if err != nil {
 			return nil, fmt.Errorf("filespec: opening %s.%s: %w", formatDirPath(node.path), name, err)
 		}
+
 		childPath := append(append([]string{}, node.path...), name)
 		children = append(children, dirNode{path: childPath, dir: sub})
 	}
@@ -203,6 +217,7 @@ func globInDirectory(node dirNode, namePattern, typePattern string, versionSel v
 	}
 
 	var candidates []ondisk.DirEntry
+
 	for _, e := range entries {
 		name, typ := splitEntryNameType(e.Name)
 		if matchWildcard(namePattern, name) && matchWildcard(typePattern, typ) {
@@ -213,6 +228,7 @@ func globInDirectory(node dirNode, namePattern, typePattern string, versionSel v
 	selected := selectVersions(candidates, versionSel)
 
 	matches := make([]Match, 0, len(selected))
+
 	for _, e := range selected {
 		name, typ := splitEntryNameType(e.Name)
 		matches = append(matches, Match{
@@ -223,6 +239,7 @@ func globInDirectory(node dirNode, namePattern, typePattern string, versionSel v
 			Version: e.Version,
 		})
 	}
+
 	return matches, nil
 }
 
@@ -232,6 +249,7 @@ func splitEntryNameType(entryName string) (name, typ string) {
 	if idx := strings.LastIndexByte(entryName, '.'); idx != -1 {
 		return entryName[:idx], entryName[idx+1:]
 	}
+
 	return entryName, ""
 }
 
@@ -241,5 +259,6 @@ func formatDirPath(path []string) string {
 	if len(path) == 0 {
 		return "[000000]"
 	}
+
 	return "[" + strings.Join(path, ".") + "]"
 }

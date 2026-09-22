@@ -61,32 +61,37 @@ func cmdAnalyze(s *Session, args []string, quals Qualifiers) error {
 	}
 
 	key := strings.ToUpper(strings.TrimSuffix(strings.TrimSpace(args[0]), ":"))
+
 	vol, ok := s.Volumes[key]
 	if !ok {
 		return fmt.Errorf("analyze: %s is not mounted", key)
 	}
+
 	if len(vol.Devices) != 1 {
 		return fmt.Errorf("analyze: %s is a %d-device volume set; ANALYZE/DISK only supports a single-device volume", key, len(vol.Devices))
 	}
-	dev := vol.Devices[0]
 
+	dev := vol.Devices[0]
 	repair := quals.Has("repair")
 
 	var (
 		report *volume.DiskReport
 		err    error
 	)
+
 	if repair {
 		report, err = volume.RepairDisk(dev)
 	} else {
 		report, err = volume.AnalyzeDisk(dev)
 	}
+
 	if err != nil {
 		return fmt.Errorf("analyze: %w", err)
 	}
 
 	if report.Clean() {
 		fmt.Fprintf(s.Stdout, "%%ANALYZE-I-CLEAN, no discrepancies found (%d cluster(s) examined)\n", report.TotalClusters)
+
 		return nil
 	}
 
@@ -94,8 +99,10 @@ func cmdAnalyze(s *Session, args []string, quals Qualifiers) error {
 	if repair {
 		action = "found and repaired"
 	}
+
 	fmt.Fprintf(s.Stdout, "%%ANALYZE-W-DISCREP, %d discrepancy(ies) %s (%d cluster(s) examined)\n",
 		len(report.Discrepancies), action, report.TotalClusters)
+
 	for _, d := range report.Discrepancies {
 		fmt.Fprintf(s.Stdout, "  %s\n", d)
 	}

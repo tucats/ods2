@@ -78,6 +78,7 @@ func cmdMount(s *Session, args []string, quals Qualifiers) error {
 		for deviceIndex := range len(containerPaths) {
 			synthesized[deviceIndex] = fmt.Sprintf("%s%d", deviceBaseName, deviceBaseUnit+deviceIndex)
 		}
+
 		deviceNames = synthesized
 	}
 
@@ -88,22 +89,27 @@ func cmdMount(s *Session, args []string, quals Qualifiers) error {
 	writable := quals.Has("write")
 
 	containers := make([]diskimage.Container, 0, len(containerPaths))
+
 	for _, path := range containerPaths {
 		var (
 			c   diskimage.Container
 			err error
 		)
+
 		if writable {
 			c, err = diskimage.OpenWritable(path)
 		} else {
 			c, err = diskimage.Open(path)
 		}
+
 		if err != nil {
 			for _, opened := range containers {
 				_ = opened.Close()
 			}
+
 			return fmt.Errorf("mount: opening %s: %w", path, err)
 		}
+
 		containers = append(containers, c)
 	}
 
@@ -117,6 +123,7 @@ func splitDeviceList(s string) []string {
 	for i, p := range parts {
 		parts[i] = strings.TrimSpace(p)
 	}
+
 	return parts
 }
 
@@ -146,6 +153,7 @@ func mountContainers(s *Session, deviceNames []string, containers []diskimage.Co
 		if i < len(deviceNames) {
 			deviceName = deviceNames[i]
 		}
+
 		fmt.Fprintf(s.Stdout, "%%MOUNT-I-MOUNTED, Volume %s mounted on %s\n",
 			strings.TrimSpace(dev.Home.VolumeName), deviceName)
 	}
@@ -172,6 +180,7 @@ func cmdDismount(s *Session, args []string, quals Qualifiers) error {
 	if err := vol.Dismount(); err != nil {
 		return fmt.Errorf("dismount: %w", err)
 	}
+	
 	delete(s.Volumes, key)
 
 	return nil

@@ -15,10 +15,13 @@ import (
 // to build a source file on the host filesystem for /HOST to read.
 func writeHostFile(t *testing.T, dir, name, content string) string {
 	t.Helper()
+
 	path := filepath.Join(dir, name)
+
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("os.WriteFile(%s): %v", path, err)
 	}
+
 	return path
 }
 
@@ -31,23 +34,28 @@ func TestCmdCopyFromHostDefaultIsStreamText(t *testing.T) {
 	}
 
 	var out bytes.Buffer
+
 	s.Stdout = &out
 	if err := cmdType(s, []string{"DEST:OUT.TXT"}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdType: %v", err)
 	}
+
 	if got, want := out.String(), "line one\nline two\n"; got != want {
 		t.Errorf("content read back from DEST:OUT.TXT = %q, want %q", got, want)
 	}
 
 	destVol := s.Volumes["DEST"]
+
 	matches, err := filespec.Glob(destVol, filespec.Spec{Name: "OUT", Type: "TXT"})
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("Glob(OUT.TXT) = %v, %v", matches, err)
 	}
+
 	f, err := destVol.OpenFID(matches[0].Fid)
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	if got, want := f.Header.RecordAttributes.Format, ondisk.RecordFormatStreamLF; got != want {
 		t.Errorf("created file's RecordFormat = %v, want %v", got, want)
 	}
@@ -55,7 +63,9 @@ func TestCmdCopyFromHostDefaultIsStreamText(t *testing.T) {
 
 func TestCmdCopyFromHostBinaryRoundTrips(t *testing.T) {
 	s := newVolumeDestTestSession(t)
+
 	const content = "line one\nline two\n"
+	
 	hostPath := writeHostFile(t, t.TempDir(), "source.bin", content)
 
 	if err := cmdCopy(s, []string{hostPath, "DEST:OUT.BIN"}, Qualifiers{"quiet": "", "host": "", "binary": ""}); err != nil {
@@ -78,6 +88,7 @@ func TestCmdCopyFromHostBinaryRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readFile: %v", err)
 	}
+
 	if got != content {
 		t.Errorf("round-tripped content = %q, want %q", got, content)
 	}
@@ -92,10 +103,12 @@ func TestCmdCopyFromHostWildcardDestinationUppercasesHostBaseName(t *testing.T) 
 	}
 
 	destVol := s.Volumes["DEST"]
+	
 	matches, err := filespec.Glob(destVol, filespec.Spec{})
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+
 	names := make(map[string]bool, len(matches))
 	for _, m := range matches {
 		names[m.Name+"."+m.Type] = true
@@ -106,6 +119,7 @@ func TestCmdCopyFromHostWildcardDestinationUppercasesHostBaseName(t *testing.T) 
 	if !names["GO.SUM"] {
 		t.Errorf("destination entries = %v, want the host file's base name upper-cased to \"GO.SUM\"", names)
 	}
+
 	if names["go.sum"] {
 		t.Errorf("destination entries = %v, want no lower-case \"go.sum\" entry", names)
 	}
@@ -120,10 +134,12 @@ func TestCmdCopyFromHostAssignsNextVersion(t *testing.T) {
 	}
 
 	var out bytes.Buffer
+
 	s.Stdout = &out
 	if err := cmdCopy(s, []string{hostPath, "DEST:OUT.TXT"}, Qualifiers{"host": ""}); err != nil {
 		t.Fatalf("second cmdCopy: %v", err)
 	}
+
 	if !strings.Contains(out.String(), "OUT.TXT;2") {
 		t.Errorf("second copy's confirmation = %q, want it to mention version 2", out.String())
 	}
@@ -158,21 +174,26 @@ func TestCmdCopyFromHostRejectsDirectorySource(t *testing.T) {
 func TestCmdCopyFromHostTestQualifierDoesNotWrite(t *testing.T) {
 	s := newVolumeDestTestSession(t)
 	hostPath := writeHostFile(t, t.TempDir(), "source.txt", "content\n")
+
 	var out bytes.Buffer
+
 	s.Stdout = &out
 
 	if err := cmdCopy(s, []string{hostPath, "DEST:OUT.TXT"}, Qualifiers{"host": "", "test": ""}); err != nil {
 		t.Fatalf("cmdCopy /host /test: %v", err)
 	}
+
 	if !strings.Contains(out.String(), "COPY-I-TEST") {
 		t.Errorf("output = %q, want a /test report", out.String())
 	}
 
 	destVol := s.Volumes["DEST"]
+
 	matches, err := filespec.Glob(destVol, filespec.Spec{Name: "OUT", Type: "TXT"})
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+
 	if len(matches) != 0 {
 		t.Errorf("OUT.TXT matches after /test = %v, want none written", matches)
 	}
@@ -187,10 +208,12 @@ func TestCmdCopyFromHostNormalizesCRLFToLF(t *testing.T) {
 	}
 
 	var out bytes.Buffer
+
 	s.Stdout = &out
 	if err := cmdType(s, []string{"DEST:OUT.TXT"}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdType: %v", err)
 	}
+
 	if got, want := out.String(), "line one\nline two\n"; got != want {
 		t.Errorf("content read back = %q, want %q (CRLF normalized to LF)", got, want)
 	}
@@ -205,10 +228,12 @@ func TestCmdCopyFromHostFileWithNoTrailingNewline(t *testing.T) {
 	}
 
 	var out bytes.Buffer
+
 	s.Stdout = &out
 	if err := cmdType(s, []string{"DEST:OUT.TXT"}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdType: %v", err)
 	}
+
 	if got, want := out.String(), "line one\nline two, no newline\n"; got != want {
 		t.Errorf("content read back = %q, want %q", got, want)
 	}

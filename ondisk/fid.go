@@ -137,6 +137,7 @@ func DecodeFid(b []byte) (Fid, error) {
 	if len(b) < FidSize {
 		return Fid{}, fmt.Errorf("ondisk: Fid requires %d bytes, got %d", FidSize, len(b))
 	}
+
 	return Fid{
 		Num: binary.LittleEndian.Uint16(b[0:2]),
 		Seq: binary.LittleEndian.Uint16(b[2:4]),
@@ -153,5 +154,6 @@ func EncodeFid(f Fid) []byte {
 	binary.LittleEndian.PutUint16(b[2:4], f.Seq)
 	b[4] = f.Rvn
 	b[5] = f.Nmx
+
 	return b
 }

@@ -13,6 +13,7 @@ type Qualifiers map[string]string
 // all, regardless of whether it carries a value.
 func (q Qualifiers) Has(name string) bool {
 	_, ok := q[strings.ToLower(name)]
+
 	return ok
 }
 
@@ -47,9 +48,8 @@ func (q Qualifiers) Value(name string) string {
 // which matters far more often in practice.
 func tokenize(rest string, validQualifiers []string) ([]string, Qualifiers, error) {
 	fields := strings.Fields(rest)
-
-	var args []string
 	quals := make(Qualifiers)
+	args := make([]string, 0, len(fields))
 
 	for _, f := range fields {
 		if strings.HasPrefix(f, "/") {
@@ -57,11 +57,14 @@ func tokenize(rest string, validQualifiers []string) ([]string, Qualifiers, erro
 			if idx := strings.IndexAny(name, ":="); idx != -1 {
 				name, value = name[:idx], name[idx+1:]
 			}
+
 			if name != "" && containsFold(validQualifiers, name) {
 				quals[strings.ToLower(name)] = value
+
 				continue
 			}
 		}
+
 		args = append(args, f)
 	}
 

@@ -28,6 +28,7 @@ func FormatVFCRecord(vfc, text []byte) []byte {
 	out = append(out, vfcLeading(vfc[0])...)
 	out = append(out, text...)
 	out = append(out, vfcTrailing(vfc[1])...)
+
 	return out
 }
 
@@ -78,6 +79,7 @@ func vfcTrailing(vfc1 byte) []byte {
 		for i := 0; i < n; i++ {
 			out = append(out, '\n')
 		}
+
 		return append(out, '\r')
 	}
 

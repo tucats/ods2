@@ -39,6 +39,7 @@ func cmdDifference(s *Session, args []string, quals Qualifiers) error {
 	if err != nil {
 		return fmt.Errorf("difference: %w", err)
 	}
+
 	if len(matches) != 1 {
 		return fmt.Errorf("difference: %s.%s must match exactly one file, matched %d", spec.Name, spec.Type, len(matches))
 	}
@@ -52,6 +53,7 @@ func cmdDifference(s *Session, args []string, quals Qualifiers) error {
 	if err != nil {
 		return fmt.Errorf("difference: %w", err)
 	}
+
 	defer local.Close()
 
 	return diffFiles(s.Stdout, f, local)
@@ -76,6 +78,7 @@ func diffFiles(w io.Writer, f *volume.File, local io.Reader) error {
 	for {
 		rec, vmsErr := r.Next()
 		haveVMS := vmsErr == nil
+
 		if vmsErr != nil && vmsErr != io.EOF {
 			return vmsErr
 		}
@@ -85,22 +88,27 @@ func diffFiles(w io.Writer, f *volume.File, local io.Reader) error {
 		if !haveVMS && !haveLocal {
 			break
 		}
+
 		lineNum++
 
 		var vmsLine string
+
 		if haveVMS {
 			text := rec
 			if isVFC && len(rec) >= vfcSize {
 				text = rec[vfcSize:]
 			}
+
 			vmsLine = string(text)
 		}
 
 		if haveVMS != haveLocal || vmsLine != scanner.Text() {
 			diffs++
+
 			fmt.Fprintf(w, "%%DIFF-I-DIFF, line %d differs\n", lineNum)
 		}
 	}
+
 	if err := scanner.Err(); err != nil {
 		return err
 	}
@@ -110,5 +118,6 @@ func diffFiles(w io.Writer, f *volume.File, local io.Reader) error {
 	} else {
 		fmt.Fprintf(w, "%%DIFF-I-COUNT, %d line(s) differ\n", diffs)
 	}
+	
 	return nil
 }

@@ -26,7 +26,9 @@ func TestCmdCopyToExplicitPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	if string(got) != "line one\nline two\n" {
+
+	want := "line one\nline two\n"
+	if string(got) != want {
 		t.Errorf("copied content = %q, want %q", got, "line one\nline two\n")
 	}
 }
@@ -43,6 +45,7 @@ func TestCmdCopyToDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
+
 	if len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "STREAM.TXT") {
 		t.Fatalf("directory contents = %v, want a single STREAM.TXT... file", entries)
 	}
@@ -69,6 +72,7 @@ func TestCmdCopyQuietSuppressesMessage(t *testing.T) {
 	if err := cmdCopy(s, []string{"STREAM.TXT", outPath}, Qualifiers{"quiet": ""}); err != nil {
 		t.Fatalf("cmdCopy: %v", err)
 	}
+
 	if strings.Contains(out.String(), "COPY-S-COPIED") {
 		t.Errorf("output = %q, want no confirmation message under /quiet", out.String())
 	}
@@ -81,9 +85,11 @@ func TestCmdCopyTestDoesNotWrite(t *testing.T) {
 	if err := cmdCopy(s, []string{"STREAM.TXT", outPath}, Qualifiers{"test": ""}); err != nil {
 		t.Fatalf("cmdCopy: %v", err)
 	}
+
 	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
 		t.Errorf("copy /test created %s, want no file written", outPath)
 	}
+
 	if !strings.Contains(out.String(), "COPY-I-TEST") {
 		t.Errorf("output = %q, want a /test report", out.String())
 	}
@@ -101,6 +107,7 @@ func TestCmdCopyBinaryMatchesSourceBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+
 	if string(got) != "line one\nline two\n" {
 		t.Errorf("binary-copied content = %q, want %q", got, "line one\nline two\n")
 	}
@@ -131,6 +138,7 @@ func TestCopyIntegrationViaExecute(t *testing.T) {
 	if _, err := s.Execute("copy STREAM.TXT " + outPath); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+
 	if _, err := os.Stat(outPath); err != nil {
 		t.Errorf("expected %s to exist: %v", outPath, err)
 	}
@@ -160,7 +168,9 @@ func newSingleFileSession(t *testing.T, name string, rec odstest.FileHeaderFixtu
 	}))
 
 	mfdFid := ondisk.MasterFileDirectoryFid
+
 	const mfdDataLBN = 200
+
 	c.PutBlock(dirTestFileHeaderLBN(mfdFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            mfdFid,
 		FileChar:       ondisk.FchDirectory,
@@ -175,12 +185,15 @@ func newSingleFileSession(t *testing.T, name string, rec odstest.FileHeaderFixtu
 	))
 
 	const dataLBN = 220
+
 	rec.Fid = fileFid
 	rec.MapOffsetWords = 55
+
 	rec.MapBytes = odstest.EncodeExtentFormat2(1, dataLBN)
 	if rec.HighestBlock == 0 {
 		rec.HighestBlock = 1
 	}
+
 	c.PutBlock(dirTestFileHeaderLBN(fileFid.Num), odstest.BuildFileHeaderBytes(t, rec))
 
 	block := make([]byte, ondisk.BlockSize)
@@ -194,8 +207,9 @@ func newSingleFileSession(t *testing.T, name string, rec odstest.FileHeaderFixtu
 
 	s := New()
 	s.Stdout = &bytes.Buffer{}
-	s.Volumes["DUA0"] = vol
-	s.Default.Device = "DUA0"
+	s.Volumes[defaultDeviceName] = vol
+	s.Default.Device = defaultDeviceName
+
 	return s
 }
 
@@ -220,6 +234,7 @@ func TestCmdCopyPreservesTimeWithTimeQualifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
+
 	if !info.ModTime().Equal(wantTime.Time()) {
 		t.Errorf("ModTime = %v, want %v", info.ModTime(), wantTime.Time())
 	}
@@ -246,6 +261,7 @@ func TestCmdCopyWithoutTimeQualifierDoesNotPreserveTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
+
 	if info.ModTime().Equal(oldTime.Time()) {
 		t.Error("ModTime matches the source's 1990 date even without /time -- want the copy's own creation time")
 	}
@@ -277,6 +293,7 @@ func TestCmdCopyIgnoreFallsBackToRawOnCorruptRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+
 	if string(got) != string(raw) {
 		t.Errorf("raw fallback content = %q, want %q", got, raw)
 	}
@@ -308,6 +325,7 @@ func newCopyDirsTestSession(t *testing.T) *Session {
 	nestedFid := ondisk.Fid{Num: 41, Seq: 1}
 
 	const mfdDataLBN = 200
+
 	c.PutBlock(dirTestFileHeaderLBN(mfdFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            mfdFid,
 		FileChar:       ondisk.FchDirectory,
@@ -320,6 +338,7 @@ func newCopyDirsTestSession(t *testing.T) *Session {
 	))
 
 	const subdirDataLBN = 201
+
 	c.PutBlock(dirTestFileHeaderLBN(subdirFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            subdirFid,
 		FileChar:       ondisk.FchDirectory,
@@ -332,7 +351,9 @@ func newCopyDirsTestSession(t *testing.T) *Session {
 	))
 
 	nestedData := []byte("nested content\n")
+
 	const nestedDataLBN = 210
+
 	c.PutBlock(dirTestFileHeaderLBN(nestedFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            nestedFid,
 		Format:         ondisk.RecordFormatStreamLF,
@@ -342,6 +363,7 @@ func newCopyDirsTestSession(t *testing.T) *Session {
 		MapOffsetWords: 55,
 		MapBytes:       odstest.EncodeExtentFormat2(1, nestedDataLBN),
 	}))
+
 	block := make([]byte, ondisk.BlockSize)
 	copy(block, nestedData)
 	c.PutBlock(nestedDataLBN, block)
@@ -353,8 +375,9 @@ func newCopyDirsTestSession(t *testing.T) *Session {
 
 	s := New()
 	s.Stdout = &bytes.Buffer{}
-	s.Volumes["DUA0"] = vol
-	s.Default.Device = "DUA0"
+	s.Volumes[defaultDeviceName] = vol
+	s.Default.Device = defaultDeviceName
+
 	return s
 }
 
@@ -375,6 +398,7 @@ func TestCmdCopyDirsCreatesHostDirectoryAndPreservesHierarchy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+
 	if string(got) != "nested content\n" {
 		t.Errorf("content = %q, want %q", got, "nested content\n")
 	}
@@ -394,6 +418,7 @@ func TestCmdCopyWithoutDirsSkipsDirectoryEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
+
 	if len(entries) != 0 {
 		t.Errorf("dest contents = %v, want none", entries)
 	}
@@ -420,6 +445,7 @@ func TestCmdCopyStreamQualifierPreservesRawBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+
 	if string(got) != string(data) {
 		t.Errorf("content = %q, want exact source bytes %q", got, data)
 	}
@@ -442,6 +468,7 @@ func TestCmdCopyWithoutStreamNormalizesLineEndings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+
 	if want := "one\ntwo\n"; string(got) != want {
 		t.Errorf("content = %q, want normalized %q", got, want)
 	}
@@ -464,6 +491,7 @@ func TestCmdCopyCRLFQualifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+
 	if want := "one\r\ntwo\r\n"; string(got) != want {
 		t.Errorf("content = %q, want %q", got, want)
 	}
@@ -486,6 +514,7 @@ func TestCmdCopyVFCQualifierIsAcceptedNoOp(t *testing.T) {
 	if err := cmdCopy(s, []string{"STREAM.TXT", outPath1}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdCopy: %v", err)
 	}
+
 	if err := cmdCopy(s, []string{"STREAM.TXT", outPath2}, Qualifiers{"vfc": ""}); err != nil {
 		t.Fatalf("cmdCopy with /vfc: %v", err)
 	}
@@ -494,10 +523,12 @@ func TestCmdCopyVFCQualifierIsAcceptedNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+
 	got2, err := os.ReadFile(outPath2)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+
 	if string(got1) != string(got2) {
 		t.Errorf("output with /vfc = %q, want the same as without it: %q", got2, got1)
 	}

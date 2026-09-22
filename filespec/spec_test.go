@@ -46,10 +46,12 @@ func TestSpecString(t *testing.T) {
 
 func TestSpecStringParseRoundTrip(t *testing.T) {
 	original := "DUA0:[FOO.BAR]NAME.TYP;5"
+
 	spec, err := Parse(original, Spec{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
+
 	if got := spec.String(); got != original {
 		t.Errorf("round trip: Parse(%q).String() = %q, want %q", original, got, original)
 	}

@@ -36,18 +36,21 @@ func matchHere(pattern, text string) bool {
 				return true
 			}
 		}
+
 		return false
 
 	case '%':
 		if text == "" {
 			return false
 		}
+
 		return matchHere(pattern[1:], text[1:])
 
 	default:
 		if text == "" || pattern[0] != text[0] {
 			return false
 		}
+
 		return matchHere(pattern[1:], text[1:])
 	}
 }

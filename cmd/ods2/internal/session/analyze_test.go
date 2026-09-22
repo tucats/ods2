@@ -10,16 +10,18 @@ import (
 	"github.com/tucats/ods2/volume"
 )
 
+const defaultDeviceName = "DUA0"
+
 func TestCmdAnalyzeRequiresDiskQualifier(t *testing.T) {
 	s := New()
-	if err := cmdAnalyze(s, []string{"DUA0"}, Qualifiers{}); err == nil {
+	if err := cmdAnalyze(s, []string{defaultDeviceName}, Qualifiers{}); err == nil {
 		t.Fatal("cmdAnalyze without /DISK: want error, got nil")
 	}
 }
 
 func TestCmdAnalyzeUnknownDevice(t *testing.T) {
 	s := New()
-	if err := cmdAnalyze(s, []string{"DUA0"}, Qualifiers{"disk": ""}); err == nil {
+	if err := cmdAnalyze(s, []string{defaultDeviceName}, Qualifiers{"disk": ""}); err == nil {
 		t.Fatal("cmdAnalyze on an unmounted device: want error, got nil")
 	}
 }
@@ -32,9 +34,9 @@ func TestCmdAnalyzeUnknownDevice(t *testing.T) {
 // check runs before either one would ever be touched.
 func TestCmdAnalyzeRejectsMultiDeviceVolume(t *testing.T) {
 	s := New()
-	s.Volumes["DUA0"] = &volume.Volume{Devices: []*volume.Device{{}, {}}}
+	s.Volumes[defaultDeviceName] = &volume.Volume{Devices: []*volume.Device{{}, {}}}
 
-	if err := cmdAnalyze(s, []string{"DUA0"}, Qualifiers{"disk": ""}); err == nil {
+	if err := cmdAnalyze(s, []string{defaultDeviceName}, Qualifiers{"disk": ""}); err == nil {
 		t.Fatal("cmdAnalyze on a multi-device volume: want error, got nil")
 	}
 }
@@ -56,38 +58,47 @@ func newAnalyzeSessionFixture(t *testing.T) (s *Session, key string) {
 	if err := cmdInitialize(s, []string{path, "400", "ANALYZE"}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdInitialize: %v", err)
 	}
-	key = "DUA0"
+
+	key = defaultDeviceName
+
 	if err := cmdMount(s, []string{key, path}, Qualifiers{"write": ""}); err != nil {
 		t.Fatalf("cmdMount /write: %v", err)
 	}
 
 	vol := s.Volumes[key]
+
 	t.Cleanup(func() {
 		for _, dev := range vol.Devices {
 			_ = dev.Container.Close()
 		}
 	})
+
 	dev := vol.Devices[0]
 
 	dir, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	bm, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
 	}
+
 	f, err := vol.CreateFile(dir, "HELLO.TXT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
 	if err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
+
 	if err := f.WriteBlock(1, bytes.Repeat([]byte{0x42}, ondisk.BlockSize)); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -97,6 +108,7 @@ func newAnalyzeSessionFixture(t *testing.T) (s *Session, key string) {
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
@@ -112,6 +124,7 @@ func TestCmdAnalyzeCleanVolumeReportsClean(t *testing.T) {
 	if err := cmdAnalyze(s, []string{key}, Qualifiers{"disk": ""}); err != nil {
 		t.Fatalf("cmdAnalyze: %v", err)
 	}
+
 	if !strings.Contains(out.String(), "ANALYZE-I-CLEAN") {
 		t.Errorf("cmdAnalyze output = %q, want it to report clean", out.String())
 	}
@@ -133,13 +146,16 @@ func TestCmdAnalyzeRepairFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	freeExtent, err := bm.FindFree(1)
 	if err != nil {
 		t.Fatalf("FindFree: %v", err)
 	}
+
 	if err := bm.MarkAllocated(freeExtent); err != nil {
 		t.Fatalf("MarkAllocated: %v", err)
 	}
+
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -147,25 +163,31 @@ func TestCmdAnalyzeRepairFlow(t *testing.T) {
 	out := s.Stdout.(*bytes.Buffer)
 
 	out.Reset()
+
 	if err := cmdAnalyze(s, []string{key}, Qualifiers{"disk": ""}); err != nil {
 		t.Fatalf("cmdAnalyze (report only): %v", err)
 	}
+
 	if !strings.Contains(out.String(), "ANALYZE-W-DISCREP") {
 		t.Errorf("cmdAnalyze output = %q, want it to report a discrepancy", out.String())
 	}
 
 	out.Reset()
+
 	if err := cmdAnalyze(s, []string{key}, Qualifiers{"disk": "", "repair": ""}); err != nil {
 		t.Fatalf("cmdAnalyze /repair: %v", err)
 	}
+
 	if !strings.Contains(out.String(), "ANALYZE-W-DISCREP") || !strings.Contains(out.String(), "repaired") {
 		t.Errorf("cmdAnalyze /repair output = %q, want it to report a repaired discrepancy", out.String())
 	}
 
 	out.Reset()
+	
 	if err := cmdAnalyze(s, []string{key}, Qualifiers{"disk": ""}); err != nil {
 		t.Fatalf("cmdAnalyze (follow-up): %v", err)
 	}
+
 	if !strings.Contains(out.String(), "ANALYZE-I-CLEAN") {
 		t.Errorf("cmdAnalyze follow-up output = %q, want it to report clean", out.String())
 	}

@@ -51,13 +51,16 @@ func buildDirRecordBytes(name string, versions []uint16, fids []Fid) []byte {
 func buildDirBlock(records ...[]byte) []byte {
 	block := make([]byte, BlockSize)
 	offset := 0
+
 	for _, r := range records {
 		copy(block[offset:], r)
 		offset += len(r)
 	}
+
 	if offset+2 <= len(block) {
 		binary.LittleEndian.PutUint16(block[offset:offset+2], 0xFFFF)
 	}
+
 	return block
 }
 
@@ -186,6 +189,7 @@ func TestDecodeDirectoryBlockRecordOverrunsBlock(t *testing.T) {
 	// size (510) — its implied end, 6+510+2 = 518, is past the end of
 	// the 512-byte block.
 	const secondRecordOffset = 6
+
 	binary.LittleEndian.PutUint16(block[secondRecordOffset:secondRecordOffset+2], dirMaxRecordSize)
 
 	if _, err := DecodeDirectoryBlock(block); err == nil {

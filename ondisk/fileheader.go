@@ -139,7 +139,7 @@ const (
 	fhOffExtFid     = 14 // 6 bytes
 	fhOffRecAttr    = 20 // 32 bytes
 	fhOffFileChar   = 52
-	// 2 reserved bytes at offset 56
+	// 2 reserved bytes at offset 56.
 	fhOffMapInUse  = 58
 	fhOffAccMode   = 59
 	fhOffFileOwner = 60 // 4 bytes (Uic)
@@ -147,11 +147,11 @@ const (
 	fhOffBacklink  = 66 // 6 bytes
 	fhOffJournal   = 72
 	fhOffRuActive  = 73
-	// 2 reserved bytes at offset 74
+	// 2 reserved bytes at offset 74.
 	fhOffHighwater = 76
-	// 8 reserved bytes at offset 80
+	// 8 reserved bytes at offset 80.
 	fhOffClassProt = 88 // 20 bytes
-	// 402 bytes of IDENT/map/ACL area at offset 108, decoded elsewhere
+	// 402 bytes of IDENT/map/ACL area at offset 108, decoded elsewhere.
 	fhOffChecksum = 510
 )
 
@@ -198,18 +198,22 @@ func DecodeFileHeader(b []byte) (FileHeader, error) {
 	if err != nil {
 		return FileHeader{}, fmt.Errorf("ondisk: decoding FileHeader.Fid: %w", err)
 	}
+
 	extFid, err := DecodeFid(b[fhOffExtFid:])
 	if err != nil {
 		return FileHeader{}, fmt.Errorf("ondisk: decoding FileHeader.ExtensionFid: %w", err)
 	}
+
 	recAttr, err := DecodeRecAttr(b[fhOffRecAttr:])
 	if err != nil {
 		return FileHeader{}, fmt.Errorf("ondisk: decoding FileHeader.RecordAttributes: %w", err)
 	}
+
 	owner, err := DecodeUic(b[fhOffFileOwner:])
 	if err != nil {
 		return FileHeader{}, fmt.Errorf("ondisk: decoding FileHeader.Owner: %w", err)
 	}
+
 	backlink, err := DecodeFid(b[fhOffBacklink:])
 	if err != nil {
 		return FileHeader{}, fmt.Errorf("ondisk: decoding FileHeader.Backlink: %w", err)
@@ -244,6 +248,7 @@ func DecodeFileHeader(b []byte) (FileHeader, error) {
 		// Unreachable given the length check above.
 		return h, err
 	}
+
 	if sum != h.Checksum {
 		return h, fmt.Errorf("ondisk: file header checksum mismatch: computed %#04x, stored %#04x", sum, h.Checksum)
 	}
@@ -298,20 +303,26 @@ func EncodeFileHeader(h FileHeader, areas FileHeaderAreas) ([]byte, error) {
 	if len(areas.MapBytes)%2 != 0 {
 		return nil, fmt.Errorf("ondisk: FileHeaderAreas.MapBytes has odd length %d", len(areas.MapBytes))
 	}
+
 	if len(areas.AclBytes)%2 != 0 {
 		return nil, fmt.Errorf("ondisk: FileHeaderAreas.AclBytes has odd length %d", len(areas.AclBytes))
 	}
 
 	var identBytes []byte
+
 	identWords := 0
+
 	if areas.Ident != nil {
 		var err error
+
 		identBytes, err = EncodeIdent(*areas.Ident)
 		if err != nil {
 			return nil, fmt.Errorf("ondisk: encoding FileHeader IDENT area: %w", err)
 		}
+
 		identWords = len(identBytes) / 2
 	}
+
 	mapWords := len(areas.MapBytes) / 2
 	aclWords := len(areas.AclBytes) / 2
 
@@ -323,6 +334,7 @@ func EncodeFileHeader(h FileHeader, areas FileHeaderAreas) ([]byte, error) {
 	if endOffsetWords*2 > fhOffChecksum {
 		available := fhOffChecksum - fhVariableAreaStart*2
 		needed := endOffsetWords*2 - fhVariableAreaStart*2
+
 		return nil, fmt.Errorf(
 			"ondisk: FileHeader IDENT+map+ACL areas need %d bytes, only %d available before the checksum",
 			needed, available)
@@ -353,9 +365,11 @@ func EncodeFileHeader(h FileHeader, areas FileHeaderAreas) ([]byte, error) {
 	if len(identBytes) > 0 {
 		copy(b[identOffsetWords*2:identOffsetWords*2+len(identBytes)], identBytes)
 	}
+
 	if len(areas.MapBytes) > 0 {
 		copy(b[mapOffsetWords*2:mapOffsetWords*2+len(areas.MapBytes)], areas.MapBytes)
 	}
+
 	if len(areas.AclBytes) > 0 {
 		copy(b[aclOffsetWords*2:aclOffsetWords*2+len(areas.AclBytes)], areas.AclBytes)
 	}
@@ -365,6 +379,7 @@ func EncodeFileHeader(h FileHeader, areas FileHeaderAreas) ([]byte, error) {
 		// Unreachable given b's fixed length above.
 		return nil, err
 	}
+
 	binary.LittleEndian.PutUint16(b[fhOffChecksum:], sum)
 
 	return b, nil

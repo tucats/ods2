@@ -28,9 +28,11 @@ func Run(r io.Reader, s *session.Session) error {
 		if err != nil {
 			fmt.Fprintf(s.Stdout, "%%ODS2-E-ERROR, %v\n", err)
 		}
+
 		if !keepGoing {
 			return nil
 		}
 	}
+
 	return scanner.Err()
 }

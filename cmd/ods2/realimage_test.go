@@ -33,6 +33,7 @@ func TestRealImagePlain(t *testing.T) {
 	if path == "" {
 		t.Skip("ODS2_TEST_IMAGE not set; skipping real-image validation")
 	}
+
 	validateRealImage(t, path)
 }
 
@@ -41,6 +42,7 @@ func TestRealImageRawCD(t *testing.T) {
 	if path == "" {
 		t.Skip("ODS2_TEST_IMAGE_RAWCD not set; skipping real-image validation")
 	}
+
 	validateRealImage(t, path)
 }
 
@@ -62,6 +64,7 @@ func validateRealImage(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("volume.Mount: %v", err)
 	}
+
 	t.Logf("mounted volume label: %q", vol.Devices[0].Home.VolumeName)
 
 	dir, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
@@ -73,6 +76,7 @@ func validateRealImage(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) == 0 {
 		t.Fatal("master file directory is empty; expected at least the reserved system files")
 	}
@@ -84,14 +88,17 @@ func validateRealImage(t *testing.T, path string) {
 		"000000.DIR": ondisk.MasterFileDirectoryFid,
 	}
 	found := make(map[string]bool)
+
 	for _, e := range entries {
 		if want, ok := wantReserved[e.Name]; ok {
 			if e.Fid.Number() != want.Number() {
 				t.Errorf("%s has file number %d, want %d", e.Name, e.Fid.Number(), want.Number())
 			}
+
 			found[e.Name] = true
 		}
 	}
+
 	for name := range wantReserved {
 		if !found[name] {
 			t.Errorf("master file directory is missing the reserved file %s", name)
@@ -105,6 +112,7 @@ func validateRealImage(t *testing.T, path string) {
 		if err != nil {
 			t.Fatalf("OpenFID(%s): %v", e.Name, err)
 		}
+
 		if f.Header.IsDirectory() {
 			continue
 		}
@@ -113,19 +121,26 @@ func validateRealImage(t *testing.T, path string) {
 		if err != nil {
 			t.Fatalf("NewReader(%s): %v", e.Name, err)
 		}
+
 		records := 0
+
 		for {
 			_, err := r.Next()
 			if err == io.EOF {
 				break
 			}
+
 			if err != nil {
 				t.Fatalf("reading %s: %v", e.Name, err)
 			}
+
 			records++
 		}
+
 		t.Logf("read %s (%v format): %d record(s)", e.Name, f.Header.RecordAttributes.Format, records)
+
 		return
 	}
+
 	t.Fatal("found no ordinary (non-directory) file in the master file directory to read")
 }

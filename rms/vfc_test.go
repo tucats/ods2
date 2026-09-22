@@ -41,6 +41,7 @@ func TestFormatVFCRecord(t *testing.T) {
 func TestFormatVFCRecordPassesThroughForNonStandardVfcSize(t *testing.T) {
 	text := []byte("TEXT")
 	got := FormatVFCRecord([]byte{1, 2, 3}, text) // VfcSize 3: not the standard case
+
 	if !bytes.Equal(got, text) {
 		t.Errorf("FormatVFCRecord with 3-byte vfc = %q, want %q (passed through unchanged)", got, text)
 	}
@@ -51,6 +52,7 @@ func TestVfcTrailingEndOfRecordChar(t *testing.T) {
 	// character. 0x81 = 1000 0001 -> character 0x01.
 	got := vfcTrailing(0x81)
 	want := []byte{0x01}
+
 	if !bytes.Equal(got, want) {
 		t.Errorf("vfcTrailing(0x81) = %v, want %v", got, want)
 	}

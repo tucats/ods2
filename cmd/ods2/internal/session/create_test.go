@@ -28,10 +28,12 @@ func newCreateTestSession(t *testing.T) *Session {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "create.dsk")
+
 	c, err := diskimage.Create(path, 600)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	t.Cleanup(func() { _ = c.Close() })
 
 	if err := volume.Initialize(c, volume.InitializeOptions{Label: "CREVOL"}); err != nil {
@@ -44,10 +46,12 @@ func newCreateTestSession(t *testing.T) *Session {
 	}
 
 	dev := vol.Devices[0]
+
 	bm, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
@@ -65,20 +69,25 @@ func newCreateTestSession(t *testing.T) *Session {
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
 
 	s := New()
+
 	var out bytes.Buffer
+
 	s.Stdout = &out
 	s.Volumes["DUA0"] = vol
-	s.Default.Device = "DUA0"
+	s.Default.Device = defaultDeviceName
+
 	return s
 }
 
 func TestCmdCreateDirectoryAtTopLevel(t *testing.T) {
 	s := newCreateTestSession(t)
+
 	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
@@ -92,6 +101,7 @@ func TestCmdCreateDirectoryAtTopLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup(NEWDIR.DIR): %v", err)
 	}
+
 	if entry.Version != 1 {
 		t.Errorf("NEWDIR.DIR version = %d, want 1", entry.Version)
 	}
@@ -100,9 +110,11 @@ func TestCmdCreateDirectoryAtTopLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDirectory(NEWDIR.DIR): %v", err)
 	}
+
 	if got := newDir.Header.RecordAttributes.VersionLimit; got != 0 {
 		t.Errorf("NEWDIR.DIR's VersionLimit = %d, want 0 (inherited from the MFD's own default)", got)
 	}
+
 	if !newDir.Header.IsDirectory() {
 		t.Error("NEWDIR.DIR's header doesn't have the directory characteristic set")
 	}
@@ -124,14 +136,17 @@ func TestCmdCreateDirectoryExplicitVersionOverridesInherited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	entry, err := mfd.Lookup("OVERRIDE.DIR", 0)
 	if err != nil {
 		t.Fatalf("Lookup(OVERRIDE.DIR): %v", err)
 	}
+
 	newDir, err := s.Volumes["DUA0"].OpenDirectory(entry.Fid)
 	if err != nil {
 		t.Fatalf("OpenDirectory(OVERRIDE.DIR): %v", err)
 	}
+
 	if got := newDir.Header.RecordAttributes.VersionLimit; got != 9 {
 		t.Errorf("VersionLimit = %d, want 9 (explicit /VERSION override)", got)
 	}
@@ -150,6 +165,7 @@ func TestCmdCreateDirectoryInheritsParentVersionLimit(t *testing.T) {
 	if err := cmdCreate(s, []string{"directory", "[VERPARENT]"}, Qualifiers{"version": "4"}); err != nil {
 		t.Fatalf("cmdCreate (parent): %v", err)
 	}
+
 	if err := cmdCreate(s, []string{"directory", "[VERPARENT.CHILD]"}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdCreate (child): %v", err)
 	}
@@ -158,22 +174,27 @@ func TestCmdCreateDirectoryInheritsParentVersionLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	parentEntry, err := mfd.Lookup("VERPARENT.DIR", 0)
 	if err != nil {
 		t.Fatalf("Lookup(VERPARENT.DIR): %v", err)
 	}
+
 	parentDir, err := s.Volumes["DUA0"].OpenDirectory(parentEntry.Fid)
 	if err != nil {
 		t.Fatalf("OpenDirectory(VERPARENT.DIR): %v", err)
 	}
+
 	childEntry, err := parentDir.Lookup("CHILD.DIR", 0)
 	if err != nil {
 		t.Fatalf("Lookup(CHILD.DIR): %v", err)
 	}
+
 	childDir, err := s.Volumes["DUA0"].OpenDirectory(childEntry.Fid)
 	if err != nil {
 		t.Fatalf("OpenDirectory(CHILD.DIR): %v", err)
 	}
+
 	if got := childDir.Header.RecordAttributes.VersionLimit; got != 4 {
 		t.Errorf("CHILD.DIR's VersionLimit = %d, want 4 (inherited from VERPARENT.DIR)", got)
 	}
@@ -190,14 +211,17 @@ func TestCmdCreateDirectoryNested(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	existingEntry, err := mfd.Lookup("EXISTING.DIR", 0)
 	if err != nil {
 		t.Fatalf("Lookup(EXISTING.DIR): %v", err)
 	}
+
 	existingDir, err := s.Volumes["DUA0"].OpenDirectory(existingEntry.Fid)
 	if err != nil {
 		t.Fatalf("OpenDirectory(EXISTING.DIR): %v", err)
 	}
+
 	if _, err := existingDir.Lookup("CHILD.DIR", 0); err != nil {
 		t.Errorf("Lookup(CHILD.DIR) inside EXISTING.DIR: %v", err)
 	}
@@ -264,14 +288,17 @@ func TestCreateDirectoryIntegrationViaExecute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	entry, err := mfd.Lookup("VIAEXEC.DIR", 0)
 	if err != nil {
 		t.Fatalf("Lookup(VIAEXEC.DIR): %v", err)
 	}
+
 	newDir, err := s.Volumes["DUA0"].OpenDirectory(entry.Fid)
 	if err != nil {
 		t.Fatalf("OpenDirectory(VIAEXEC.DIR): %v", err)
 	}
+	
 	if got := newDir.Header.RecordAttributes.VersionLimit; got != 2 {
 		t.Errorf("VersionLimit = %d, want 2", got)
 	}

@@ -22,6 +22,7 @@ const (
 
 func dirTestFileHeaderLBN(fileNum uint16) uint32 {
 	idxblk := uint32(fileNum) - 1 + dirTestIdxBitmapVBN + dirTestIdxBitmapSize
+	
 	return dirTestIdxBitmapLBN + (idxblk - 1)
 }
 
@@ -46,7 +47,9 @@ func newDirTestSession(t *testing.T) (*Session, *bytes.Buffer) {
 	}))
 
 	mfdFid := ondisk.MasterFileDirectoryFid
+
 	const mfdDataLBN = 200
+
 	c.PutBlock(dirTestFileHeaderLBN(mfdFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            mfdFid,
 		FileChar:       ondisk.FchDirectory,
@@ -76,10 +79,12 @@ func newDirTestSession(t *testing.T) (*Session, *bytes.Buffer) {
 	}
 
 	s := New()
+
 	var out bytes.Buffer
+
 	s.Stdout = &out
 	s.Volumes["DUA0"] = vol
-	s.Default.Device = "DUA0"
+	s.Default.Device = defaultDeviceName
 
 	return s, &out
 }
@@ -95,9 +100,11 @@ func TestCmdDirectoryBasic(t *testing.T) {
 	if !strings.Contains(got, "README.TXT;1") {
 		t.Errorf("output = %q, want it to contain %q", got, "README.TXT;1")
 	}
+
 	if !strings.Contains(got, "DATA.DAT;1") {
 		t.Errorf("output = %q, want it to contain %q", got, "DATA.DAT;1")
 	}
+
 	if !strings.Contains(got, "Total of 2 file(s)") {
 		t.Errorf("output = %q, want a total-files summary", got)
 	}
@@ -114,9 +121,11 @@ func TestCmdDirectorySpecificFile(t *testing.T) {
 	if !strings.Contains(got, "README.TXT;1") {
 		t.Errorf("output = %q, want it to contain %q", got, "README.TXT;1")
 	}
+
 	if strings.Contains(got, "DATA.DAT") {
 		t.Errorf("output = %q, want it to NOT contain DATA.DAT", got)
 	}
+
 	if !strings.Contains(got, "Total of 1 file(s)") {
 		t.Errorf("output = %q, want a total of 1 file", got)
 	}
@@ -133,6 +142,7 @@ func TestCmdDirectorySizeQualifier(t *testing.T) {
 	if !strings.Contains(got, fmt.Sprintf("%5d", 3)) {
 		t.Errorf("output = %q, want it to show the file's block count (3, right-justified in a 5-wide field)", got)
 	}
+
 	if !strings.Contains(got, "3 block(s)") {
 		t.Errorf("output = %q, want a total-blocks summary", got)
 	}
@@ -163,6 +173,7 @@ func TestCmdDirectoryFullImpliesOthers(t *testing.T) {
 	if !strings.Contains(got, fmt.Sprintf("%5d", 3)) { // size
 		t.Errorf("output = %q, want /full to imply /size", got)
 	}
+
 	if !strings.Contains(got, "(20,1,") { // file id
 		t.Errorf("output = %q, want /full to imply /file", got)
 	}
@@ -174,6 +185,7 @@ func TestCmdDirectoryNoMatches(t *testing.T) {
 	if err := cmdDirectory(s, []string{"NOSUCHFILE.TXT"}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdDirectory: %v", err)
 	}
+
 	if !strings.Contains(out.String(), "Total of 0 file(s)") {
 		t.Errorf("output = %q, want a total of 0 files", out.String())
 	}
@@ -194,6 +206,7 @@ func TestDirectoryIntegrationViaExecute(t *testing.T) {
 	if _, err := s.Execute("dir README.TXT /size"); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	
 	if !strings.Contains(out.String(), "README.TXT;1") {
 		t.Errorf("output = %q, want it to contain the file", out.String())
 	}

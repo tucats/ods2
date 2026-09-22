@@ -25,10 +25,12 @@ func newDeleteTestSession(t *testing.T) *Session {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "delete.dsk")
+
 	c, err := diskimage.Create(path, 600)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	t.Cleanup(func() { _ = c.Close() })
 
 	if err := volume.Initialize(c, volume.InitializeOptions{Label: "DELVOL"}); err != nil {
@@ -41,10 +43,12 @@ func newDeleteTestSession(t *testing.T) *Session {
 	}
 
 	dev := vol.Devices[0]
+
 	bm, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
@@ -62,15 +66,19 @@ func newDeleteTestSession(t *testing.T) *Session {
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
 
 	s := New()
+
 	var out bytes.Buffer
+
 	s.Stdout = &out
 	s.Volumes["DUA0"] = vol
-	s.Default.Device = "DUA0"
+	s.Default.Device = defaultDeviceName
+
 	return s
 }
 
@@ -89,9 +97,11 @@ func createDeleteTestFile(t *testing.T, vol *volume.Volume, dir *volume.Director
 	content := "content of " + name
 	block := make([]byte, ondisk.BlockSize)
 	copy(block, content)
+
 	if err := f.WriteBlock(1, block); err != nil {
 		t.Fatalf("WriteBlock(%s): %v", name, err)
 	}
+
 	if err := f.CloseWithFinalByte(uint16(len(content))); err != nil {
 		t.Fatalf("Close(%s): %v", name, err)
 	}
@@ -107,15 +117,18 @@ func dirEntryNames(t *testing.T, dir *volume.Directory) []string {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	names := make([]string, len(entries))
 	for i, e := range entries {
 		names[i] = fmt.Sprintf("%s;%d", e.Name, e.Version)
 	}
+
 	return names
 }
 
 func TestCmdDeleteSpecificVersion(t *testing.T) {
 	s := newDeleteTestSession(t)
+
 	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
@@ -131,6 +144,7 @@ func TestCmdDeleteSpecificVersion(t *testing.T) {
 			t.Errorf("directory entries = %v, want %s still present", names, want)
 		}
 	}
+
 	if contains(names, "FOO.TXT;1") {
 		t.Errorf("directory entries = %v, want FOO.TXT;1 removed", names)
 	}
@@ -143,6 +157,7 @@ func TestCmdDeleteSpecificVersion(t *testing.T) {
 
 func TestCmdDeleteAllVersionsOfAName(t *testing.T) {
 	s := newDeleteTestSession(t)
+
 	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
@@ -156,6 +171,7 @@ func TestCmdDeleteAllVersionsOfAName(t *testing.T) {
 	if contains(names, "FOO.TXT;1") || contains(names, "FOO.TXT;2") {
 		t.Errorf("directory entries = %v, want every FOO.TXT version removed", names)
 	}
+
 	for _, want := range []string{"BAR.TXT;1", "BAR.TXT;2", "BAZ.TXT;1"} {
 		if !contains(names, want) {
 			t.Errorf("directory entries = %v, want %s untouched", names, want)
@@ -165,6 +181,7 @@ func TestCmdDeleteAllVersionsOfAName(t *testing.T) {
 
 func TestCmdDeleteWildcardNameAcrossMultipleFiles(t *testing.T) {
 	s := newDeleteTestSession(t)
+
 	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
@@ -178,6 +195,7 @@ func TestCmdDeleteWildcardNameAcrossMultipleFiles(t *testing.T) {
 	if contains(names, "FOO.TXT;2") || contains(names, "BAR.TXT;2") {
 		t.Errorf("directory entries = %v, want every ;2 version removed", names)
 	}
+
 	for _, want := range []string{"FOO.TXT;1", "BAR.TXT;1", "BAZ.TXT;1"} {
 		if !contains(names, want) {
 			t.Errorf("directory entries = %v, want %s untouched", names, want)
@@ -187,10 +205,12 @@ func TestCmdDeleteWildcardNameAcrossMultipleFiles(t *testing.T) {
 
 func TestCmdDeleteWithoutVersionIsRejected(t *testing.T) {
 	s := newDeleteTestSession(t)
+
 	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	before := dirEntryNames(t, mfd)
 
 	if err := cmdDelete(s, []string{"FOO.TXT"}, Qualifiers{}); err == nil {
@@ -241,10 +261,12 @@ func TestCmdDeleteReclaimsStorageForReuse(t *testing.T) {
 	// state genuinely reached disk, not just this process's in-memory
 	// cache.
 	dev := vol.Devices[0]
+
 	ib, err := volume.OpenIndexBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	if _, err := ib.FindFreeSlot(); err != nil {
 		t.Errorf("FindFreeSlot after delete: %v (former header slot not reclaimed)", err)
 	}
@@ -255,10 +277,12 @@ func TestCmdDeleteReclaimsStorageForReuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
 	}
+
 	mfd, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	createDeleteTestFile(t, vol, mfd, "NEW.TXT", bm, ib)
 
 	names := dirEntryNames(t, mfd)
@@ -269,6 +293,7 @@ func TestCmdDeleteReclaimsStorageForReuse(t *testing.T) {
 
 func TestDeleteIntegrationViaExecute(t *testing.T) {
 	s := newDeleteTestSession(t)
+
 	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
@@ -290,6 +315,7 @@ func contains(list []string, want string) bool {
 			return true
 		}
 	}
+	
 	return false
 }
 
@@ -297,10 +323,12 @@ func equalSets(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
+
 	for _, item := range a {
 		if !contains(b, item) {
 			return false
 		}
 	}
+
 	return true
 }

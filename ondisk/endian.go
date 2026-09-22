@@ -28,6 +28,7 @@ import "encoding/binary"
 func decodeSwappedLongword(b []byte) uint32 {
 	firstWord := binary.LittleEndian.Uint16(b[0:2])
 	secondWord := binary.LittleEndian.Uint16(b[2:4])
+
 	return uint32(firstWord)<<16 | uint32(secondWord)
 }
 

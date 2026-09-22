@@ -80,11 +80,13 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 	if err != nil {
 		return fmt.Errorf("copy: %w", err)
 	}
+
 	if len(matches) == 0 {
 		return fmt.Errorf("copy: %s.%s not found", spec.Name, spec.Type)
 	}
 
 	dest := args[1]
+
 	destVol, destSpec, toVolume, err := volumeDestination(s, dest)
 	if err != nil {
 		return fmt.Errorf("copy: %w", err)
@@ -100,6 +102,7 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 		stream:     quals.Has("stream"),
 		lineEnding: lfLineEnding,
 	}
+
 	if quals.Has("crlf") {
 		opts.lineEnding = crlfLineEnding
 	}
@@ -114,9 +117,12 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 	// bitmap caches) are resolved once, up front, rather than once per
 	// matched file — the same directory receives every file this command
 	// copies. Skipped entirely under /TEST, which never actually writes.
-	var destDir *volume.Directory
-	var destBm *volume.Bitmap
-	var destIb *volume.IndexBitmap
+	var (
+		destDir *volume.Directory
+		destBm  *volume.Bitmap
+		destIb  *volume.IndexBitmap
+	)
+
 	if toVolume && !test {
 		destDir, destBm, destIb, err = resolveVolumeDest(destVol, destSpec)
 		if err != nil {
@@ -138,9 +144,11 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 			if toVolume || !dirs {
 				continue
 			}
+			
 			if err := copyDirEntry(s, dest, m, sourceName, test, verbose, quiet); err != nil {
 				return err
 			}
+
 			continue
 		}
 
@@ -150,8 +158,10 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 
 			if test {
 				fmt.Fprintf(s.Stdout, "%%COPY-I-TEST, would copy %s to %s\n", sourceName, destName)
+
 				continue
 			}
+
 			if verbose {
 				fmt.Fprintf(s.Stdout, "%%COPY-I-COPYING, copying %s to %s\n", sourceName, destName)
 			}
@@ -160,6 +170,7 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 			if err != nil {
 				return fmt.Errorf("copy: %s: %w", sourceName, err)
 			}
+
 			version, err := copyOneFileToVolume(destVol, destDir, destBm, destIb, name, typ, src, opts.binary)
 			if err != nil {
 				return fmt.Errorf("copy: %s: %w", sourceName, err)
@@ -169,6 +180,7 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 				destVersion := (filespec.Spec{Device: destSpec.Device, Dirs: destSpec.Dirs, Name: name, Type: typ, Version: fmt.Sprint(version)}).String()
 				fmt.Fprintf(s.Stdout, "%%COPY-S-COPIED, %s copied to %s\n", sourceName, destVersion)
 			}
+
 			continue
 		}
 
@@ -176,6 +188,7 @@ func cmdCopy(s *Session, args []string, quals Qualifiers) error {
 
 		if test {
 			fmt.Fprintf(s.Stdout, "%%COPY-I-TEST, would copy %s to %s\n", sourceName, outPath)
+
 			continue
 		}
 
@@ -232,6 +245,7 @@ func volumeDestination(s *Session, dest string) (vol *volume.Volume, destSpec fi
 	if err != nil {
 		return nil, filespec.Spec{}, false, err
 	}
+
 	return vol, destSpec, true, nil
 }
 
@@ -246,6 +260,7 @@ func destAcceptsMultiple(dest string, destSpec filespec.Spec, toVolume bool) boo
 	if toVolume {
 		return (destSpec.Name == "" && destSpec.Type == "") || strings.ContainsAny(destSpec.Name+destSpec.Type, "*%")
 	}
+
 	return destIsDirectory(dest) || strings.Contains(filepath.Base(dest), "*")
 }
 
@@ -262,9 +277,11 @@ func volumeDestName(destSpec filespec.Spec, m filespec.Match) (name, typ string)
 	if destSpec.Name != "" && destSpec.Name != "*" && destSpec.Name != "%" {
 		name = destSpec.Name
 	}
+
 	if destSpec.Type != "" && destSpec.Type != "*" && destSpec.Type != "%" {
 		typ = destSpec.Type
 	}
+
 	return name, typ
 }
 
@@ -277,14 +294,17 @@ func resolveVolumeDest(destVol *volume.Volume, destSpec filespec.Spec) (*volume.
 	if err != nil {
 		return nil, nil, nil, err
 	}
+
 	destBm, err := destDir.Device.Bitmap()
 	if err != nil {
 		return nil, nil, nil, err
 	}
+
 	destIb, err := destDir.Device.IndexBitmap()
 	if err != nil {
 		return nil, nil, nil, err
 	}
+
 	return destDir, destBm, destIb, nil
 }
 
@@ -310,6 +330,7 @@ func cmdCopyFromHost(s *Session, args []string, quals Qualifiers) error {
 	if err != nil {
 		return fmt.Errorf("copy: %w", err)
 	}
+
 	if info.IsDir() {
 		return fmt.Errorf("copy: %s: is a directory, not a file", hostPath)
 	}
@@ -318,6 +339,7 @@ func cmdCopyFromHost(s *Session, args []string, quals Qualifiers) error {
 	if err != nil {
 		return fmt.Errorf("copy: %w", err)
 	}
+
 	if !toVolume {
 		return fmt.Errorf("copy: /host requires destination to name a location on a mounted volume (device:[dir]name.type)")
 	}
@@ -329,8 +351,10 @@ func cmdCopyFromHost(s *Session, args []string, quals Qualifiers) error {
 	test := quals.Has("test")
 	if test {
 		fmt.Fprintf(s.Stdout, "%%COPY-I-TEST, would copy %s to %s\n", hostPath, destName)
+
 		return nil
 	}
+
 	if quals.Has("verbose") {
 		fmt.Fprintf(s.Stdout, "%%COPY-I-COPYING, copying %s to %s\n", hostPath, destName)
 	}
@@ -355,6 +379,7 @@ func cmdCopyFromHost(s *Session, args []string, quals Qualifiers) error {
 		destVersion := (filespec.Spec{Device: destSpec.Device, Dirs: destSpec.Dirs, Name: name, Type: typ, Version: fmt.Sprint(version)}).String()
 		fmt.Fprintf(s.Stdout, "%%COPY-S-COPIED, %s copied to %s\n", hostPath, destVersion)
 	}
+
 	return nil
 }
 
@@ -381,6 +406,7 @@ func hostBaseNameType(path string) (name, typ string) {
 	if idx := strings.LastIndexByte(base, '.'); idx != -1 {
 		return strings.ToUpper(base[:idx]), strings.ToUpper(base[idx+1:])
 	}
+
 	return strings.ToUpper(base), ""
 }
 
@@ -392,17 +418,22 @@ func copyDirEntry(s *Session, dest string, m filespec.Match, sourceName string, 
 
 	if test {
 		fmt.Fprintf(s.Stdout, "%%COPY-I-TEST, would create directory for %s at %s\n", sourceName, dirPath)
+
 		return nil
 	}
+
 	if verbose {
 		fmt.Fprintf(s.Stdout, "%%COPY-I-COPYING, creating directory %s for %s\n", dirPath, sourceName)
 	}
+
 	if err := os.MkdirAll(dirPath, 0o755); err != nil {
 		return fmt.Errorf("copy: creating directory for %s: %w", sourceName, err)
 	}
+
 	if !quiet {
 		fmt.Fprintf(s.Stdout, "%%COPY-S-COPIED, %s materialized as directory %s\n", sourceName, dirPath)
 	}
+
 	return nil
 }
 
@@ -415,6 +446,7 @@ func hostDirPath(dest string, m filespec.Match) string {
 	parts = append(parts, dest)
 	parts = append(parts, m.Dirs...)
 	parts = append(parts, m.Name)
+
 	return filepath.Join(parts...)
 }
 
@@ -425,7 +457,9 @@ func preserveFileTime(outPath string, f *volume.File) error {
 	if err != nil {
 		return err
 	}
+
 	t := ident.RevisionDate.Time()
+
 	return os.Chtimes(outPath, t, t)
 }
 
@@ -433,6 +467,7 @@ func preserveFileTime(outPath string, f *volume.File) error {
 // directory.
 func destIsDirectory(dest string) bool {
 	info, err := os.Stat(dest)
+
 	return err == nil && info.IsDir()
 }
 
@@ -458,8 +493,10 @@ func resolveDestination(dest string, m filespec.Match, delim byte, preserveDirs 
 			parts = append(parts, dest)
 			parts = append(parts, m.Dirs...)
 			parts = append(parts, filename)
+
 			return filepath.Join(parts...)
 		}
+
 		return filepath.Join(dest, filename)
 	}
 
@@ -475,6 +512,7 @@ func resolveDestination(dest string, m filespec.Match, delim byte, preserveDirs 
 	if namePart == "*" {
 		namePart = m.Name
 	}
+
 	if typePart == "*" || typePart == "" {
 		typePart = m.Type
 	}
@@ -543,11 +581,14 @@ func copyOneFile(vol *volume.Volume, m filespec.Match, outPath string, opts copy
 		if _, seekErr := out.Seek(0, io.SeekStart); seekErr != nil {
 			return f, seekErr
 		}
+
 		if truncErr := out.Truncate(0); truncErr != nil {
 			return f, truncErr
 		}
+
 		return f, copyBinary(out, f)
 	}
+
 	return f, err
 }
 
@@ -583,6 +624,7 @@ func copyOneFileToVolume(destVol *volume.Volume, destDir *volume.Directory, dest
 	} else {
 		err = copyRecordsToVolume(dst, src)
 	}
+
 	if err != nil {
 		return 0, fmt.Errorf("writing %s: %w", fullName, err)
 	}
@@ -596,6 +638,7 @@ func copyOneFileToVolume(destVol *volume.Volume, destDir *volume.Directory, dest
 	if err != nil {
 		return 0, fmt.Errorf("looking up newly created %s: %w", fullName, err)
 	}
+
 	return entry.Version, nil
 }
 
@@ -626,6 +669,7 @@ func copyHostFileToVolume(destVol *volume.Volume, destDir *volume.Directory, des
 	} else {
 		err = copyHostRecordsToVolume(dst, src)
 	}
+
 	if err != nil {
 		return 0, fmt.Errorf("writing %s: %w", fullName, err)
 	}
@@ -634,6 +678,7 @@ func copyHostFileToVolume(destVol *volume.Volume, destDir *volume.Directory, des
 	if err != nil {
 		return 0, fmt.Errorf("looking up newly created %s: %w", fullName, err)
 	}
+
 	return entry.Version, nil
 }
 
@@ -653,12 +698,15 @@ func copyHostRawToVolume(dst *volume.File, src io.Reader, size int64) error {
 		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
 			return err
 		}
+
 		for i := n; i < len(buf); i++ {
 			buf[i] = 0
 		}
+
 		if err := dst.WriteBlock(vbn, buf); err != nil {
 			return err
 		}
+
 		remaining -= int64(n)
 	}
 
@@ -680,6 +728,7 @@ func copyHostRecordsToVolume(dst *volume.File, src io.Reader) error {
 	}
 
 	reader := bufio.NewReader(src)
+
 	for {
 		line, readErr := reader.ReadString('\n')
 		if len(line) > 0 {
@@ -688,10 +737,12 @@ func copyHostRecordsToVolume(dst *volume.File, src io.Reader) error {
 				return err
 			}
 		}
+
 		if readErr != nil {
 			if readErr == io.EOF {
 				break
 			}
+
 			return readErr
 		}
 	}
@@ -713,9 +764,11 @@ func copyRawToVolume(dst, src *volume.File) error {
 		if err := src.ReadBlock(vbn, buf); err != nil {
 			return err
 		}
+
 		if err := dst.WriteBlock(vbn, buf); err != nil {
 			return err
 		}
+
 		remaining -= int64(len(buf))
 	}
 
@@ -738,6 +791,7 @@ func copyRecordsToVolume(dst, src *volume.File) error {
 	if err := writeRecords(lw, src, lfLineEnding); err != nil {
 		return err
 	}
+
 	if len(lw.buf) > 0 {
 		// A trailing "line" with no terminating '\n' at all — possible
 		// when src's own last record has no natural terminator (a VFC
@@ -768,13 +822,17 @@ func (l *lineSplitWriter) Write(p []byte) (int, error) {
 	for _, b := range p {
 		if b != '\n' {
 			l.buf = append(l.buf, b)
+
 			continue
 		}
+
 		if err := l.put(l.buf); err != nil {
 			return 0, err
 		}
+
 		l.buf = l.buf[:0]
 	}
+
 	return len(p), nil
 }
 
@@ -805,9 +863,11 @@ func copyBinary(out *os.File, f *volume.File) error {
 		if n > remaining {
 			n = remaining
 		}
+
 		if _, err := out.Write(buf[:n]); err != nil {
 			return err
 		}
+
 		remaining -= n
 	}
 

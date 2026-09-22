@@ -47,6 +47,7 @@ func TestMain(m *testing.M) {
 	build := exec.Command("go", "build", "-o", binaryPath, ".")
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
+
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "building ods2 for integration tests:", err)
 		os.Exit(1)
@@ -65,6 +66,7 @@ const (
 
 func testFileHeaderLBN(fileNum uint16) uint32 {
 	idxblk := uint32(fileNum) - 1 + testIdxBitmapVBN + testIdxBitmapSize
+
 	return testIdxBitmapLBN + (idxblk - 1)
 }
 
@@ -93,7 +95,9 @@ func buildTestImage(t *testing.T) string {
 	fid := func(n uint16) ondisk.Fid { return ondisk.Fid{Num: n, Seq: 1} }
 
 	mfdFid := ondisk.MasterFileDirectoryFid
+
 	const mfdDataLBN = 200
+
 	c.PutBlock(testFileHeaderLBN(mfdFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid: mfdFid, FileChar: ondisk.FchDirectory, HighestBlock: 1,
 		MapOffsetWords: 55, MapBytes: odstest.EncodeExtentFormat2(1, mfdDataLBN),
@@ -104,19 +108,26 @@ func buildTestImage(t *testing.T) string {
 	))
 
 	readmeData := []byte("Hello from ODS2!\nSecond line.\n")
+
 	const readmeLBN = 210
+
 	c.PutBlock(testFileHeaderLBN(20), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid: fid(20), Format: ondisk.RecordFormatStreamLF,
 		HighestBlock: 1, EndOfFileBlock: 1, FirstFreeByte: uint16(len(readmeData)),
 		MapOffsetWords: 55, MapBytes: odstest.EncodeExtentFormat2(1, readmeLBN),
 	}))
+
 	readmeBlock := make([]byte, ondisk.BlockSize)
 	copy(readmeBlock, readmeData)
 	c.PutBlock(readmeLBN, readmeBlock)
 
 	nestedData := []byte("Nested content.\n")
-	const nestedLBN = 211
-	const subdirDataLBN = 201
+
+	const (
+		nestedLBN     = 211
+		subdirDataLBN = 201
+	)
+
 	c.PutBlock(testFileHeaderLBN(10), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid: fid(10), FileChar: ondisk.FchDirectory, HighestBlock: 1,
 		MapOffsetWords: 55, MapBytes: odstest.EncodeExtentFormat2(1, subdirDataLBN),
@@ -129,16 +140,19 @@ func buildTestImage(t *testing.T) string {
 		HighestBlock: 1, EndOfFileBlock: 1, FirstFreeByte: uint16(len(nestedData)),
 		MapOffsetWords: 55, MapBytes: odstest.EncodeExtentFormat2(1, nestedLBN),
 	}))
+
 	nestedBlock := make([]byte, ondisk.BlockSize)
 	copy(nestedBlock, nestedData)
 	c.PutBlock(nestedLBN, nestedBlock)
 
 	buf := make([]byte, 0, int(c.Blocks())*ondisk.BlockSize)
 	block := make([]byte, ondisk.BlockSize)
+
 	for i := uint32(0); i < c.Blocks(); i++ {
 		if err := c.ReadBlock(i, block); err != nil {
 			t.Fatalf("ReadBlock(%d): %v", i, err)
 		}
+
 		buf = append(buf, block...)
 	}
 
@@ -146,6 +160,7 @@ func buildTestImage(t *testing.T) string {
 	if err := os.WriteFile(path, buf, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+
 	return path
 }
 
@@ -153,14 +168,18 @@ func buildTestImage(t *testing.T) string {
 // stdout+stderr.
 func run(t *testing.T, stdin string, args ...string) (string, error) {
 	t.Helper()
+
 	cmd := exec.Command(binaryPath, args...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
+
 	var out bytes.Buffer
+
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
+
 	return out.String(), err
 }
 
@@ -171,6 +190,7 @@ func TestIntegrationOneShotDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ods2 dir: %v\noutput:\n%s", err, out)
 	}
+	
 	if !strings.Contains(out, "README.TXT;1") || !strings.Contains(out, "SUBDIR.DIR;1") {
 		t.Errorf("output = %q, want it to list both top-level entries", out)
 	}
@@ -183,6 +203,7 @@ func TestIntegrationOneShotDirectorySubdirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ods2 dir: %v\noutput:\n%s", err, out)
 	}
+
 	if !strings.Contains(out, "NESTED.TXT;1") {
 		t.Errorf("output = %q, want it to list NESTED.TXT", out)
 	}
@@ -195,6 +216,7 @@ func TestIntegrationOneShotType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ods2 type: %v\noutput:\n%s", err, out)
 	}
+
 	if !strings.Contains(out, "Hello from ODS2!") || !strings.Contains(out, "Second line.") {
 		t.Errorf("output = %q, want the file's content", out)
 	}
@@ -216,6 +238,7 @@ func TestIntegrationOneShotCopyToAbsolutePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+
 	if string(got) != "Hello from ODS2!\nSecond line.\n" {
 		t.Errorf("copied content = %q, want the source file's content", got)
 	}
@@ -228,6 +251,7 @@ func TestIntegrationOneShotSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ods2 search: %v\noutput:\n%s", err, out)
 	}
+
 	if !strings.Contains(out, "Second line.") {
 		t.Errorf("output = %q, want the matching line", out)
 	}
@@ -248,9 +272,11 @@ func TestIntegrationInteractiveREPL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ods2 (REPL): %v\noutput:\n%s", err, out)
 	}
+
 	if !strings.Contains(out, "README.TXT;1") {
 		t.Errorf("output = %q, want the directory listing", out)
 	}
+
 	if !strings.Contains(out, "Hello from ODS2!") {
 		t.Errorf("output = %q, want the typed file's content", out)
 	}
@@ -261,6 +287,7 @@ func TestIntegrationInteractiveREPLReportsBadCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ods2 (REPL): %v\noutput:\n%s", err, out)
 	}
+
 	if !strings.Contains(out, "unrecognized command") {
 		t.Errorf("output = %q, want an unrecognized-command message", out)
 	}

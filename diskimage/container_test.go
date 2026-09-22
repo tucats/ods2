@@ -14,10 +14,13 @@ import (
 // so tests never need to clean up after themselves.
 func writeFile(t *testing.T, name string, data []byte) string {
 	t.Helper()
+
 	path := filepath.Join(t.TempDir(), name)
+
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("writing test fixture %s: %v", name, err)
 	}
+
 	return path
 }
 
@@ -25,9 +28,11 @@ func writeFile(t *testing.T, name string, data []byte) string {
 // given value, so tests can tell blocks apart just by looking at them.
 func blockFilledWith(value byte) []byte {
 	b := make([]byte, BlockSize)
+
 	for i := range b {
 		b[i] = value
 	}
+
 	return b
 }
 
@@ -36,9 +41,11 @@ func blockFilledWith(value byte) []byte {
 // blocks stored back-to-back with no extra framing.
 func buildPlainImage(blocks [][]byte) []byte {
 	var buf bytes.Buffer
+
 	for _, b := range blocks {
 		buf.Write(b)
 	}
+
 	return buf.Bytes()
 }
 
@@ -54,15 +61,19 @@ func buildRawCDImage(blocks [][]byte) []byte {
 	}
 
 	var buf bytes.Buffer
+
 	for sectorStart := 0; sectorStart < len(blocks); sectorStart += blocksPerSector {
 		buf.Write(rawSyncPattern[:])
 		buf.Write(make([]byte, rawHeaderLen)) // header contents don't matter for our purposes
+
 		for i := 0; i < blocksPerSector; i++ {
 			buf.Write(blocks[sectorStart+i])
 		}
+
 		eccLen := rawSectorSize - rawDataOffset - rawDataLen
 		buf.Write(make([]byte, eccLen)) // ECC/EDC tail; contents are never read
 	}
+
 	return buf.Bytes()
 }
 
@@ -74,6 +85,7 @@ func TestPlainImageReadBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFormat: %v", err)
 	}
+
 	defer c.Close()
 
 	if got, want := c.Blocks(), uint32(len(blocks)); got != want {
@@ -82,9 +94,11 @@ func TestPlainImageReadBlock(t *testing.T) {
 
 	for i, want := range blocks {
 		got := make([]byte, BlockSize)
+
 		if err := c.ReadBlock(uint32(i), got); err != nil {
 			t.Fatalf("ReadBlock(%d): %v", i, err)
 		}
+
 		if !bytes.Equal(got, want) {
 			t.Fatalf("ReadBlock(%d) returned wrong data", i)
 		}
@@ -93,10 +107,12 @@ func TestPlainImageReadBlock(t *testing.T) {
 
 func TestPlainImageOutOfRange(t *testing.T) {
 	path := writeFile(t, "plain.img", buildPlainImage([][]byte{blockFilledWith(1)}))
+
 	c, err := OpenFormat(path, FormatPlain)
 	if err != nil {
 		t.Fatalf("OpenFormat: %v", err)
 	}
+
 	defer c.Close()
 
 	buf := make([]byte, BlockSize)
@@ -107,13 +123,16 @@ func TestPlainImageOutOfRange(t *testing.T) {
 
 func TestPlainImageBufferTooSmall(t *testing.T) {
 	path := writeFile(t, "plain.img", buildPlainImage([][]byte{blockFilledWith(1)}))
+
 	c, err := OpenFormat(path, FormatPlain)
 	if err != nil {
 		t.Fatalf("OpenFormat: %v", err)
 	}
+
 	defer c.Close()
 
 	buf := make([]byte, BlockSize-1)
+
 	if err := c.ReadBlock(0, buf); !errors.Is(err, ErrBufferTooSmall) {
 		t.Fatalf("ReadBlock with short buffer error = %v, want ErrBufferTooSmall", err)
 	}
@@ -138,12 +157,14 @@ func TestRawCDImageReadBlock(t *testing.T) {
 	for i := range blocks {
 		blocks[i] = blockFilledWith(byte(i + 1))
 	}
+
 	path := writeFile(t, "raw.img", buildRawCDImage(blocks))
 
 	c, err := OpenFormat(path, FormatRawCD)
 	if err != nil {
 		t.Fatalf("OpenFormat: %v", err)
 	}
+
 	defer c.Close()
 
 	if got, want := c.Blocks(), uint32(len(blocks)); got != want {
@@ -152,9 +173,11 @@ func TestRawCDImageReadBlock(t *testing.T) {
 
 	for i, want := range blocks {
 		got := make([]byte, BlockSize)
+
 		if err := c.ReadBlock(uint32(i), got); err != nil {
 			t.Fatalf("ReadBlock(%d): %v", i, err)
 		}
+
 		if !bytes.Equal(got, want) {
 			t.Fatalf("ReadBlock(%d) returned wrong data", i)
 		}
@@ -166,12 +189,14 @@ func TestRawCDImageOutOfRange(t *testing.T) {
 	for i := range blocks {
 		blocks[i] = blockFilledWith(byte(i))
 	}
+
 	path := writeFile(t, "raw.img", buildRawCDImage(blocks))
 
 	c, err := OpenFormat(path, FormatRawCD)
 	if err != nil {
 		t.Fatalf("OpenFormat: %v", err)
 	}
+
 	defer c.Close()
 
 	buf := make([]byte, BlockSize)
@@ -187,6 +212,7 @@ func TestOpenAutoDetectsPlainImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+
 	defer c.Close()
 
 	if _, ok := c.(*plainImage); !ok {
@@ -210,6 +236,7 @@ func TestOpenPlainImageDoesNotImplementWritableContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+
 	defer c.Close()
 
 	if _, ok := c.(WritableContainer); ok {
@@ -222,12 +249,14 @@ func TestOpenAutoDetectsRawCDImage(t *testing.T) {
 	for i := range blocks {
 		blocks[i] = blockFilledWith(byte(i))
 	}
+
 	path := writeFile(t, "raw.img", buildRawCDImage(blocks))
 
 	c, err := Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+
 	defer c.Close()
 
 	if _, ok := c.(*rawCDImage); !ok {
@@ -256,6 +285,7 @@ func TestPlainImageWriteBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFormatWritable: %v", err)
 	}
+
 	defer c.Close()
 
 	// Overwrite the first and last blocks; leave the middle one alone, to
@@ -263,6 +293,7 @@ func TestPlainImageWriteBlock(t *testing.T) {
 	if err := c.WriteBlock(0, blockFilledWith(0x11)); err != nil {
 		t.Fatalf("WriteBlock(0): %v", err)
 	}
+
 	if err := c.WriteBlock(2, blockFilledWith(0x33)); err != nil {
 		t.Fatalf("WriteBlock(2): %v", err)
 	}
@@ -273,6 +304,7 @@ func TestPlainImageWriteBlock(t *testing.T) {
 		if err := c.ReadBlock(uint32(i), got); err != nil {
 			t.Fatalf("ReadBlock(%d): %v", i, err)
 		}
+
 		if !bytes.Equal(got, w) {
 			t.Fatalf("block %d after write does not match what was written", i)
 		}
@@ -281,6 +313,7 @@ func TestPlainImageWriteBlock(t *testing.T) {
 
 func TestPlainImageWriteBlockOutOfRange(t *testing.T) {
 	path := writeFile(t, "plain.img", buildPlainImage([][]byte{blockFilledWith(1)}))
+
 	c, err := OpenFormatWritable(path, FormatPlain)
 	if err != nil {
 		t.Fatalf("OpenFormatWritable: %v", err)
@@ -294,6 +327,7 @@ func TestPlainImageWriteBlockOutOfRange(t *testing.T) {
 
 func TestPlainImageWriteBlockBufferTooSmall(t *testing.T) {
 	path := writeFile(t, "plain.img", buildPlainImage([][]byte{blockFilledWith(1)}))
+
 	c, err := OpenFormatWritable(path, FormatPlain)
 	if err != nil {
 		t.Fatalf("OpenFormatWritable: %v", err)
@@ -325,6 +359,7 @@ func TestOpenWritableRejectsRawCD(t *testing.T) {
 	for i := range blocks {
 		blocks[i] = blockFilledWith(byte(i))
 	}
+
 	path := writeFile(t, "raw.img", buildRawCDImage(blocks))
 
 	if _, err := OpenWritable(path); err == nil {
@@ -343,6 +378,7 @@ func TestCreateProducesZeroFilledContainerOfExactSize(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "new.img")
 
 	const wantBlocks = 4
+
 	c, err := Create(path, wantBlocks)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -357,6 +393,7 @@ func TestCreateProducesZeroFilledContainerOfExactSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
+
 	if got, want := info.Size(), int64(wantBlocks*BlockSize); got != want {
 		t.Fatalf("file size = %d, want %d", got, want)
 	}
@@ -366,6 +403,7 @@ func TestCreateProducesZeroFilledContainerOfExactSize(t *testing.T) {
 		if err := c.ReadBlock(i, buf); err != nil {
 			t.Fatalf("ReadBlock(%d): %v", i, err)
 		}
+
 		for _, b := range buf {
 			if b != 0 {
 				t.Fatalf("block %d of a freshly Created container is not zero-filled", i)
@@ -392,6 +430,7 @@ func TestCreateThenWriteBlockRoundTrips(t *testing.T) {
 	if err := c.ReadBlock(1, got); err != nil {
 		t.Fatalf("ReadBlock: %v", err)
 	}
+
 	if !bytes.Equal(got, want) {
 		t.Fatal("ReadBlock after WriteBlock returned wrong data")
 	}
@@ -419,6 +458,7 @@ func TestCreateTruncatesExistingFile(t *testing.T) {
 	if err := c.ReadBlock(0, buf); err != nil {
 		t.Fatalf("ReadBlock(0): %v", err)
 	}
+
 	for _, b := range buf {
 		if b != 0 {
 			t.Fatal("Create did not zero the truncated file's remaining block")

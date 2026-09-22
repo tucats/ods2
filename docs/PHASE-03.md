@@ -110,7 +110,7 @@ contract — there isn't one yet.
 ## Status
 
 | # | Subtask | Status |
-|---|---|---|
+| --- | --- | --- |
 | 1 | `volume`: file & header-chain deallocation primitive | Done |
 | 2 | `volume`: `Directory.Remove` | Done |
 | 3 | `volume`: `DeleteFile` (ties 1+2 together) | Done |

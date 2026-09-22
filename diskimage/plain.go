@@ -26,6 +26,7 @@ func (p *plainImage) ReadBlock(lbn uint32, buf []byte) error {
 	if lbn >= p.blocks {
 		return ErrBlockOutOfRange
 	}
+
 	if len(buf) < BlockSize {
 		return ErrBufferTooSmall
 	}
@@ -39,6 +40,7 @@ func (p *plainImage) ReadBlock(lbn uint32, buf []byte) error {
 	// ReadAt instead of Seek+Read avoids a whole class of bugs where two
 	// reads race over a shared file-position cursor.
 	_, err := p.f.ReadAt(buf[:BlockSize], int64(lbn)*BlockSize)
+
 	return err
 }
 
@@ -65,6 +67,7 @@ func (p *writablePlainImage) WriteBlock(lbn uint32, buf []byte) error {
 	if lbn >= p.blocks {
 		return ErrBlockOutOfRange
 	}
+
 	if len(buf) < BlockSize {
 		return ErrBufferTooSmall
 	}
@@ -74,5 +77,6 @@ func (p *writablePlainImage) WriteBlock(lbn uint32, buf []byte) error {
 	// any order (e.g. following a file's retrieval pointers, or extending a
 	// file past its previous end) without needing a Seek in between.
 	_, err := p.f.WriteAt(buf[:BlockSize], int64(lbn)*BlockSize)
+	
 	return err
 }

@@ -33,7 +33,9 @@ func cmdSet(s *Session, args []string, quals Qualifiers) error {
 		if err != nil {
 			return fmt.Errorf("set default: %w", err)
 		}
+
 		s.Default = spec
+
 		return nil
 	case matchesAbbrev(args[0], "file", subverbMinAbbrev):
 		return cmdSetFile(s, args[1], quals)
@@ -73,6 +75,7 @@ func cmdSetFile(s *Session, arg string, quals Qualifiers) error {
 	if !quals.Has("version_limit") {
 		return fmt.Errorf("set file: /VERSION_LIMIT=n is required")
 	}
+
 	limit, err := strconv.ParseUint(quals.Value("version_limit"), 10, 16)
 	if err != nil {
 		return fmt.Errorf("set file: invalid /VERSION_LIMIT value %q: %w", quals.Value("version_limit"), err)
@@ -92,6 +95,7 @@ func cmdSetFile(s *Session, arg string, quals Qualifiers) error {
 	if err != nil {
 		return fmt.Errorf("set file: %w", err)
 	}
+
 	if len(matches) == 0 {
 		return fmt.Errorf("set file: %s not found", arg)
 	}
@@ -101,9 +105,11 @@ func cmdSetFile(s *Session, arg string, quals Qualifiers) error {
 		if err != nil {
 			return fmt.Errorf("set file: %w", err)
 		}
+
 		if err := volume.SetVersionLimit(f, uint16(limit)); err != nil {
 			return fmt.Errorf("set file: %w", err)
 		}
+
 		fmt.Fprintf(s.Stdout, "%%SET-S-SET, %s.%s;%d version limit set to %d\n", m.Name, m.Type, m.Version, limit)
 	}
 
@@ -120,5 +126,6 @@ func cmdShow(s *Session, args []string, quals Qualifiers) error {
 	default:
 		return fmt.Errorf("show: unrecognized attribute %q", args[0])
 	}
+	
 	return nil
 }

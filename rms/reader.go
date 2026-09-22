@@ -79,6 +79,7 @@ func FileByteLength(attr ondisk.RecAttr) int64 {
 	if attr.EndOfFileBlock == 0 {
 		return 0
 	}
+
 	return int64(attr.EndOfFileBlock-1)*ondisk.BlockSize + int64(attr.FirstFreeByte)
 }
 
@@ -126,8 +127,10 @@ func (r *Reader) nextFixed() ([]byte, error) {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
+
 		return nil, fmt.Errorf("%w: fixed-length record: %v", ErrCorruptRecord, err)
 	}
+
 	return data, nil
 }
 
@@ -144,8 +147,10 @@ func (r *Reader) nextVariable() ([]byte, error) {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
+
 		return nil, fmt.Errorf("%w: record length prefix: %v", ErrCorruptRecord, err)
 	}
+
 	length := int(binary.LittleEndian.Uint16(lengthBytes))
 
 	data, err := r.stream.ReadFull(length)
@@ -191,6 +196,7 @@ func (r *Reader) nextStream(kind streamDelim) ([]byte, error) {
 				// final line ending — not corruption.
 				return record, nil
 			}
+
 			return nil, fmt.Errorf("%w: %v", ErrCorruptRecord, err)
 		}
 
@@ -209,6 +215,7 @@ func (r *Reader) nextStream(kind streamDelim) ([]byte, error) {
 				if err != nil || next != '\n' {
 					return nil, fmt.Errorf("%w: '\\r' not followed by '\\n' in a STREAM file", ErrCorruptRecord)
 				}
+
 				return record, nil
 			}
 		}

@@ -74,7 +74,7 @@ expose.
 ## Status
 
 | # | Subtask | Status |
-|---|---|---|
+| --- | --- | --- |
 | 0 | Phase 1 bugfix: `Directory.List()` on partially-allocated directories | Done |
 | 1 | `diskimage`: writable containers | Done |
 | 2 | `ondisk`: fixed-layout encoders (HomeBlock, FileHeader, Fid, Uic, Ident, RecAttr) | Done |
@@ -210,7 +210,7 @@ fields already exist in `ondisk.HomeBlock`/`FileHeader` for exactly this
 reason).
 
 | Reference code | Problem | Go design instead |
-|---|---|---|
+| --- | --- | --- |
 | `bitmap_search()` (`update.c:143-216`) | Not true best-fit despite the name; starts from a caller-supplied hint and stops at the first run "big enough," with **no wraparound** — a caller near EOF can spuriously fail to find free space that exists earlier on the volume. | A single deterministic full-bitmap scan (first-fit) every time. No hint plumbing, no partial-scan failure mode. Simpler code, and with no concurrent writers to protect a hint's locality benefit from, there's nothing to lose. |
 | `update_findhead()`/`headmap_clear()` (`update.c:226-227,250`) | Compute the header bitmap's own location from `home.hm2$w_cluster*4 + 1` — a formula that happens to match the tested volume's layout — instead of the home block fields that exist for exactly this (`hm2$w_ibmapvbn`/`hm2$w_ibmapsize`), which the code *does* use correctly elsewhere (`accesshead()`, `access.c:106-107`). | Always derive the header-bitmap's location from `HomeBlock.IndexBitmapVBN`/`IndexBitmapSize`, consistently, everywhere. |
 | `headmap_clear()` (`update.c:227`) | Hardcodes `if (head_no < 10) return 0` to protect reserved file headers from being freed, even though `HomeBlock.ReservedFiles` (`hm2$w_resfiles`) exists in the struct specifically for this and is never read anywhere in the C source. | Always read `HomeBlock.ReservedFiles` for this check. |
@@ -1227,7 +1227,7 @@ defaults), builds a minimal but valid volume:
    treating it as final:
 
    | # | Name | Role |
-   |---|---|---|
+   | --- | --- | --- |
    | 1 | INDEXF.SYS | index file (this volume's own file-header table) |
    | 2 | BITMAP.SYS | storage bitmap |
    | 3 | BADBLK.SYS | bad-block list (empty on a fresh volume) |

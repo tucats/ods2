@@ -13,15 +13,19 @@ import (
 
 func readAllRecords(t *testing.T, r *Reader) [][]byte {
 	t.Helper()
+
 	var records [][]byte
+
 	for {
 		rec, err := r.Next()
 		if err == io.EOF {
 			return records
 		}
+
 		if err != nil {
 			t.Fatalf("Next(): %v", err)
 		}
+
 		records = append(records, rec)
 	}
 }
@@ -43,9 +47,11 @@ func TestReaderFixed(t *testing.T) {
 
 	records := readAllRecords(t, r)
 	want := [][]byte{[]byte("AAAA"), []byte("BBBB"), []byte("CCCC")}
+
 	if len(records) != len(want) {
 		t.Fatalf("records = %q, want %q", records, want)
 	}
+
 	for i := range want {
 		if !bytes.Equal(records[i], want[i]) {
 			t.Errorf("record %d = %q, want %q", i, records[i], want[i])
@@ -95,6 +101,7 @@ func TestReaderFixedTruncated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next() #1: %v", err)
 	}
+	
 	if !bytes.Equal(first, []byte("AAAA")) {
 		t.Fatalf("Next() #1 = %q, want %q", first, "AAAA")
 	}
@@ -107,19 +114,25 @@ func TestReaderFixedTruncated(t *testing.T) {
 // buildVarRecord assembles one VAR/VFC-framed record: a 2-byte length
 // prefix, the data, and a padding byte if the length is odd.
 func buildVarRecord(data []byte) []byte {
-	var buf bytes.Buffer
-	var lenBytes [2]byte
+	var (
+		buf      bytes.Buffer
+		lenBytes [2]byte
+	)
+
 	binary.LittleEndian.PutUint16(lenBytes[:], uint16(len(data)))
 	buf.Write(lenBytes[:])
 	buf.Write(data)
+
 	if len(data)%2 != 0 {
 		buf.WriteByte(0)
 	}
+
 	return buf.Bytes()
 }
 
 func TestReaderVariable(t *testing.T) {
 	var data []byte
+
 	data = append(data, buildVarRecord([]byte("HELLO"))...)  // odd length: padded
 	data = append(data, buildVarRecord([]byte("WORLD!"))...) // even length: no padding
 	data = append(data, buildVarRecord([]byte(""))...)       // a blank record
@@ -137,9 +150,11 @@ func TestReaderVariable(t *testing.T) {
 
 	records := readAllRecords(t, r)
 	want := [][]byte{[]byte("HELLO"), []byte("WORLD!"), {}}
+
 	if len(records) != len(want) {
 		t.Fatalf("records = %q, want %q", records, want)
 	}
+
 	for i := range want {
 		if !bytes.Equal(records[i], want[i]) {
 			t.Errorf("record %d = %q, want %q", i, records[i], want[i])
@@ -150,6 +165,7 @@ func TestReaderVariable(t *testing.T) {
 func TestReaderVariableCorruptLength(t *testing.T) {
 	// A length prefix claiming far more data than the file actually has.
 	var lenBytes [2]byte
+
 	binary.LittleEndian.PutUint16(lenBytes[:], 9999)
 	data := append(lenBytes[:], []byte("short")...)
 
@@ -192,6 +208,7 @@ func TestReaderVFCIncludesControlBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next(): %v", err)
 	}
+
 	if !bytes.Equal(rec, vfcAndText) {
 		t.Fatalf("Next() = %q, want %q (control bytes included)", rec, vfcAndText)
 	}
@@ -211,10 +228,12 @@ func TestReaderStreamLF(t *testing.T) {
 	}
 
 	records := readAllRecords(t, r)
+
 	want := [][]byte{[]byte("one"), []byte("two"), []byte("three")}
 	if len(records) != len(want) {
 		t.Fatalf("records = %q, want %q", records, want)
 	}
+
 	for i := range want {
 		if !bytes.Equal(records[i], want[i]) {
 			t.Errorf("record %d = %q, want %q", i, records[i], want[i])
@@ -237,6 +256,7 @@ func TestReaderStreamCR(t *testing.T) {
 
 	records := readAllRecords(t, r)
 	want := [][]byte{[]byte("one"), []byte("two"), []byte("three")}
+
 	if len(records) != len(want) {
 		t.Fatalf("records = %q, want %q", records, want)
 	}
@@ -257,9 +277,11 @@ func TestReaderStreamCRLF(t *testing.T) {
 
 	records := readAllRecords(t, r)
 	want := [][]byte{[]byte("one"), []byte("two")}
+
 	if len(records) != len(want) {
 		t.Fatalf("records = %q, want %q", records, want)
 	}
+
 	for i := range want {
 		if !bytes.Equal(records[i], want[i]) {
 			t.Errorf("record %d = %q, want %q", i, records[i], want[i])
@@ -302,6 +324,7 @@ func TestReaderStreamLastRecordWithoutDelimiter(t *testing.T) {
 
 	records := readAllRecords(t, r)
 	want := [][]byte{[]byte("one"), []byte("two")}
+
 	if len(records) != len(want) {
 		t.Fatalf("records = %q, want %q", records, want)
 	}

@@ -46,14 +46,17 @@ func cmdPurge(s *Session, args []string, quals Qualifiers) (err error) {
 	if err != nil {
 		return fmt.Errorf("purge: %w", err)
 	}
+
 	spec.Version = "*"
 
 	keep := uint16(1)
+
 	if quals.Has("limit") {
 		v, err := strconv.ParseUint(quals.Value("limit"), 10, 16)
 		if err != nil {
 			return fmt.Errorf("purge: invalid /LIMIT value %q: %w", quals.Value("limit"), err)
 		}
+
 		keep = uint16(v)
 	}
 
@@ -61,9 +64,11 @@ func cmdPurge(s *Session, args []string, quals Qualifiers) (err error) {
 	if err != nil {
 		return fmt.Errorf("purge: %w", err)
 	}
+
 	if len(vol.Devices) != 1 {
 		return fmt.Errorf("purge: %s is a %d-device volume set; PURGE only supports a single-device volume", spec.Device, len(vol.Devices))
 	}
+
 	dev := vol.Devices[0]
 
 	matches, err := filespec.Glob(vol, spec)
@@ -75,6 +80,7 @@ func cmdPurge(s *Session, args []string, quals Qualifiers) (err error) {
 	if err != nil {
 		return fmt.Errorf("purge: %w", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		return fmt.Errorf("purge: %w", err)
@@ -88,6 +94,7 @@ func cmdPurge(s *Session, args []string, quals Qualifiers) (err error) {
 		if flushErr := bm.Flush(); flushErr != nil && err == nil {
 			err = fmt.Errorf("purge: %w", flushErr)
 		}
+
 		if flushErr := ib.Flush(); flushErr != nil && err == nil {
 			err = fmt.Errorf("purge: %w", flushErr)
 		}
@@ -103,6 +110,7 @@ func cmdPurge(s *Session, args []string, quals Qualifiers) (err error) {
 			if err := volume.PurgeVersions(dir, name, keep, bm, ib); err != nil {
 				return fmt.Errorf("purge: %w", err)
 			}
+
 			fmt.Fprintf(s.Stdout, "%%PURGE-S-PURGED, %s purged (keeping %d version(s))\n", name, keep)
 		}
 	}
@@ -119,12 +127,15 @@ func cmdPurge(s *Session, args []string, quals Qualifiers) (err error) {
 func distinctNames(matches []filespec.Match) []string {
 	seen := make(map[string]bool, len(matches))
 	names := make([]string, 0, len(matches))
+
 	for _, m := range matches {
 		full := m.Name + "." + m.Type
 		if !seen[full] {
 			seen[full] = true
+
 			names = append(names, full)
 		}
 	}
+
 	return names
 }

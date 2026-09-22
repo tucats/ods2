@@ -28,6 +28,7 @@ const layout = "02-Jan-2006 15:04:05.00"
 // first letter ("Nov"), so it's upper-cased by hand afterward.
 func (t VMSTime) String() string {
 	s := t.Time().Format(layout)
+
 	return upperCaseMonth(s)
 }
 
@@ -40,6 +41,7 @@ func ParseVMSTime(s string) (VMSTime, error) {
 	if err != nil {
 		return 0, fmt.Errorf("vmstime: parsing %q as a VMS timestamp: %w", s, err)
 	}
+
 	return FromTime(t), nil
 }
 
@@ -55,6 +57,7 @@ func upperCaseMonth(s string) string {
 	if len(s) < 6 {
 		return s
 	}
+
 	return s[:3] + strings.ToUpper(s[3:6]) + s[6:]
 }
 
@@ -68,7 +71,9 @@ func lowerCaseMonthTail(s string) string {
 	if len(s) < 6 {
 		return s
 	}
+
 	month := s[3:6]
 	fixed := strings.ToUpper(month[:1]) + strings.ToLower(month[1:])
+	
 	return s[:3] + fixed + s[6:]
 }

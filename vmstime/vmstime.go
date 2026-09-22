@@ -67,6 +67,7 @@ func (t VMSTime) Time() time.Time {
 	}
 
 	nanoseconds := remainderTicks * nanosecondsPerTick
+
 	return time.Unix(seconds, nanoseconds).UTC()
 }
 
@@ -76,5 +77,6 @@ func (t VMSTime) Time() time.Time {
 func FromTime(t time.Time) VMSTime {
 	u := t.UTC()
 	unixTicks := u.Unix()*ticksPerSecond + int64(u.Nanosecond())/nanosecondsPerTick
+
 	return VMSTime(unixTicks + vmsToUnixOffsetTicks)
 }

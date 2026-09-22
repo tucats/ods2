@@ -16,9 +16,11 @@ import (
 func TestSplitDeviceList(t *testing.T) {
 	got := splitDeviceList("DUA0:, DUA1: ,DUA2:")
 	want := []string{"DUA0:", "DUA1:", "DUA2:"}
+
 	if len(got) != len(want) {
 		t.Fatalf("splitDeviceList = %v, want %v", got, want)
 	}
+
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("splitDeviceList()[%d] = %q, want %q", i, got[i], want[i])
@@ -30,12 +32,14 @@ func TestSplitDeviceList(t *testing.T) {
 // memory, the same layout volume package's own tests use.
 func newMountableTestContainer(t *testing.T) *odstest.MemContainer {
 	t.Helper()
+
 	return odstest.NewMountableContainer(t, 20, odstest.HomeBlockFixture{Rvn: 1})
 }
 
 func TestMountContainersRegistersVolume(t *testing.T) {
-	s := New()
 	var out bytes.Buffer
+
+	s := New()
 	s.Stdout = &out
 
 	c := newMountableTestContainer(t)
@@ -43,9 +47,10 @@ func TestMountContainersRegistersVolume(t *testing.T) {
 		t.Fatalf("mountContainers: %v", err)
 	}
 
-	if _, ok := s.Volumes["DUA0"]; !ok {
+	if _, ok := s.Volumes[defaultDeviceName]; !ok {
 		t.Errorf("Volumes = %v, want a DUA0 entry", s.Volumes)
 	}
+
 	if out.Len() == 0 {
 		t.Error("mountContainers printed no confirmation message")
 	}
@@ -60,8 +65,8 @@ func TestMountContainersSetsDefaultOnFirstMount(t *testing.T) {
 		t.Fatalf("mountContainers: %v", err)
 	}
 
-	if s.Default.Device != "DUA0" {
-		t.Errorf("Default.Device = %q, want %q", s.Default.Device, "DUA0")
+	if s.Default.Device != defaultDeviceName {
+		t.Errorf("Default.Device = %q, want %q", s.Default.Device, defaultDeviceName)
 	}
 }
 
@@ -82,6 +87,7 @@ func TestMountContainersDoesNotOverrideExistingDefault(t *testing.T) {
 
 func TestDismountUnknownDevice(t *testing.T) {
 	s := New()
+
 	if err := cmdDismount(s, []string{"DUA0:"}, nil); err == nil {
 		t.Fatal("cmdDismount on an unmounted device: want error, got nil")
 	}
@@ -99,7 +105,8 @@ func TestMountThenDismount(t *testing.T) {
 	if err := cmdDismount(s, []string{"DUA0:"}, nil); err != nil {
 		t.Fatalf("cmdDismount: %v", err)
 	}
-	if _, ok := s.Volumes["DUA0"]; ok {
+
+	if _, ok := s.Volumes[defaultDeviceName]; ok {
 		t.Error("Volumes still contains DUA0 after dismount")
 	}
 }
@@ -109,29 +116,35 @@ func TestMountThenDismount(t *testing.T) {
 // actual disk-image-opening path can be exercised end to end.
 func dumpContainer(t *testing.T, c *odstest.MemContainer) []byte {
 	t.Helper()
+
 	buf := make([]byte, 0, int(c.Blocks())*ondisk.BlockSize)
 	block := make([]byte, ondisk.BlockSize)
+
 	for i := uint32(0); i < c.Blocks(); i++ {
 		if err := c.ReadBlock(i, block); err != nil {
 			t.Fatalf("ReadBlock(%d): %v", i, err)
 		}
+
 		buf = append(buf, block...)
 	}
+
 	return buf
 }
 
 func TestCmdMountEndToEnd(t *testing.T) {
 	c := newMountableTestContainer(t)
 	path := filepath.Join(t.TempDir(), "test.img")
+
 	if err := os.WriteFile(path, dumpContainer(t, c), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	s := New()
 	var out bytes.Buffer
+
+	s := New()
 	s.Stdout = &out
 
-	if err := cmdMount(s, []string{"DUA0", path}, Qualifiers{}); err != nil {
+	if err := cmdMount(s, []string{defaultDeviceName, path}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdMount: %v", err)
 	}
 	// cmdMount leaves the image file open for as long as the volume stays
@@ -147,14 +160,15 @@ func TestCmdMountEndToEnd(t *testing.T) {
 		}
 	})
 
-	if _, ok := s.Volumes["DUA0"]; !ok {
+	if _, ok := s.Volumes[defaultDeviceName]; !ok {
 		t.Errorf("Volumes = %v, want a DUA0 entry", s.Volumes)
 	}
 }
 
 func TestCmdMountNonexistentFile(t *testing.T) {
 	s := New()
-	if err := cmdMount(s, []string{"DUA0", filepath.Join(t.TempDir(), "nope.img")}, Qualifiers{}); err == nil {
+
+	if err := cmdMount(s, []string{defaultDeviceName, filepath.Join(t.TempDir(), "nope.img")}, Qualifiers{}); err == nil {
 		t.Fatal("cmdMount on a nonexistent file: want error, got nil")
 	}
 }
@@ -172,11 +186,14 @@ func TestCmdMountMismatchedDeviceAndContainerCounts(t *testing.T) {
 // file, returning their paths in that same order.
 func writeVolumeSetImages(t *testing.T, n int) []string {
 	t.Helper()
+
 	paths := make([]string, n)
+
 	for i := range n {
 		c := odstest.NewMountableContainer(t, 20, odstest.HomeBlockFixture{Rvn: uint16(i + 1)})
 		paths[i] = writeTestImage(t, fmt.Sprintf("member%d.img", i), dumpContainer(t, c))
 	}
+
 	return paths
 }
 
@@ -189,9 +206,11 @@ func TestCmdMountSynthesizesDeviceNamesFromBaseUnit(t *testing.T) {
 
 	s := New()
 	s.Stdout = &bytes.Buffer{}
+
 	if err := cmdMount(s, []string{"DUA1", strings.Join(paths, ",")}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdMount: %v", err)
 	}
+
 	t.Cleanup(func() {
 		for _, vol := range s.Volumes {
 			for _, dev := range vol.Devices {
@@ -203,6 +222,7 @@ func TestCmdMountSynthesizesDeviceNamesFromBaseUnit(t *testing.T) {
 	if _, ok := s.Volumes["DUA1"]; !ok {
 		t.Errorf("Volumes = %v, want a DUA1 entry (foo.dsk mounted as DUA1)", s.Volumes)
 	}
+
 	if _, ok := s.Volumes["DUA2"]; ok {
 		t.Error("Volumes has a DUA2 entry, but only the first device name of a volume set is registered as a key")
 	}
@@ -216,9 +236,11 @@ func TestCmdMountSynthesizesDeviceNamesFromZero(t *testing.T) {
 
 	s := New()
 	s.Stdout = &bytes.Buffer{}
+	
 	if err := cmdMount(s, []string{"DKA", strings.Join(paths, ",")}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdMount: %v", err)
 	}
+
 	t.Cleanup(func() {
 		for _, vol := range s.Volumes {
 			for _, dev := range vol.Devices {
@@ -241,9 +263,11 @@ func TestCmdMountSynthesizesDeviceNamesMultiDigitUnit(t *testing.T) {
 
 	s := New()
 	s.Stdout = &bytes.Buffer{}
+
 	if err := cmdMount(s, []string{"DUA10", strings.Join(paths, ",")}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdMount: %v", err)
 	}
+
 	t.Cleanup(func() {
 		for _, vol := range s.Volumes {
 			for _, dev := range vol.Devices {
@@ -264,10 +288,13 @@ func TestCmdMountSynthesizesDeviceNamesMultiDigitUnit(t *testing.T) {
 // can't stand in for a WritableContainer).
 func writeTestImage(t *testing.T, name string, data []byte) string {
 	t.Helper()
+
 	path := filepath.Join(t.TempDir(), name)
+
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+
 	return path
 }
 
@@ -277,9 +304,11 @@ func TestCmdMountWriteQualifierOpensWritableContainer(t *testing.T) {
 
 	s := New()
 	s.Stdout = &bytes.Buffer{}
-	if err := cmdMount(s, []string{"DUA0", path}, Qualifiers{"write": ""}); err != nil {
+
+	if err := cmdMount(s, []string{defaultDeviceName, path}, Qualifiers{"write": ""}); err != nil {
 		t.Fatalf("cmdMount with /write: %v", err)
 	}
+
 	t.Cleanup(func() {
 		for _, vol := range s.Volumes {
 			for _, dev := range vol.Devices {
@@ -288,10 +317,11 @@ func TestCmdMountWriteQualifierOpensWritableContainer(t *testing.T) {
 		}
 	})
 
-	vol := s.Volumes["DUA0"]
+	vol := s.Volumes[defaultDeviceName]
 	if vol == nil {
 		t.Fatalf("Volumes = %v, want a DUA0 entry", s.Volumes)
 	}
+
 	if _, ok := vol.Devices[0].Container.(diskimage.WritableContainer); !ok {
 		t.Errorf("Devices[0].Container = %T, want a diskimage.WritableContainer (mounted /write)", vol.Devices[0].Container)
 	}
@@ -303,9 +333,11 @@ func TestCmdMountWithoutWriteQualifierIsReadOnly(t *testing.T) {
 
 	s := New()
 	s.Stdout = &bytes.Buffer{}
-	if err := cmdMount(s, []string{"DUA0", path}, Qualifiers{}); err != nil {
+
+	if err := cmdMount(s, []string{defaultDeviceName, path}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdMount: %v", err)
 	}
+
 	t.Cleanup(func() {
 		for _, vol := range s.Volumes {
 			for _, dev := range vol.Devices {
@@ -314,10 +346,11 @@ func TestCmdMountWithoutWriteQualifierIsReadOnly(t *testing.T) {
 		}
 	})
 
-	vol := s.Volumes["DUA0"]
+	vol := s.Volumes[defaultDeviceName]
 	if vol == nil {
 		t.Fatalf("Volumes = %v, want a DUA0 entry", s.Volumes)
 	}
+
 	if _, ok := vol.Devices[0].Container.(diskimage.WritableContainer); ok {
 		t.Error("Devices[0].Container unexpectedly implements diskimage.WritableContainer without /write")
 	}
@@ -344,10 +377,12 @@ func TestCmdMountWriteQualifierRejectsRawCD(t *testing.T) {
 
 	s := New()
 	s.Stdout = &bytes.Buffer{}
-	if err := cmdMount(s, []string{"DUA0", path}, Qualifiers{"write": ""}); err == nil {
+
+	if err := cmdMount(s, []string{defaultDeviceName, path}, Qualifiers{"write": ""}); err == nil {
 		t.Fatal("cmdMount with /write on a raw CD-ROM image: want error, got nil")
 	}
-	if _, ok := s.Volumes["DUA0"]; ok {
+
+	if _, ok := s.Volumes[defaultDeviceName]; ok {
 		t.Error("cmdMount registered a volume despite failing to open it /write")
 	}
 }

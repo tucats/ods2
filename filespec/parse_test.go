@@ -31,6 +31,7 @@ func TestParseAngleBrackets(t *testing.T) {
 
 func TestParseInheritsUnspecifiedComponents(t *testing.T) {
 	def := Spec{Device: "DUA0", Dirs: []string{"FOO"}, Version: "3"}
+
 	got, err := Parse("NAME.TYP", def)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -49,6 +50,7 @@ func TestParseNoBracketsInheritsDirsEntirely(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
+
 	if !reflect.DeepEqual(got.Dirs, []string{"A", "B"}) {
 		t.Errorf("Dirs = %v, want [A B]", got.Dirs)
 	}
@@ -69,10 +71,12 @@ func TestParseRelativeDescend(t *testing.T) {
 
 func TestParseRelativeAscend(t *testing.T) {
 	def := Spec{Dirs: []string{"A", "B"}}
+
 	got, err := Parse("[-]FOO.TXT", def)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
+
 	if !reflect.DeepEqual(got.Dirs, []string{"A"}) {
 		t.Errorf("Dirs = %v, want [A]", got.Dirs)
 	}
@@ -131,6 +135,7 @@ func TestParseEmptyBracketsIsRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
+
 	if len(got.Dirs) != 0 {
 		t.Errorf("Dirs = %v, want empty (the master file directory)", got.Dirs)
 	}
@@ -186,9 +191,11 @@ func TestParseRecursiveAbsolute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
+
 	if !got.Recursive {
 		t.Error("Recursive = false, want true")
 	}
+
 	if !reflect.DeepEqual(got.Dirs, []string{"FOO"}) {
 		t.Errorf("Dirs = %v, want [FOO]", got.Dirs)
 	}
@@ -245,11 +252,12 @@ func TestParseNonRecursiveDefaultsFalse(t *testing.T) {
 
 func TestParseDeviceOnly(t *testing.T) {
 	def := Spec{Dirs: []string{"A"}, Name: "OLD", Type: "OLD", Version: "1"}
+
 	got, err := Parse("DUB1:", def)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	
+
 	want := Spec{Device: "DUB1", Dirs: []string{"A"}, Name: "OLD", Type: "OLD", Version: "1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Parse() = %+v, want %+v", got, want)

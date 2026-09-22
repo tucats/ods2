@@ -58,6 +58,7 @@ var Table = []Command{
 func matchesAbbrev(input, full string, minLen int) bool {
 	input = strings.ToLower(input)
 	full = strings.ToLower(full)
+
 	return len(input) >= minLen && len(input) <= len(full) && full[:len(input)] == input
 }
 
@@ -65,19 +66,24 @@ func matchesAbbrev(input, full string, minLen int) bool {
 // abbreviates.
 func lookup(name string) (*Command, error) {
 	var match *Command
+
 	for i := range Table {
 		cmd := &Table[i]
 		if !matchesAbbrev(name, cmd.Name, cmd.MinAbbrev) {
 			continue
 		}
+
 		if match != nil {
 			return nil, fmt.Errorf("session: %q is ambiguous between %q and %q", name, match.Name, cmd.Name)
 		}
+
 		match = cmd
 	}
+
 	if match == nil {
 		return nil, fmt.Errorf("session: unrecognized command %q", name)
 	}
+
 	return match, nil
 }
 
@@ -128,5 +134,6 @@ func containsFold(list []string, name string) bool {
 			return true
 		}
 	}
+	
 	return false
 }

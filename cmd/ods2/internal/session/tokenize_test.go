@@ -19,9 +19,11 @@ func TestTokenize(t *testing.T) {
 	if !quals.Has("full") {
 		t.Error(`quals.Has("full") = false, want true`)
 	}
+
 	if quals.Value("full") != "" {
 		t.Errorf(`quals.Value("full") = %q, want ""`, quals.Value("full"))
 	}
+
 	if got, want := quals.Value("before"), "today"; got != want {
 		t.Errorf("quals.Value(before) = %q, want %q", got, want)
 	}
@@ -32,6 +34,7 @@ func TestTokenizeEqualsAsValueSeparator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tokenize: %v", err)
 	}
+
 	if got := quals.Value("before"); got != "today" {
 		t.Errorf("quals.Value(before) = %q, want %q", got, "today")
 	}
@@ -42,6 +45,7 @@ func TestTokenizeQualifierNameIsCaseInsensitive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tokenize: %v", err)
 	}
+
 	if !quals.Has("full") {
 		t.Error(`quals.Has("full") = false after tokenizing "/FULL", want true`)
 	}
@@ -52,9 +56,11 @@ func TestTokenizeNoArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tokenize: %v", err)
 	}
+
 	if len(args) != 0 {
 		t.Errorf("args = %v, want empty", args)
 	}
+
 	if len(quals) != 0 {
 		t.Errorf("quals = %v, want empty", quals)
 	}
@@ -70,9 +76,11 @@ func TestTokenizeUnrecognizedSlashTokenIsPositional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tokenize: %v", err)
 	}
+
 	if len(args) != 1 || args[0] != "/tmp/some/file.txt" {
 		t.Errorf("args = %v, want [/tmp/some/file.txt]", args)
 	}
+
 	if len(quals) != 0 {
 		t.Errorf("quals = %v, want empty", quals)
 	}
@@ -83,7 +91,9 @@ func TestTokenizeBareSlashIsPositional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tokenize: %v", err)
 	}
+
 	want := []string{"FOO.TXT", "/"}
+
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("args = %v, want %v", args, want)
 	}
@@ -94,6 +104,7 @@ func TestQualifiersHasVsValue(t *testing.T) {
 	if !q.Has("full") {
 		t.Error(`Has("full") = false, want true`)
 	}
+	
 	if q.Has("missing") {
 		t.Error(`Has("missing") = true, want false`)
 	}

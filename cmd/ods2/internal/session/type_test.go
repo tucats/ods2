@@ -30,8 +30,10 @@ func newTypeTestSession(t *testing.T) (*Session, *bytes.Buffer) {
 		MapBytes:       odstest.EncodeExtentFormat2(200, dirTestIdxBitmapLBN),
 	}))
 
-	mfdFid := ondisk.MasterFileDirectoryFid
+	mfdFid := ondisk.MasterFileDirectoryFid 
+
 	const mfdDataLBN = 200
+	
 	c.PutBlock(dirTestFileHeaderLBN(mfdFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            mfdFid,
 		FileChar:       ondisk.FchDirectory,
@@ -49,7 +51,9 @@ func newTypeTestSession(t *testing.T) (*Session, *bytes.Buffer) {
 	))
 
 	data := []byte("line one\nline two\n")
+
 	const dataLBN = 210
+	
 	c.PutBlock(dirTestFileHeaderLBN(streamFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            streamFid,
 		Format:         ondisk.RecordFormatStreamLF,
@@ -59,6 +63,7 @@ func newTypeTestSession(t *testing.T) (*Session, *bytes.Buffer) {
 		MapOffsetWords: 55,
 		MapBytes:       odstest.EncodeExtentFormat2(1, dataLBN),
 	}))
+
 	block := make([]byte, ondisk.BlockSize)
 	copy(block, data)
 	c.PutBlock(dataLBN, block)
@@ -71,11 +76,12 @@ func newTypeTestSession(t *testing.T) (*Session, *bytes.Buffer) {
 		t.Fatalf("Mount: %v", err)
 	}
 
-	s := New()
 	var out bytes.Buffer
+
+	s := New()
 	s.Stdout = &out
-	s.Volumes["DUA0"] = vol
-	s.Default.Device = "DUA0"
+	s.Volumes[defaultDeviceName] = vol
+	s.Default.Device = defaultDeviceName
 
 	return s, &out
 }
@@ -128,9 +134,11 @@ func TestCmdTypeExplicitVersion(t *testing.T) {
 
 func TestTypeIntegrationViaExecute(t *testing.T) {
 	s, out := newTypeTestSession(t)
+	
 	if _, err := s.Execute("type STREAM.TXT"); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+
 	if !bytes.Contains(out.Bytes(), []byte("line one")) {
 		t.Errorf("output = %q, want it to contain the file's content", out.String())
 	}

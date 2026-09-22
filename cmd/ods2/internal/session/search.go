@@ -26,7 +26,8 @@ func cmdSearch(s *Session, args []string, quals Qualifiers) error {
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
-	needle := strings.ToLower(args[1])
+
+	searchTerm := strings.ToLower(args[1])
 
 	vol, err := s.volumeFor(spec)
 	if err != nil {
@@ -39,10 +40,11 @@ func cmdSearch(s *Session, args []string, quals Qualifiers) error {
 	}
 
 	for _, m := range matches {
-		if err := searchFile(s, vol, m, needle); err != nil {
+		if err := searchFile(s, vol, m, searchTerm); err != nil {
 			return fmt.Errorf("search: %s.%s: %w", m.Name, m.Type, err)
 		}
 	}
+
 	return nil
 }
 
@@ -65,11 +67,13 @@ func searchFile(s *Session, vol *volume.Volume, m filespec.Match, needle string)
 	vfcSize := int(attr.VfcSize)
 
 	printedHeader := false
+
 	for {
 		rec, err := r.Next()
 		if err == io.EOF {
 			return nil
 		}
+
 		if err != nil {
 			return err
 		}
@@ -82,8 +86,10 @@ func searchFile(s *Session, vol *volume.Volume, m filespec.Match, needle string)
 		if strings.Contains(strings.ToLower(string(text)), needle) {
 			if !printedHeader {
 				fmt.Fprintf(s.Stdout, "%s.%s%c%d\n", m.Name, m.Type, s.Delim, m.Version)
+
 				printedHeader = true
 			}
+
 			fmt.Fprintf(s.Stdout, "%s\n", text)
 		}
 	}

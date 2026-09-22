@@ -53,6 +53,7 @@ func parseVersionSelector(v string) (versionSelector, error) {
 	if err != nil {
 		return versionSelector{}, fmt.Errorf("filespec: invalid version %q", v)
 	}
+
 	switch {
 	case n > 0:
 		return versionSelector{kind: versionExact, value: n}, nil
@@ -77,6 +78,7 @@ func selectVersions(entries []ondisk.DirEntry, sel versionSelector) []ondisk.Dir
 	}
 
 	var groups []*group
+
 	byName := make(map[string]*group)
 	for _, e := range entries {
 		g, ok := byName[e.Name]
@@ -85,10 +87,12 @@ func selectVersions(entries []ondisk.DirEntry, sel versionSelector) []ondisk.Dir
 			byName[e.Name] = g
 			groups = append(groups, g)
 		}
+
 		g.entries = append(g.entries, e)
 	}
 
 	var result []ondisk.DirEntry
+
 	for _, g := range groups {
 		sort.Slice(g.entries, func(i, j int) bool {
 			return g.entries[i].Version > g.entries[j].Version
@@ -102,6 +106,7 @@ func selectVersions(entries []ondisk.DirEntry, sel versionSelector) []ondisk.Dir
 			for _, e := range g.entries {
 				if int(e.Version) == sel.value {
 					result = append(result, e)
+
 					break
 				}
 			}
@@ -111,6 +116,7 @@ func selectVersions(entries []ondisk.DirEntry, sel versionSelector) []ondisk.Dir
 			if sel.kind == versionRelative {
 				index = sel.value - 1
 			}
+
 			if index >= 0 && index < len(g.entries) {
 				result = append(result, g.entries[index])
 			}

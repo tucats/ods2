@@ -41,6 +41,7 @@ func cmdDelete(s *Session, args []string, quals Qualifiers) (err error) {
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
+
 	if spec.Version == "" {
 		return fmt.Errorf("delete: %s: a specific version is required, e.g. %s;3 or %s;* (bare DELETE never defaults to a version)", args[0], args[0], args[0])
 	}
@@ -49,15 +50,18 @@ func cmdDelete(s *Session, args []string, quals Qualifiers) (err error) {
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
+
 	if len(vol.Devices) != 1 {
 		return fmt.Errorf("delete: %s is a %d-device volume set; DELETE only supports a single-device volume", spec.Device, len(vol.Devices))
 	}
+
 	dev := vol.Devices[0]
 
 	matches, err := filespec.Glob(vol, spec)
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
+
 	if len(matches) == 0 {
 		return fmt.Errorf("delete: %s.%s;%s not found", spec.Name, spec.Type, spec.Version)
 	}
@@ -66,6 +70,7 @@ func cmdDelete(s *Session, args []string, quals Qualifiers) (err error) {
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
@@ -87,6 +92,7 @@ func cmdDelete(s *Session, args []string, quals Qualifiers) (err error) {
 		if flushErr := bm.Flush(); flushErr != nil && err == nil {
 			err = fmt.Errorf("delete: %w", flushErr)
 		}
+
 		if flushErr := ib.Flush(); flushErr != nil && err == nil {
 			err = fmt.Errorf("delete: %w", flushErr)
 		}
@@ -103,6 +109,7 @@ func cmdDelete(s *Session, args []string, quals Qualifiers) (err error) {
 			if err := volume.DeleteFile(dir, fullName, m.Version, bm, ib); err != nil {
 				return fmt.Errorf("delete: %w", err)
 			}
+			
 			fmt.Fprintf(s.Stdout, "%%DELETE-S-DELETED, %s;%d deleted\n", fullName, m.Version)
 		}
 	}

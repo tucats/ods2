@@ -74,12 +74,15 @@ func New() *Session {
 // type, ...).
 func (s *Session) volumeFor(spec filespec.Spec) (*volume.Volume, error) {
 	key := strings.ToUpper(spec.Device)
+
 	vol, ok := s.Volumes[key]
 	if !ok {
 		if key == "" {
 			return nil, fmt.Errorf("no volume is mounted, and no default device is set")
 		}
+
 		return nil, fmt.Errorf("device %s is not mounted", key)
 	}
+	
 	return vol, nil
 }

@@ -75,6 +75,7 @@ func DecodeDirectoryBlock(block []byte) ([]DirEntry, error) {
 	}
 
 	var entries []DirEntry
+
 	offset := 0
 
 	for offset+dirRecHeaderSize <= len(block) {
@@ -88,10 +89,12 @@ func DecodeDirectoryBlock(block []byte) ([]DirEntry, error) {
 
 		nameCount := int(block[offset+5])
 		nameStart := offset + dirRecHeaderSize
+
 		nameEnd := nameStart + nameCount
 		if nameEnd > len(block) {
 			return nil, fmt.Errorf("ondisk: directory record's name runs past the end of the block")
 		}
+
 		name := string(block[nameStart:nameEnd])
 
 		// recordEnd is where the NEXT record starts: on disk, a record's
@@ -100,6 +103,7 @@ func DecodeDirectoryBlock(block []byte) ([]DirEntry, error) {
 		// this one starts.
 		recordEnd := offset + int(recordSize) + 2
 		entriesStart := nameStart + roundUpToEven(nameCount)
+
 		if recordEnd > len(block) || entriesStart > recordEnd {
 			return nil, fmt.Errorf("ondisk: directory record size is inconsistent with its name length")
 		}
@@ -114,6 +118,7 @@ func DecodeDirectoryBlock(block []byte) ([]DirEntry, error) {
 			if err != nil {
 				return nil, fmt.Errorf("ondisk: decoding directory entry Fid: %w", err)
 			}
+
 			entries = append(entries, DirEntry{
 				Name:    name,
 				Version: binary.LittleEndian.Uint16(block[pos : pos+2]),
@@ -157,15 +162,19 @@ const dirNameLenMax = 255
 func EncodeDirectoryBlock(entries []DirEntry) ([]byte, error) {
 	byName := make(map[string][]DirEntry, len(entries))
 	names := make([]string, 0, len(entries))
+
 	for _, e := range entries {
 		if _, seen := byName[e.Name]; !seen {
 			names = append(names, e.Name)
 		}
+
 		byName[e.Name] = append(byName[e.Name], e)
 	}
+
 	sort.Strings(names)
 
 	var block []byte
+
 	for _, name := range names {
 		nameBytes := []byte(name)
 		if len(nameBytes) > dirNameLenMax {
@@ -205,6 +214,7 @@ func EncodeDirectoryBlock(entries []DirEntry) ([]byte, error) {
 
 	out := make([]byte, BlockSize)
 	copy(out, block)
+
 	if len(block)+2 <= BlockSize {
 		// The 0xFFFF end-of-data sentinel. When the encoded records
 		// happen to fill the block exactly, there's no room (or need) for

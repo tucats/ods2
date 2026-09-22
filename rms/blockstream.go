@@ -58,6 +58,7 @@ func (s *blockStream) fill(n int) error {
 		if err := s.file.ReadBlock(s.nextVBN, block); err != nil {
 			return err
 		}
+
 		s.nextVBN++
 
 		if int64(len(block)) > remainingInFile {
@@ -66,12 +67,13 @@ func (s *blockStream) fill(n int) error {
 			// something a reader should ever see.
 			block = block[:remainingInFile]
 		}
-		s.fetched += int64(len(block))
 
+		s.fetched += int64(len(block))
 		unread := s.buf[s.bufOff:]
 		s.buf = append(append([]byte{}, unread...), block...)
 		s.bufOff = 0
 	}
+
 	return nil
 }
 
@@ -81,8 +83,10 @@ func (s *blockStream) ReadByte() (byte, error) {
 	if err := s.fill(1); err != nil {
 		return 0, err
 	}
+
 	b := s.buf[s.bufOff]
 	s.bufOff++
+
 	return b, nil
 }
 
@@ -99,11 +103,13 @@ func (s *blockStream) ReadFull(n int) ([]byte, error) {
 		if available == 0 {
 			return nil, io.EOF
 		}
+
 		return nil, io.ErrUnexpectedEOF
 	}
 
 	out := make([]byte, n)
 	copy(out, s.buf[s.bufOff:s.bufOff+n])
 	s.bufOff += n
+
 	return out, nil
 }

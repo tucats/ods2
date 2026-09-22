@@ -8,7 +8,9 @@ import (
 
 func TestCmdHelpListsCommands(t *testing.T) {
 	s := New()
+
 	var out bytes.Buffer
+	
 	s.Stdout = &out
 
 	if err := cmdHelp(s, nil, Qualifiers{}); err != nil {

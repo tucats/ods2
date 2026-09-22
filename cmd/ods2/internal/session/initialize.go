@@ -45,11 +45,13 @@ func cmdInitialize(s *Session, args []string, quals Qualifiers) error {
 	if len(args) > 2 {
 		opts.Label = strings.ToUpper(args[2])
 	}
+	
 	if quals.Has("cluster") {
 		clusterSize, err := strconv.ParseUint(quals.Value("cluster"), 10, 16)
 		if err != nil {
 			return fmt.Errorf("initialize: invalid /CLUSTER value %q: %w", quals.Value("cluster"), err)
 		}
+
 		opts.ClusterSize = uint16(clusterSize)
 	}
 
@@ -57,6 +59,7 @@ func cmdInitialize(s *Session, args []string, quals Qualifiers) error {
 	if err != nil {
 		return fmt.Errorf("initialize: %w", err)
 	}
+
 	defer func() { _ = c.Close() }()
 
 	if err := volume.Initialize(c, opts); err != nil {
@@ -67,9 +70,11 @@ func cmdInitialize(s *Session, args []string, quals Qualifiers) error {
 	if label == "" {
 		label = "NONAME"
 	}
+
 	fmt.Fprintf(s.Stdout, "%%INITIALIZE-I-DONE, Volume %s initialized on %s (%d block%s, %d reserved file%s)\n",
 		label, path, blocks, plural(blocks), ondisk.ReservedFileCount, plural(ondisk.ReservedFileCount))
-	return nil
+	
+		return nil
 }
 
 // plural returns "s" unless n is exactly 1, for the trivial pluralization
@@ -78,5 +83,6 @@ func plural(n uint64) string {
 	if n == 1 {
 		return ""
 	}
+
 	return "s"
 }

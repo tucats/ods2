@@ -45,15 +45,19 @@ func Parse(raw string, def Spec) (Spec, error) {
 		Type:    typ,
 		Version: version,
 	}
+
 	if spec.Device == "" {
 		spec.Device = def.Device
 	}
+
 	if spec.Name == "" {
 		spec.Name = def.Name
 	}
+
 	if spec.Type == "" {
 		spec.Type = def.Type
 	}
+
 	if spec.Version == "" {
 		spec.Version = def.Version
 	}
@@ -68,6 +72,7 @@ func Parse(raw string, def Spec) (Spec, error) {
 		if err != nil {
 			return Spec{}, err
 		}
+
 		spec.Dirs = dirs
 		spec.Recursive = recursive
 	}
@@ -132,6 +137,7 @@ func splitNameTypeVersion(rest string) (name, typ, version string) {
 	if idx := strings.LastIndexByte(nameTypePart, '.'); idx != -1 {
 		return nameTypePart[:idx], nameTypePart[idx+1:], version
 	}
+
 	return nameTypePart, "", version
 }
 
@@ -156,8 +162,10 @@ func resolveDirectory(dirText string, defDirs []string) (dirs []string, recursiv
 			// resetting to the master file directory.
 			return defDirs, true, nil
 		}
+
 		return nil, false, nil
 	}
+
 	if dirText == "000000" {
 		return nil, recursive, nil
 	}
@@ -168,17 +176,20 @@ func resolveDirectory(dirText string, defDirs []string) (dirs []string, recursiv
 	}
 
 	ups := 0
+
 	i := 0
 	for i < len(dirText) && dirText[i] == '-' {
 		ups++
 		i++
 	}
+
 	if ups > len(defDirs) {
 		return nil, false, fmt.Errorf("filespec: directory spec %q goes above the master file directory", dirText)
 	}
-	base := append([]string{}, defDirs[:len(defDirs)-ups]...)
 
+	base := append([]string{}, defDirs[:len(defDirs)-ups]...)
 	remainder := dirText[i:]
+	
 	switch {
 	case remainder == "":
 		// Just "-", "--", etc.: move up and stop there.

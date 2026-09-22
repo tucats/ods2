@@ -22,10 +22,12 @@ func newWritableTestVolume(t *testing.T) *volume.Volume {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "writer_test.dsk")
+
 	c, err := diskimage.Create(path, 400)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	t.Cleanup(func() { _ = c.Close() })
 
 	if err := volume.Initialize(c, volume.InitializeOptions{Label: "RMSTEST"}); err != nil {
@@ -36,6 +38,7 @@ func newWritableTestVolume(t *testing.T) *volume.Volume {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	return vol
 }
 
@@ -50,11 +53,14 @@ func newWritableTestFile(t *testing.T, vol *volume.Volume, name string, recAttr 
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	dev := vol.Devices[0]
+
 	bm, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
@@ -64,6 +70,7 @@ func newWritableTestFile(t *testing.T, vol *volume.Volume, name string, recAttr 
 	if err != nil {
 		t.Fatalf("CreateFile(%s): %v", name, err)
 	}
+
 	return f
 }
 
@@ -73,10 +80,12 @@ func newWritableTestFile(t *testing.T, vol *volume.Volume, name string, recAttr 
 // that it's still sitting in memory unchanged.
 func reopenTestFile(t *testing.T, vol *volume.Volume, fid ondisk.Fid) *volume.File {
 	t.Helper()
+
 	f, err := vol.OpenFID(fid)
 	if err != nil {
 		t.Fatalf("OpenFID(%v): %v", fid, err)
 	}
+
 	return f
 }
 
@@ -88,12 +97,14 @@ func TestWriterFixedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	want := [][]byte{[]byte("AAAA"), []byte("BBBB"), []byte("CCCC")}
 	for _, rec := range want {
 		if err := w.Put(rec); err != nil {
 			t.Fatalf("Put(%q): %v", rec, err)
 		}
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -104,19 +115,23 @@ func TestWriterFixedRoundTrip(t *testing.T) {
 	if got, want := f.Header.RecordAttributes.EndOfFileBlock, uint32(1); got != want {
 		t.Errorf("EndOfFileBlock = %d, want %d", got, want)
 	}
+
 	if got, want := f.Header.RecordAttributes.FirstFreeByte, uint16(12); got != want {
 		t.Errorf("FirstFreeByte = %d, want %d", got, want)
 	}
 
 	reopened := reopenTestFile(t, vol, f.Header.Fid)
+
 	r, err := NewReader(reopened)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
+
 	got := readAllRecords(t, r)
 	if len(got) != len(want) {
 		t.Fatalf("records = %q, want %q", got, want)
 	}
+
 	for i := range want {
 		if !bytes.Equal(got[i], want[i]) {
 			t.Errorf("record %d = %q, want %q", i, got[i], want[i])
@@ -132,6 +147,7 @@ func TestWriterFixedRejectsWrongSizedRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	if err := w.Put([]byte("TOOLONG")); err == nil {
 		t.Fatal("Put with a wrong-sized fixed record: want error, got nil")
 	}
@@ -149,6 +165,7 @@ func TestWriterFixedZeroRecordSizeRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	if err := w.Put([]byte("X")); err == nil {
 		t.Fatal("Put on a file with MaxRecordSize 0: want error, got nil")
 	}
@@ -162,25 +179,30 @@ func TestWriterVariableRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	want := [][]byte{[]byte("HELLO"), []byte("WORLD!"), {}}
 	for _, rec := range want {
 		if err := w.Put(rec); err != nil {
 			t.Fatalf("Put(%q): %v", rec, err)
 		}
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	reopened := reopenTestFile(t, vol, f.Header.Fid)
+
 	r, err := NewReader(reopened)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
+
 	got := readAllRecords(t, r)
 	if len(got) != len(want) {
 		t.Fatalf("records = %q, want %q", got, want)
 	}
+
 	for i := range want {
 		if !bytes.Equal(got[i], want[i]) {
 			t.Errorf("record %d = %q, want %q", i, got[i], want[i])
@@ -196,6 +218,7 @@ func TestWriterVariableRejectsOverlongRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	if err := w.Put(make([]byte, 0x10000)); err == nil {
 		t.Fatal("Put with a 65536-byte record: want error, got nil")
 	}
@@ -216,22 +239,27 @@ func TestWriterVFCRoundTrip(t *testing.T) {
 	if err := w.Put(vfcAndText); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	reopened := reopenTestFile(t, vol, f.Header.Fid)
+
 	r, err := NewReader(reopened)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
+
 	rec, err := r.Next()
 	if err != nil {
 		t.Fatalf("Next(): %v", err)
 	}
+
 	if !bytes.Equal(rec, vfcAndText) {
 		t.Fatalf("Next() = %q, want %q (control bytes included)", rec, vfcAndText)
 	}
+
 	if _, err := r.Next(); err != io.EOF {
 		t.Fatalf("Next() after the only record: err = %v, want io.EOF", err)
 	}
@@ -245,25 +273,30 @@ func TestWriterStreamLFRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	want := [][]byte{[]byte("one"), []byte("two"), []byte("three")}
 	for _, rec := range want {
 		if err := w.Put(rec); err != nil {
 			t.Fatalf("Put(%q): %v", rec, err)
 		}
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	reopened := reopenTestFile(t, vol, f.Header.Fid)
+
 	r, err := NewReader(reopened)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
+
 	got := readAllRecords(t, r)
 	if len(got) != len(want) {
 		t.Fatalf("records = %q, want %q", got, want)
 	}
+
 	for i := range want {
 		if !bytes.Equal(got[i], want[i]) {
 			t.Errorf("record %d = %q, want %q", i, got[i], want[i])
@@ -279,25 +312,30 @@ func TestWriterStreamCRRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	want := [][]byte{[]byte("one"), []byte("two")}
 	for _, rec := range want {
 		if err := w.Put(rec); err != nil {
 			t.Fatalf("Put(%q): %v", rec, err)
 		}
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	reopened := reopenTestFile(t, vol, f.Header.Fid)
+
 	r, err := NewReader(reopened)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
+
 	got := readAllRecords(t, r)
 	if len(got) != len(want) {
 		t.Fatalf("records = %q, want %q", got, want)
 	}
+
 	for i := range want {
 		if !bytes.Equal(got[i], want[i]) {
 			t.Errorf("record %d = %q, want %q", i, got[i], want[i])
@@ -313,25 +351,30 @@ func TestWriterStreamCRLFRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	want := [][]byte{[]byte("one"), []byte("two")}
 	for _, rec := range want {
 		if err := w.Put(rec); err != nil {
 			t.Fatalf("Put(%q): %v", rec, err)
 		}
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	reopened := reopenTestFile(t, vol, f.Header.Fid)
+
 	r, err := NewReader(reopened)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
+
 	got := readAllRecords(t, r)
 	if len(got) != len(want) {
 		t.Fatalf("records = %q, want %q", got, want)
 	}
+
 	for i := range want {
 		if !bytes.Equal(got[i], want[i]) {
 			t.Errorf("record %d = %q, want %q", i, got[i], want[i])
@@ -351,39 +394,50 @@ func TestWriterSpansMultipleBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	const count = 200
+
 	var want [][]byte
+
 	for i := 0; i < count; i++ {
 		rec := []byte{byte(i), byte(i >> 8), 0, 0}
 		want = append(want, rec)
+
 		if err := w.Put(rec); err != nil {
 			t.Fatalf("Put(#%d): %v", i, err)
 		}
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	const totalBytes = count * 4 // 800
+
 	if got, want := f.Header.RecordAttributes.EndOfFileBlock, uint32(2); got != want {
 		t.Errorf("EndOfFileBlock = %d, want %d", got, want)
 	}
+
 	if got, want := f.Header.RecordAttributes.FirstFreeByte, uint16(totalBytes-ondisk.BlockSize); got != want {
 		t.Errorf("FirstFreeByte = %d, want %d", got, want)
 	}
+
 	if got, want := f.Blocks(), uint32(2); got != want {
 		t.Errorf("Blocks() = %d, want %d", got, want)
 	}
 
 	reopened := reopenTestFile(t, vol, f.Header.Fid)
+
 	r, err := NewReader(reopened)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
+
 	got := readAllRecords(t, r)
 	if len(got) != len(want) {
 		t.Fatalf("got %d records, want %d", len(got), len(want))
 	}
+
 	for i := range want {
 		if !bytes.Equal(got[i], want[i]) {
 			t.Fatalf("record %d = %v, want %v", i, got[i], want[i])
@@ -410,6 +464,7 @@ func TestWriterDataEndingExactlyOnBlockBoundary(t *testing.T) {
 			t.Fatalf("Put(#%d): %v", i, err)
 		}
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -417,6 +472,7 @@ func TestWriterDataEndingExactlyOnBlockBoundary(t *testing.T) {
 	if got, want := f.Header.RecordAttributes.EndOfFileBlock, uint32(2); got != want {
 		t.Errorf("EndOfFileBlock = %d, want %d", got, want)
 	}
+
 	if got, want := f.Header.RecordAttributes.FirstFreeByte, uint16(0); got != want {
 		t.Errorf("FirstFreeByte = %d, want %d", got, want)
 	}
@@ -430,18 +486,22 @@ func TestWriterEmptyFileClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+
 	if got, want := f.Header.RecordAttributes.EndOfFileBlock, uint32(0); got != want {
 		t.Errorf("EndOfFileBlock = %d, want %d (no data ever written)", got, want)
 	}
 
 	reopened := reopenTestFile(t, vol, f.Header.Fid)
+
 	r, err := NewReader(reopened)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
+
 	if _, err := r.Next(); err != io.EOF {
 		t.Fatalf("Next() on an empty file: err = %v, want io.EOF", err)
 	}
@@ -455,15 +515,19 @@ func TestWriterCloseIsIdempotentAndBlocksFurtherPut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+
 	if err := w.Put([]byte("AAAA")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("first Close: %v", err)
 	}
+
 	if err := w.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
+
 	if err := w.Put([]byte("BBBB")); err == nil {
 		t.Fatal("Put after Close: want error, got nil")
 	}

@@ -65,9 +65,11 @@ func looksLikeRawCD(f *os.File, size int64) bool {
 	}
 
 	var header [rawSyncLen]byte
+
 	if _, err := f.ReadAt(header[:], 0); err != nil {
 		return false
 	}
+
 	return header == rawSyncPattern
 }
 
@@ -84,6 +86,7 @@ func (r *rawCDImage) ReadBlock(lbn uint32, buf []byte) error {
 	if lbn >= r.blocks {
 		return ErrBlockOutOfRange
 	}
+
 	if len(buf) < BlockSize {
 		return ErrBufferTooSmall
 	}
@@ -94,12 +97,12 @@ func (r *rawCDImage) ReadBlock(lbn uint32, buf []byte) error {
 	// (lbn % blocksPerSector) blocks into that sector's data region.
 	sector := lbn / blocksPerSector
 	blockWithinSector := lbn % blocksPerSector
-
 	offset := int64(sector)*rawSectorSize +
 		rawDataOffset +
 		int64(blockWithinSector)*BlockSize
 
 	_, err := r.f.ReadAt(buf[:BlockSize], offset)
+
 	return err
 }
 

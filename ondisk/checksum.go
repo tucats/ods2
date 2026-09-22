@@ -44,7 +44,8 @@ func Checksum(block []byte) (uint16, error) {
 	}
 
 	var sum uint32
-	for i := 0; i < 255; i++ {
+
+	for i := range 255 {
 		word := binary.LittleEndian.Uint16(block[i*2 : i*2+2])
 		sum += uint32(word)
 	}

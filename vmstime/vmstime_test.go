@@ -10,6 +10,7 @@ func TestZeroTicksIsVMSEpoch(t *testing.T) {
 	// 17-NOV-1858 00:00:00.00 UTC.
 	got := VMSTime(0).Time()
 	want := time.Date(1858, time.November, 17, 0, 0, 0, 0, time.UTC)
+
 	if !got.Equal(want) {
 		t.Errorf("VMSTime(0).Time() = %v, want %v", got, want)
 	}
@@ -20,6 +21,7 @@ func TestUnixEpochConversion(t *testing.T) {
 
 	got := FromTime(unixEpoch)
 	want := VMSTime(vmsToUnixOffsetTicks)
+	
 	if got != want {
 		t.Errorf("FromTime(unix epoch) = %d, want %d", got, want)
 	}

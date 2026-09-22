@@ -51,6 +51,7 @@ func RunInteractive(s *session.Session, prompt, historyFile string) error {
 		if cmdErr != nil {
 			fmt.Fprintf(s.Stdout, "%%ODS2-E-ERROR, %v\n", cmdErr)
 		}
+		
 		if !keepGoing {
 			return nil
 		}

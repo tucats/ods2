@@ -73,6 +73,7 @@ func historyFilePath() string {
 	if err != nil {
 		return ""
 	}
+
 	return filepath.Join(home, ".ods2_history")
 }
 
@@ -106,25 +107,25 @@ func newOneShotCommand(spec oneShotSpec) *cobra.Command {
 		DisableFlagParsing: true,
 		SilenceUsage:       true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runOneShot(spec.verb, args[0], args[1:])
+			return runImmediate(spec.verb, args[0], args[1:])
 		},
 	}
 }
 
-// oneShotDevice is the placeholder device name a one-shot subcommand
+// immediateDefaultDevice is the placeholder device name a one-shot subcommand
 // mounts its image under. The actual name is never visible to the
 // caller — a one-shot session mounts exactly one volume and every
 // subsequent file spec in rest resolves against the session's default
 // device, set automatically from this same mount (see mountContainers) —
 // so any fixed, valid device name works equally well here.
-const oneShotDevice = "DUA0"
+const immediateDefaultDevice = "DUA0"
 
-// runOneShot mounts image as a fresh session's only volume, then executes
+// runImmediate mounts image as a fresh session's only volume, then executes
 // "verb rest..." as a single command line against it.
-func runOneShot(verb, image string, rest []string) error {
+func runImmediate(verb, image string, rest []string) error {
 	s := session.New()
 
-	if _, err := s.Execute("mount " + oneShotDevice + " " + image); err != nil {
+	if _, err := s.Execute("mount " + immediateDefaultDevice + " " + image); err != nil {
 		return err
 	}
 
@@ -134,5 +135,6 @@ func runOneShot(verb, image string, rest []string) error {
 	}
 
 	_, err := s.Execute(line)
+
 	return err
 }

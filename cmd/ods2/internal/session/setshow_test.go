@@ -14,18 +14,20 @@ import (
 
 func TestCmdSetDefault(t *testing.T) {
 	s := New()
-	s.Default = filespec.Spec{Device: "DUA0", Dirs: []string{"FOO"}}
+	s.Default = filespec.Spec{Device: defaultDeviceName, Dirs: []string{"FOO"}}
 
 	if err := cmdSet(s, []string{"default", "[.BAR]"}, nil); err != nil {
 		t.Fatalf("cmdSet: %v", err)
 	}
 
 	want := []string{"FOO", "BAR"}
+
 	if len(s.Default.Dirs) != 2 || s.Default.Dirs[0] != want[0] || s.Default.Dirs[1] != want[1] {
 		t.Errorf("Default.Dirs = %v, want %v", s.Default.Dirs, want)
 	}
-	if s.Default.Device != "DUA0" {
-		t.Errorf("Default.Device = %q, want %q (should be preserved)", s.Default.Device, "DUA0")
+
+	if s.Default.Device != defaultDeviceName {
+		t.Errorf("Default.Device = %q, want %q (should be preserved)", s.Default.Device, defaultDeviceName)
 	}
 }
 
@@ -38,28 +40,32 @@ func TestCmdSetUnrecognizedAttribute(t *testing.T) {
 
 func TestCmdSetDefaultAbbreviated(t *testing.T) {
 	s := New()
+
 	if err := cmdSet(s, []string{"def", "[FOO]"}, nil); err != nil {
 		t.Fatalf("cmdSet with abbreviated sub-verb: %v", err)
 	}
 }
 
 func TestCmdShowDefault(t *testing.T) {
-	s := New()
 	var out bytes.Buffer
+
+	s := New()
 	s.Stdout = &out
-	s.Default = filespec.Spec{Device: "DUA0", Dirs: []string{"FOO"}}
+	s.Default = filespec.Spec{Device: defaultDeviceName, Dirs: []string{"FOO"}}
 
 	if err := cmdShow(s, []string{"default"}, nil); err != nil {
 		t.Fatalf("cmdShow: %v", err)
 	}
+
 	if !strings.Contains(out.String(), "DUA0:[FOO]") {
 		t.Errorf("show default output = %q, want it to contain %q", out.String(), "DUA0:[FOO]")
 	}
 }
 
 func TestCmdShowTime(t *testing.T) {
-	s := New()
 	var out bytes.Buffer
+
+	s := New()
 	s.Stdout = &out
 
 	if err := cmdShow(s, []string{"time"}, nil); err != nil {
@@ -74,6 +80,7 @@ func TestCmdShowTime(t *testing.T) {
 
 func TestCmdShowUnrecognizedAttribute(t *testing.T) {
 	s := New()
+
 	if err := cmdShow(s, []string{"protection"}, nil); err == nil {
 		t.Fatal(`cmdShow("protection"): want error, got nil`)
 	}
@@ -91,10 +98,12 @@ func newSetFileTestSession(t *testing.T) *Session {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "setfile.dsk")
+
 	c, err := diskimage.Create(path, 600)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	t.Cleanup(func() { _ = c.Close() })
 
 	if err := volume.Initialize(c, volume.InitializeOptions{Label: "SETVOL"}); err != nil {
@@ -107,10 +116,12 @@ func newSetFileTestSession(t *testing.T) *Session {
 	}
 
 	dev := vol.Devices[0]
+
 	bm, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
@@ -126,6 +137,7 @@ func newSetFileTestSession(t *testing.T) *Session {
 		if err != nil {
 			t.Fatalf("CreateFile(%s): %v", name, err)
 		}
+
 		if err := f.Close(); err != nil {
 			t.Fatalf("Close(%s): %v", name, err)
 		}
@@ -138,15 +150,18 @@ func newSetFileTestSession(t *testing.T) *Session {
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
 
-	s := New()
 	var out bytes.Buffer
+
+	s := New()
 	s.Stdout = &out
-	s.Volumes["DUA0"] = vol
-	s.Default.Device = "DUA0"
+	s.Volumes[defaultDeviceName] = vol
+	s.Default.Device = defaultDeviceName
+
 	return s
 }
 
@@ -161,16 +176,19 @@ func versionLimitOf(t *testing.T, vol *volume.Volume, dir *volume.Directory, nam
 	if err != nil {
 		t.Fatalf("Lookup(%s;%d): %v", name, version, err)
 	}
+
 	f, err := vol.OpenFID(entry.Fid)
 	if err != nil {
 		t.Fatalf("OpenFID(%s;%d): %v", name, version, err)
 	}
+
 	return f.Header.RecordAttributes.VersionLimit
 }
 
 func TestCmdSetFileSetsVersionLimitOnPlainFile(t *testing.T) {
 	s := newSetFileTestSession(t)
-	vol := s.Volumes["DUA0"]
+	vol := s.Volumes[defaultDeviceName]
+
 	mfd, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
@@ -192,7 +210,8 @@ func TestCmdSetFileSetsVersionLimitOnPlainFile(t *testing.T) {
 
 func TestCmdSetFileWithoutVersionTargetsHighest(t *testing.T) {
 	s := newSetFileTestSession(t)
-	vol := s.Volumes["DUA0"]
+	vol := s.Volumes[defaultDeviceName]
+
 	mfd, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
@@ -205,6 +224,7 @@ func TestCmdSetFileWithoutVersionTargetsHighest(t *testing.T) {
 	if got := versionLimitOf(t, vol, mfd, "FOO.TXT", 2); got != 5 {
 		t.Errorf("FOO.TXT;2 (highest)'s VersionLimit = %d, want 5", got)
 	}
+
 	if got := versionLimitOf(t, vol, mfd, "FOO.TXT", 1); got != 0 {
 		t.Errorf("FOO.TXT;1's VersionLimit = %d, want 0 (untouched)", got)
 	}
@@ -212,7 +232,8 @@ func TestCmdSetFileWithoutVersionTargetsHighest(t *testing.T) {
 
 func TestCmdSetFileWildcardSetsEveryMatch(t *testing.T) {
 	s := newSetFileTestSession(t)
-	vol := s.Volumes["DUA0"]
+	vol := s.Volumes[defaultDeviceName]
+
 	mfd, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
@@ -225,9 +246,11 @@ func TestCmdSetFileWildcardSetsEveryMatch(t *testing.T) {
 	if got := versionLimitOf(t, vol, mfd, "FOO.TXT", 1); got != 9 {
 		t.Errorf("FOO.TXT;1's VersionLimit = %d, want 9", got)
 	}
+
 	if got := versionLimitOf(t, vol, mfd, "FOO.TXT", 2); got != 9 {
 		t.Errorf("FOO.TXT;2's VersionLimit = %d, want 9", got)
 	}
+
 	if got := versionLimitOf(t, vol, mfd, "BAR.TXT", 1); got != 9 {
 		t.Errorf("BAR.TXT;1's VersionLimit = %d, want 9", got)
 	}
@@ -242,7 +265,7 @@ func TestCmdSetFileWildcardSetsEveryMatch(t *testing.T) {
 // already covers at the volume-API layer, exercised here through the CLI.
 func TestCmdSetFileTargetsDirectorySpec(t *testing.T) {
 	s := newSetFileTestSession(t)
-	vol := s.Volumes["DUA0"]
+	vol := s.Volumes[defaultDeviceName]
 
 	if err := cmdSet(s, []string{"file", "SUBDIR.DIR"}, Qualifiers{"version_limit": "4"}); err != nil {
 		t.Fatalf("cmdSet(file) on a directory spec: %v", err)
@@ -252,26 +275,32 @@ func TestCmdSetFileTargetsDirectorySpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveDirectory(SUBDIR): %v", err)
 	}
+
 	if got := sub.Header.RecordAttributes.VersionLimit; got != 4 {
 		t.Errorf("SUBDIR.DIR's own VersionLimit = %d, want 4", got)
 	}
 
 	dev := vol.Devices[0]
+
 	bm, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
 	}
+
 	child, err := vol.CreateFile(sub, "CHILD.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatStreamLF}, bm, ib)
 	if err != nil {
 		t.Fatalf("CreateFile(CHILD.DAT): %v", err)
 	}
+
 	if err := child.Close(); err != nil {
 		t.Fatalf("Close(CHILD.DAT): %v", err)
 	}
+
 	if got := child.Header.RecordAttributes.VersionLimit; got != 4 {
 		t.Errorf("new file created inside SUBDIR after SET FILE's inherited VersionLimit = %d, want 4", got)
 	}
@@ -291,6 +320,7 @@ func TestCmdSetFileInvalidValueRejected(t *testing.T) {
 	if err := cmdSet(s, []string{"file", "BAR.TXT"}, Qualifiers{"version_limit": "abc"}); err == nil {
 		t.Fatal("cmdSet(file) with a non-numeric /VERSION_LIMIT: want error, got nil")
 	}
+
 	if err := cmdSet(s, []string{"file", "BAR.TXT"}, Qualifiers{"version_limit": "-1"}); err == nil {
 		t.Fatal("cmdSet(file) with a negative /VERSION_LIMIT: want error, got nil")
 	}
@@ -306,7 +336,8 @@ func TestCmdSetFileNonexistentTargetErrors(t *testing.T) {
 
 func TestSetFileIntegrationViaExecute(t *testing.T) {
 	s := newSetFileTestSession(t)
-	vol := s.Volumes["DUA0"]
+	vol := s.Volumes[defaultDeviceName]
+
 	mfd, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
@@ -315,22 +346,26 @@ func TestSetFileIntegrationViaExecute(t *testing.T) {
 	if _, err := s.Execute("set file /version_limit=2 BAR.TXT"); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+
 	if got := versionLimitOf(t, vol, mfd, "BAR.TXT", 1); got != 2 {
 		t.Errorf("BAR.TXT;1's VersionLimit = %d, want 2", got)
 	}
 }
 
 func TestSetShowIntegrationViaExecute(t *testing.T) {
-	s := New()
 	var out bytes.Buffer
+
+	s := New()
 	s.Stdout = &out
 
 	if _, err := s.Execute("set default [FOO.BAR]"); err != nil {
 		t.Fatalf("Execute(set default): %v", err)
 	}
+
 	if _, err := s.Execute("show default"); err != nil {
 		t.Fatalf("Execute(show default): %v", err)
 	}
+
 	if !strings.Contains(out.String(), "[FOO.BAR]") {
 		t.Errorf("output = %q, want it to contain %q", out.String(), "[FOO.BAR]")
 	}

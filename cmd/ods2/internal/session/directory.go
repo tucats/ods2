@@ -65,12 +65,14 @@ func cmdDirectory(s *Session, args []string, quals Qualifiers) error {
 			}
 
 			fmt.Fprintln(s.Stdout, line)
+
 			totalFiles++
 			totalBlocks += blocks
 		}
 	}
 
 	fmt.Fprintf(s.Stdout, "\nTotal of %d file(s)", totalFiles)
+
 	if showSize {
 		fmt.Fprintf(s.Stdout, ", %d block(s)", totalBlocks)
 	}
@@ -92,25 +94,32 @@ type dirGroup struct {
 // implicit "..." recursion, matched more than one directory), and returns
 // the groups sorted by directory path for stable, readable output.
 func groupMatchesByDir(matches []filespec.Match) []dirGroup {
-	index := make(map[string]*dirGroup)
 	var order []string
+
+	index := make(map[string]*dirGroup)
 
 	for _, m := range matches {
 		key := strings.Join(m.Dirs, ".")
+
 		g, ok := index[key]
 		if !ok {
 			g = &dirGroup{dirs: m.Dirs}
+
 			index[key] = g
+
 			order = append(order, key)
 		}
+
 		g.matches = append(g.matches, m)
 	}
 
 	sort.Strings(order)
 	groups := make([]dirGroup, len(order))
+
 	for i, key := range order {
 		groups[i] = *index[key]
 	}
+
 	return groups
 }
 

@@ -19,6 +19,7 @@ func TestBlockStreamReadByte(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadByte() #%d: %v", i, err)
 		}
+
 		if got != want {
 			t.Fatalf("ReadByte() #%d = %q, want %q", i, got, want)
 		}
@@ -38,6 +39,7 @@ func TestBlockStreamReadFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFull(5): %v", err)
 	}
+
 	if !bytes.Equal(got, []byte("HELLO")) {
 		t.Fatalf("ReadFull(5) = %q, want %q", got, "HELLO")
 	}
@@ -46,6 +48,7 @@ func TestBlockStreamReadFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFull(6): %v", err)
 	}
+
 	if !bytes.Equal(got, []byte(" WORLD")) {
 		t.Fatalf("ReadFull(6) = %q, want %q", got, " WORLD")
 	}
@@ -59,6 +62,7 @@ func TestBlockStreamReadFullAcrossBlockBoundary(t *testing.T) {
 	for i := range data {
 		data[i] = byte(i % 256)
 	}
+
 	f := newTestFile(t, odstest.FileHeaderFixture{}, data)
 	s := newBlockStream(f, int64(len(data)))
 
@@ -70,6 +74,7 @@ func TestBlockStreamReadFullAcrossBlockBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFull(30) spanning the block boundary: %v", err)
 	}
+
 	want := data[ondisk.BlockSize-10 : ondisk.BlockSize+20]
 	if !bytes.Equal(got, want) {
 		t.Fatalf("ReadFull(30) spanning the block boundary = %v, want %v", got, want)
@@ -82,6 +87,7 @@ func TestBlockStreamStopsAtLimitNotBlockSize(t *testing.T) {
 	// leftover padding as if it were real data.
 	block := make([]byte, ondisk.BlockSize)
 	copy(block, "SHORT")
+
 	for i := 5; i < len(block); i++ {
 		block[i] = 0xFF // deliberately non-zero "garbage" padding
 	}
@@ -93,6 +99,7 @@ func TestBlockStreamStopsAtLimitNotBlockSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFull(5): %v", err)
 	}
+
 	if !bytes.Equal(got, []byte("SHORT")) {
 		t.Fatalf("ReadFull(5) = %q, want %q", got, "SHORT")
 	}

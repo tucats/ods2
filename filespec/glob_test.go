@@ -32,6 +32,7 @@ const (
 
 func globFileHeaderLBN(fileNum uint16) uint32 {
 	idxblk := uint32(fileNum) - 1 + globTestIdxBitmapVBN + globTestIdxBitmapSize
+
 	return globTestIdxBitmapLBN + (idxblk - 1)
 }
 
@@ -59,7 +60,9 @@ func newGlobTestVolume(t *testing.T) *volume.Volume {
 
 	// [000000] (file #4, the MFD): README.TXT, DATA.DAT, SUBDIR.DIR
 	mfdFid := ondisk.MasterFileDirectoryFid
+
 	const mfdDataLBN = 200
+
 	c.PutBlock(globFileHeaderLBN(mfdFid.Num), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            mfdFid,
 		FileChar:       ondisk.FchDirectory,
@@ -77,6 +80,7 @@ func newGlobTestVolume(t *testing.T) *volume.Volume {
 
 	// SUBDIR.DIR (file #10): NESTED.TXT, DEEPER.DIR
 	const subdirDataLBN = 201
+
 	c.PutBlock(globFileHeaderLBN(10), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            fid(10),
 		FileChar:       ondisk.FchDirectory,
@@ -92,6 +96,7 @@ func newGlobTestVolume(t *testing.T) *volume.Volume {
 
 	// DEEPER.DIR (file #12): LEAF.TXT
 	const deeperDataLBN = 202
+
 	c.PutBlock(globFileHeaderLBN(12), odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            fid(12),
 		FileChar:       ondisk.FchDirectory,
@@ -108,6 +113,7 @@ func newGlobTestVolume(t *testing.T) *volume.Volume {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	return vol
 }
 
@@ -116,7 +122,9 @@ func matchNames(matches []Match) []string {
 	for i, m := range matches {
 		names[i] = m.Name + "." + m.Type
 	}
+
 	sort.Strings(names)
+
 	return names
 }
 
@@ -130,12 +138,15 @@ func TestGlobRootWildcard(t *testing.T) {
 
 	got := matchNames(matches)
 	want := []string{"DATA.DAT", "README.TXT", "SUBDIR.DIR"}
+
 	if len(got) != len(want) {
 		t.Fatalf("Glob() = %v, want %v", got, want)
 	}
+
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("Glob() = %v, want %v", got, want)
+
 			break
 		}
 	}
@@ -151,6 +162,7 @@ func TestGlobEmptyNameTypeDefaultsToWildcard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+
 	if len(matches) != 3 {
 		t.Fatalf("Glob() with empty Name/Type found %d matches, want 3", len(matches))
 	}
@@ -163,6 +175,7 @@ func TestGlobExactName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+
 	if len(matches) != 1 || matches[0].Name != "README" {
 		t.Fatalf("Glob() = %+v, want a single README.TXT match", matches)
 	}
@@ -175,8 +188,10 @@ func TestGlobNamePattern(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+
 	got := matchNames(matches)
 	want := []string{"README.TXT"}
+
 	if len(got) != 1 || got[0] != want[0] {
 		t.Fatalf("Glob(*.TXT) = %v, want %v", got, want)
 	}
@@ -189,11 +204,14 @@ func TestGlobIntoSubdirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+
 	got := matchNames(matches)
 	want := []string{"DEEPER.DIR", "NESTED.TXT"}
+
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("Glob([SUBDIR]*.*) = %v, want %v", got, want)
 	}
+
 	if len(matches[0].Dirs) == 0 || matches[0].Dirs[0] != "SUBDIR" {
 		t.Errorf("Match.Dirs = %v, want to start with SUBDIR", matches[0].Dirs)
 	}
@@ -207,6 +225,7 @@ func TestGlobWildcardDirectoryComponent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+
 	if len(matches) != 2 {
 		t.Fatalf("Glob([SUB*]*.*) found %d matches, want 2", len(matches))
 	}
@@ -219,14 +238,18 @@ func TestGlobRecursive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+
 	got := matchNames(matches)
 	want := []string{"DEEPER.DIR", "LEAF.TXT", "NESTED.TXT"}
+
 	if len(got) != len(want) {
 		t.Fatalf("Glob([SUBDIR...]*.*) = %v, want %v", got, want)
 	}
+
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("Glob([SUBDIR...]*.*) = %v, want %v", got, want)
+
 			break
 		}
 	}
@@ -239,14 +262,18 @@ func TestGlobRecursiveFromRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+	
 	got := matchNames(matches)
 	want := []string{"DATA.DAT", "DEEPER.DIR", "LEAF.TXT", "NESTED.TXT", "README.TXT", "SUBDIR.DIR"}
+	
 	if len(got) != len(want) {
 		t.Fatalf("Glob([...]*.*) = %v, want %v", got, want)
 	}
+
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("Glob([...]*.*) = %v, want %v", got, want)
+
 			break
 		}
 	}
@@ -259,6 +286,7 @@ func TestGlobNoMatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+
 	if len(matches) != 0 {
 		t.Errorf("Glob() = %+v, want no matches", matches)
 	}
@@ -271,6 +299,7 @@ func TestGlobNonexistentDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+
 	if len(matches) != 0 {
 		t.Errorf("Glob([NOSUCHDIR]*.*) = %+v, want no matches", matches)
 	}
@@ -296,6 +325,7 @@ func TestResolveDirectoryRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 3 {
 		t.Fatalf("root directory has %d entries, want 3", len(entries))
 	}
@@ -313,6 +343,7 @@ func TestResolveDirectoryNested(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 1 || entries[0].Name != "LEAF.TXT" {
 		t.Fatalf("ResolveDirectory([SUBDIR.DEEPER]) entries = %+v, want just LEAF.TXT", entries)
 	}
@@ -325,10 +356,12 @@ func TestResolveDirectoryIsCaseInsensitive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveDirectory([subdir]): %v", err)
 	}
+
 	entries, err := dir.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 2 {
 		t.Fatalf("ResolveDirectory([subdir]) entries = %+v, want 2", entries)
 	}

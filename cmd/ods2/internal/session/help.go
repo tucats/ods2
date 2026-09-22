@@ -20,11 +20,14 @@ func cmdHelp(s *Session, args []string, quals Qualifiers) error {
 	for _, c := range Table {
 		names = append(names, c.Name)
 	}
+
 	sort.Strings(names)
 
 	fmt.Fprintln(s.Stdout, "Commands:")
+
 	for _, n := range names {
 		fmt.Fprintf(s.Stdout, "  %s\n", n)
 	}
+	
 	return nil
 }

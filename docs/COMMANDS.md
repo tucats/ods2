@@ -25,11 +25,11 @@ always takes the image to mount as its first argument, then the rest of
 an ordinary command line exactly as you'd type it at the `ODS2>` prompt:
 
 ```text
-$ ods2 dir myvolume.iso *.txt
-$ ods2 type myvolume.iso README.TXT
-$ ods2 copy myvolume.iso "*.TXT" ./extracted/
-$ ods2 search myvolume.iso "*.TXT" "TODO"
-$ ods2 difference myvolume.iso NOTES.TXT ./local-notes.txt
+ods2 dir myvolume.iso *.txt
+ods2 type myvolume.iso README.TXT
+ods2 copy myvolume.iso "*.TXT" ./extracted/
+ods2 search myvolume.iso "*.TXT" "TODO"
+ods2 difference myvolume.iso NOTES.TXT ./local-notes.txt
 ```
 
 Each one-shot invocation mounts the image **read-only**, runs exactly one
@@ -73,7 +73,7 @@ name (up to the full word) always works too. If your abbreviation could
 match more than one command, it's rejected as ambiguous.
 
 | Command | Minimum abbreviation |
-|---|---|
+| --- | --- |
 | `copy` | `copy` (4) |
 | `difference` | `diff` (4) |
 | `directory` | `dir` (3) |

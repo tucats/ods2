@@ -9,8 +9,9 @@ import (
 )
 
 func TestRunExecutesEachLine(t *testing.T) {
-	s := session.New()
 	var out bytes.Buffer
+
+	s := session.New()
 	s.Stdout = &out
 
 	input := "set default [FOO]\nshow default\n"
@@ -25,7 +26,9 @@ func TestRunExecutesEachLine(t *testing.T) {
 
 func TestRunStopsOnExit(t *testing.T) {
 	s := session.New()
+
 	var out bytes.Buffer
+
 	s.Stdout = &out
 
 	// The line after "exit" must never be executed.
@@ -40,8 +43,9 @@ func TestRunStopsOnExit(t *testing.T) {
 }
 
 func TestRunContinuesAfterCommandError(t *testing.T) {
-	s := session.New()
 	var out bytes.Buffer
+
+	s := session.New()
 	s.Stdout = &out
 
 	// A bad command on the first line must not stop the second line from
@@ -55,6 +59,7 @@ func TestRunContinuesAfterCommandError(t *testing.T) {
 	if !strings.Contains(out.String(), "ODS2-E-ERROR") {
 		t.Errorf("output = %q, want the bad command's error to be reported", out.String())
 	}
+
 	if !strings.Contains(s.Default.String(), "[FOO]") {
 		t.Errorf("Default = %v, want the second line to still have run", s.Default)
 	}

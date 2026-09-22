@@ -29,10 +29,12 @@ func newPurgeTestSession(t *testing.T) *Session {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "purge.dsk")
+
 	c, err := diskimage.Create(path, 600)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	t.Cleanup(func() { _ = c.Close() })
 
 	if err := volume.Initialize(c, volume.InitializeOptions{Label: "PURGEVOL"}); err != nil {
@@ -45,10 +47,12 @@ func newPurgeTestSession(t *testing.T) *Session {
 	}
 
 	dev := vol.Devices[0]
+
 	bm, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
@@ -64,6 +68,7 @@ func newPurgeTestSession(t *testing.T) *Session {
 		if err != nil {
 			t.Fatalf("CreateFile(%s): %v", name, err)
 		}
+
 		if err := f.Close(); err != nil {
 			t.Fatalf("Close(%s): %v", name, err)
 		}
@@ -72,21 +77,26 @@ func newPurgeTestSession(t *testing.T) *Session {
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
 
 	s := New()
+
 	var out bytes.Buffer
+
 	s.Stdout = &out
-	s.Volumes["DUA0"] = vol
-	s.Default.Device = "DUA0"
+	s.Volumes[defaultDeviceName] = vol
+	s.Default.Device = defaultDeviceName
+
 	return s
 }
 
 func TestCmdPurgeDefaultLimitKeepsOnlyHighestVersion(t *testing.T) {
 	s := newPurgeTestSession(t)
-	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
+
+	mfd, err := s.Volumes[defaultDeviceName].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
@@ -96,11 +106,13 @@ func TestCmdPurgeDefaultLimitKeepsOnlyHighestVersion(t *testing.T) {
 	}
 
 	names := dirEntryNames(t, mfd)
+	
 	for _, want := range []string{"FOO.TXT;3", "BAR.TXT;2", "BAZ.TXT;1"} {
 		if !contains(names, want) {
 			t.Errorf("directory entries = %v, want %s to survive (the highest version)", names, want)
 		}
 	}
+
 	for _, gone := range []string{"FOO.TXT;1", "FOO.TXT;2", "BAR.TXT;1"} {
 		if contains(names, gone) {
 			t.Errorf("directory entries = %v, want %s removed (default /LIMIT=1)", names, gone)
@@ -110,7 +122,8 @@ func TestCmdPurgeDefaultLimitKeepsOnlyHighestVersion(t *testing.T) {
 
 func TestCmdPurgeExplicitLimitKeepsThatManyVersions(t *testing.T) {
 	s := newPurgeTestSession(t)
-	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
+
+	mfd, err := s.Volumes[defaultDeviceName].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
@@ -125,6 +138,7 @@ func TestCmdPurgeExplicitLimitKeepsThatManyVersions(t *testing.T) {
 			t.Errorf("directory entries = %v, want %s untouched/surviving", names, want)
 		}
 	}
+
 	if contains(names, "FOO.TXT;1") {
 		t.Errorf("directory entries = %v, want FOO.TXT;1 removed (/LIMIT=2)", names)
 	}
@@ -132,7 +146,8 @@ func TestCmdPurgeExplicitLimitKeepsThatManyVersions(t *testing.T) {
 
 func TestCmdPurgeGlobCoversMultipleDistinctNames(t *testing.T) {
 	s := newPurgeTestSession(t)
-	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
+
+	mfd, err := s.Volumes[defaultDeviceName].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
@@ -153,6 +168,7 @@ func TestCmdPurgeGlobCoversMultipleDistinctNames(t *testing.T) {
 			t.Errorf("directory entries = %v, want %s to survive", names, want)
 		}
 	}
+
 	for _, gone := range []string{"FOO.TXT;1", "FOO.TXT;2", "BAR.TXT;1"} {
 		if contains(names, gone) {
 			t.Errorf("directory entries = %v, want %s removed", names, gone)
@@ -170,10 +186,12 @@ func TestCmdPurgeInvalidLimitRejected(t *testing.T) {
 
 func TestCmdPurgeZeroLimitRejected(t *testing.T) {
 	s := newPurgeTestSession(t)
-	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
+
+	mfd, err := s.Volumes[defaultDeviceName].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	before := dirEntryNames(t, mfd)
 
 	if err := cmdPurge(s, []string{"FOO.TXT"}, Qualifiers{"limit": "0"}); err == nil {
@@ -201,7 +219,8 @@ func TestCmdPurgeConfirmationMessage(t *testing.T) {
 
 func TestPurgeIntegrationViaExecute(t *testing.T) {
 	s := newPurgeTestSession(t)
-	mfd, err := s.Volumes["DUA0"].OpenDirectory(ondisk.MasterFileDirectoryFid)
+
+	mfd, err := s.Volumes[defaultDeviceName].OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
@@ -214,6 +233,7 @@ func TestPurgeIntegrationViaExecute(t *testing.T) {
 	if contains(names, "FOO.TXT;1") || contains(names, "FOO.TXT;2") {
 		t.Errorf("directory entries = %v, want only FOO.TXT;3 to survive", names)
 	}
+
 	if !contains(names, "FOO.TXT;3") {
 		t.Errorf("directory entries = %v, want FOO.TXT;3 to survive", names)
 	}

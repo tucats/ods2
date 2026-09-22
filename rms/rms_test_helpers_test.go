@@ -24,6 +24,7 @@ const (
 
 func testFileHeaderLBN(fileNum uint16) uint32 {
 	idxblk := uint32(fileNum) - 1 + testIdxBitmapVBN + testIdxBitmapSize
+
 	return testIdxBitmapLBN + (idxblk - 1)
 }
 
@@ -59,18 +60,22 @@ func newTestFile(t *testing.T, rec odstest.FileHeaderFixture, data []byte) *volu
 	rec.Fid = testFileFid
 	rec.MapOffsetWords = 55
 	rec.MapBytes = odstest.EncodeExtentFormat2(uint32(numBlocks), testDataLBN)
+
 	if rec.HighestBlock == 0 {
 		rec.HighestBlock = uint32(numBlocks)
 	}
+
 	c.PutBlock(testFileHeaderLBN(testFileFid.Num), odstest.BuildFileHeaderBytes(t, rec))
 
 	for i := 0; i < numBlocks; i++ {
 		block := make([]byte, ondisk.BlockSize)
 		start := i * ondisk.BlockSize
 		end := start + ondisk.BlockSize
+
 		if end > len(data) {
 			end = len(data)
 		}
+
 		copy(block, data[start:end])
 		c.PutBlock(uint32(testDataLBN+i), block)
 	}
@@ -79,9 +84,11 @@ func newTestFile(t *testing.T, rec odstest.FileHeaderFixture, data []byte) *volu
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	f, err := vol.OpenFID(testFileFid)
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	return f
 }

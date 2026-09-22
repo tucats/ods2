@@ -118,6 +118,7 @@ func OpenFormat(path string, format Format) (Container, error) {
 	// we hand back a Container that owns it.
 	closeOnError := func(err error) (Container, error) {
 		_ = f.Close()
+
 		return nil, err
 	}
 
@@ -133,7 +134,9 @@ func OpenFormat(path string, format Format) (Container, error) {
 				"diskimage: %s is %d bytes, not a multiple of the raw CD-ROM sector size (%d)",
 				path, size, rawSectorSize))
 		}
+
 		sectors := size / rawSectorSize
+
 		return &rawCDImage{f: f, blocks: uint32(sectors) * blocksPerSector}, nil
 
 	case FormatPlain:
@@ -142,6 +145,7 @@ func OpenFormat(path string, format Format) (Container, error) {
 				"diskimage: %s is %d bytes, not a multiple of the ODS-2 block size (%d)",
 				path, size, BlockSize))
 		}
+
 		return &plainImage{f: f, blocks: uint32(size / BlockSize)}, nil
 
 	default:
@@ -164,6 +168,7 @@ func detectFormat(f *os.File, path string, format Format) (Format, int64, error)
 	if err != nil {
 		return 0, 0, fmt.Errorf("diskimage: stat %s: %w", path, err)
 	}
+
 	size := info.Size()
 	if size <= 0 {
 		return 0, 0, fmt.Errorf("diskimage: %s is empty", path)
@@ -176,6 +181,7 @@ func detectFormat(f *os.File, path string, format Format) (Format, int64, error)
 			format = FormatPlain
 		}
 	}
+
 	return format, size, nil
 }
 
@@ -203,6 +209,7 @@ func OpenFormatWritable(path string, format Format) (WritableContainer, error) {
 
 	closeOnError := func(err error) (WritableContainer, error) {
 		_ = f.Close()
+
 		return nil, err
 	}
 
@@ -223,6 +230,7 @@ func OpenFormatWritable(path string, format Format) (WritableContainer, error) {
 				"diskimage: %s is %d bytes, not a multiple of the ODS-2 block size (%d)",
 				path, size, BlockSize))
 		}
+
 		return &writablePlainImage{plainImage{f: f, blocks: uint32(size / BlockSize)}}, nil
 
 	default:
@@ -257,6 +265,7 @@ func Create(path string, blocks uint32) (WritableContainer, error) {
 	size := int64(blocks) * BlockSize
 	if err := f.Truncate(size); err != nil {
 		_ = f.Close()
+
 		return nil, fmt.Errorf("diskimage: sizing %s to %d bytes: %w", path, size, err)
 	}
 

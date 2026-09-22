@@ -105,9 +105,11 @@ func (w *Writer) putFixed(record []byte) error {
 	if w.fixedSize <= 0 {
 		return fmt.Errorf("rms: file's record attributes don't define a usable fixed record size (MaxRecordSize %d)", w.fixedSize)
 	}
+
 	if len(record) != w.fixedSize {
 		return fmt.Errorf("rms: fixed-format record must be exactly %d bytes, got %d", w.fixedSize, len(record))
 	}
+
 	return w.append(record)
 }
 
@@ -125,15 +127,19 @@ func (w *Writer) putVariable(record []byte) error {
 
 	length := make([]byte, 2)
 	binary.LittleEndian.PutUint16(length, uint16(len(record)))
+
 	if err := w.append(length); err != nil {
 		return err
 	}
+
 	if err := w.append(record); err != nil {
 		return err
 	}
+
 	if len(record)%2 != 0 {
 		return w.append([]byte{0})
 	}
+
 	return nil
 }
 
@@ -147,6 +153,7 @@ func (w *Writer) putStream(record []byte, kind streamDelim) error {
 	if err := w.append(record); err != nil {
 		return err
 	}
+
 	return w.append(streamDelimBytes(kind))
 }
 
@@ -181,12 +188,14 @@ func (w *Writer) append(data []byte) error {
 		if err := w.file.WriteBlock(w.vbn, w.buf[:ondisk.BlockSize]); err != nil {
 			return fmt.Errorf("rms: writing virtual block %d: %w", w.vbn, err)
 		}
+
 		w.vbn++
 
 		remaining := len(w.buf) - ondisk.BlockSize
 		copy(w.buf, w.buf[ondisk.BlockSize:])
 		w.buf = w.buf[:remaining]
 	}
+
 	return nil
 }
 
@@ -204,12 +213,14 @@ func (w *Writer) Close() error {
 	if w.closed {
 		return nil
 	}
+
 	w.closed = true
 
 	finalByte := len(w.buf)
 	if finalByte > 0 {
 		block := make([]byte, ondisk.BlockSize)
 		copy(block, w.buf)
+
 		if err := w.file.WriteBlock(w.vbn, block); err != nil {
 			return fmt.Errorf("rms: writing final virtual block %d: %w", w.vbn, err)
 		}
@@ -218,5 +229,6 @@ func (w *Writer) Close() error {
 	if err := w.file.CloseWithFinalByte(uint16(finalByte)); err != nil {
 		return fmt.Errorf("rms: closing file %v: %w", w.file.Header.Fid, err)
 	}
+
 	return nil
 }

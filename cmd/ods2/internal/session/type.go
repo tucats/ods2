@@ -35,6 +35,7 @@ func cmdType(s *Session, args []string, quals Qualifiers) error {
 	if err != nil {
 		return fmt.Errorf("type: %w", err)
 	}
+
 	switch len(matches) {
 	case 0:
 		return fmt.Errorf("type: %s.%s not found", spec.Name, spec.Type)
@@ -90,6 +91,7 @@ func writeRecords(w io.Writer, f *volume.File, lineEnding []byte) error {
 		if err == io.EOF {
 			return nil
 		}
+
 		if err != nil {
 			return err
 		}
@@ -98,12 +100,14 @@ func writeRecords(w io.Writer, f *volume.File, lineEnding []byte) error {
 			if _, err := w.Write(rms.FormatVFCRecord(rec[:vfcSize], rec[vfcSize:])); err != nil {
 				return err
 			}
+
 			continue
 		}
 
 		if _, err := w.Write(rec); err != nil {
 			return err
 		}
+
 		if _, err := w.Write(lineEnding); err != nil {
 			return err
 		}

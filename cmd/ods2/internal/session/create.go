@@ -30,6 +30,7 @@ func cmdCreate(s *Session, args []string, quals Qualifiers) error {
 	if !matchesAbbrev(args[0], "directory", subverbMinAbbrev) {
 		return fmt.Errorf("create: unrecognized object %q (only DIRECTORY is supported)", args[0])
 	}
+
 	return cmdCreateDirectory(s, args[1], quals)
 }
 
@@ -60,9 +61,11 @@ func cmdCreateDirectory(s *Session, arg string, quals Qualifiers) error {
 	if err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
+
 	if spec.Recursive || spec.Name != "" || spec.Type != "" || spec.Version != "" {
 		return fmt.Errorf("create directory: %s: expected a directory path such as [FOO.BAR], not a file spec", arg)
 	}
+
 	if len(spec.Dirs) == 0 {
 		return fmt.Errorf("create directory: %s: no directory name given", arg)
 	}
@@ -81,19 +84,23 @@ func cmdCreateDirectory(s *Session, arg string, quals Qualifiers) error {
 	}
 
 	versionLimit := parent.Header.RecordAttributes.VersionLimit
+	
 	if quals.Has("version") {
 		v, err := strconv.ParseUint(quals.Value("version"), 10, 16)
 		if err != nil {
 			return fmt.Errorf("create directory: invalid /VERSION value %q: %w", quals.Value("version"), err)
 		}
+
 		versionLimit = uint16(v)
 	}
 
 	dev := parent.Device
+
 	bm, err := dev.Bitmap()
 	if err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		return fmt.Errorf("create directory: %w", err)
@@ -107,6 +114,7 @@ func cmdCreateDirectory(s *Session, arg string, quals Qualifiers) error {
 	if err := bm.Flush(); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
@@ -123,5 +131,6 @@ func cmdCreateDirectory(s *Session, arg string, quals Qualifiers) error {
 
 	full := filespec.Spec{Device: spec.Device, Dirs: parentDirs, Name: name, Type: "DIR", Version: fmt.Sprint(entry.Version)}
 	fmt.Fprintf(s.Stdout, "%%CREATE-S-CREATED, %s created\n", full.String())
+	
 	return nil
 }

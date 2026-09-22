@@ -62,19 +62,23 @@ func (s Spec) String() string {
 
 	b.WriteByte('[')
 	b.WriteString(strings.Join(s.Dirs, "."))
+
 	if len(s.Dirs) == 0 {
 		b.WriteString("000000")
 	}
+
 	if s.Recursive {
 		b.WriteString("...")
 	}
-	b.WriteByte(']')
 
+	b.WriteByte(']')
 	b.WriteString(s.Name)
+
 	if s.Type != "" {
 		b.WriteByte('.')
 		b.WriteString(s.Type)
 	}
+
 	if s.Version != "" {
 		b.WriteByte(';')
 		b.WriteString(s.Version)
