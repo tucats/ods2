@@ -117,7 +117,7 @@ contract — there isn't one yet.
 | 4 | `cmd/ods2`: `DELETE` command | Done |
 | 5 | `volume`: version-limit resolution + create-time enforcement | Done |
 | 6 | `volume`: `SetVersionLimit` | Done |
-| 7 | `cmd/ods2`: `SET FILE/VERSION_LIMIT=n` | Not started |
+| 7 | `cmd/ods2`: `SET FILE/VERSION_LIMIT=n` | Done |
 | 8 | `volume`: `PurgeVersions` | Done |
 | 9 | `cmd/ods2`: `PURGE` command | Not started |
 | 10 | `volume`/`cmd/ods2`: `CREATE DIRECTORY` command | Done |
@@ -717,6 +717,47 @@ directory-as-a-file if any precedent exists, otherwise established fresh
 here); an invalid (non-numeric, or out-of-range for `uint16`) value
 rejected with a clear error; a wildcard spec setting the limit on every
 match.
+
+**Shipped**, as `cmdSet`'s `file` sub-verb (`cmd/ods2/internal/session/
+setshow.go`, dispatching to the new `cmdSetFile`) plus a `"version_limit"`
+qualifier added to the `set` command's own qualifier list — matching the
+sketch closely, with two things resolved along the way:
+
+- **Directory-as-a-file syntax**: no new syntax needed inventing at all.
+  `copy.go`'s own `/DIRS` handling had already established the precedent
+  this doc's own subtask write-up was looking for — a directory entry is
+  just an ordinary `NAME.DIR` file inside its parent — so `SET
+  FILE/VERSION_LIMIT=4 SUBDIR.DIR` (or `[FOO]SUBDIR.DIR` for a
+  non-default parent) falls straight out of `filespec.Glob`'s existing
+  behavior (it already returns `.DIR` entries as ordinary matches) with no
+  special-casing in `cmdSetFile` at all.
+- **The required space before a qualifier**: this package's own tokenizer
+  (`tokenize.go`) only recognizes a `/qualifier` as one when it's its own
+  whitespace-separated field — `create directory`'s existing `/VERSION`
+  qualifier already lives with the same constraint — so the working syntax
+  is `SET FILE /VERSION_LIMIT=3 FOO.TXT` (a space after `FILE`), not real
+  DCL's run-together `FILE/VERSION_LIMIT`. Documented directly in
+  `cmdSetFile`'s own doc comment rather than left as a surprise.
+
+Unlike `DELETE`/`PURGE`, `cmdSetFile` never resolves or flushes
+`Bitmap`/`IndexBitmap` at all — `SetVersionLimit` makes no bitmap mutation
+whatsoever (one already-allocated header field rewritten in place), so
+[Flush strategy](#flush-strategy)'s once-at-the-end flush would be a
+literal no-op here; skipping it entirely is simpler than calling it anyway
+for symmetry.
+
+Tests (`cmd/ods2/internal/session/setshow_test.go`):
+`TestCmdSetFileSetsVersionLimitOnPlainFile`;
+`TestCmdSetFileWithoutVersionTargetsHighest` (confirming the untouched
+sibling version keeps its own separate, unrelated value);
+`TestCmdSetFileWildcardSetsEveryMatch`; `TestCmdSetFileTargetsDirectorySpec`
+(an end-to-end check through `CreateFile`'s own inheritance, the same
+integration `TestSetVersionLimitOnDirectoryAffectsFutureInheritance`
+covers at the `volume` layer, exercised here through the CLI);
+`TestCmdSetFileMissingQualifierRejected`;
+`TestCmdSetFileInvalidValueRejected` (both non-numeric and negative);
+`TestCmdSetFileNonexistentTargetErrors`; and
+`TestSetFileIntegrationViaExecute`.
 
 ### 8. `volume`: `PurgeVersions`
 
