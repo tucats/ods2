@@ -2,6 +2,7 @@ package filespec
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/tucats/ods2/ondisk"
@@ -18,6 +19,39 @@ type Match struct {
 	Name    string
 	Type    string
 	Version uint16
+}
+
+func (m Match) String() string {
+	result := strings.Builder{}
+
+	result.WriteRune('[')
+
+	for i, dir := range m.Dirs {
+		if i > 0 {
+			result.WriteRune('.')
+		}
+
+		result.WriteString(dir)
+	}
+
+	result.WriteRune(']')
+	result.WriteString(m.ShortName(';'))
+
+	return result.String()
+}
+
+func (m Match) ShortName(delim byte) string {
+	result := strings.Builder{}
+
+	version := strconv.Itoa(int(m.Version))
+
+	result.WriteString(m.Name)
+	result.WriteRune('.')
+	result.WriteString(m.Type)
+	result.WriteRune(rune(delim))
+	result.WriteString(version)
+
+	return result.String()
 }
 
 // dirNode pairs an already-open Directory with the path (from the

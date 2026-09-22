@@ -133,7 +133,7 @@ func groupMatchesByDir(matches []filespec.Match) []dirGroup {
 func formatDirectoryEntry(vol *volume.Volume, m filespec.Match, showFile, showSize, showDate, full bool, delim byte) (string, uint32, error) {
 	var line strings.Builder
 
-	name := fmt.Sprintf("%s.%s%c%d", m.Name, m.Type, delim, m.Version)
+	name := m.ShortName(delim)
 	fmt.Fprintf(&line, "%-30s", name)
 
 	if !showFile && !showSize && !showDate && !full {
