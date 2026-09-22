@@ -40,7 +40,7 @@ func TestCmdCopyFromHostDefaultIsStreamText(t *testing.T) {
 		t.Fatalf("cmdType: %v", err)
 	}
 
-	if got, want := out.String(), "line one\nline two\n"; got != want {
+	if got, want := out.String(), testContentTwoLinesOfText; got != want {
 		t.Errorf("content read back from DEST:OUT.TXT = %q, want %q", got, want)
 	}
 
@@ -64,9 +64,7 @@ func TestCmdCopyFromHostDefaultIsStreamText(t *testing.T) {
 func TestCmdCopyFromHostBinaryRoundTrips(t *testing.T) {
 	s := newVolumeDestTestSession(t)
 
-	const content = "line one\nline two\n"
-	
-	hostPath := writeHostFile(t, t.TempDir(), "source.bin", content)
+	hostPath := writeHostFile(t, t.TempDir(), "source.bin", testContentTwoLinesOfText)
 
 	if err := cmdCopy(s, []string{hostPath, "DEST:OUT.BIN"}, Qualifiers{"quiet": "", "host": "", "binary": ""}); err != nil {
 		t.Fatalf("cmdCopy /host /binary: %v", err)
@@ -89,8 +87,8 @@ func TestCmdCopyFromHostBinaryRoundTrips(t *testing.T) {
 		t.Fatalf("readFile: %v", err)
 	}
 
-	if got != content {
-		t.Errorf("round-tripped content = %q, want %q", got, content)
+	if got != testContentTwoLinesOfText {
+		t.Errorf("round-tripped content = %q, want %q", got, testContentTwoLinesOfText)
 	}
 }
 
@@ -103,7 +101,7 @@ func TestCmdCopyFromHostWildcardDestinationUppercasesHostBaseName(t *testing.T) 
 	}
 
 	destVol := s.Volumes["DEST"]
-	
+
 	matches, err := filespec.Glob(destVol, filespec.Spec{})
 	if err != nil {
 		t.Fatalf("Glob: %v", err)

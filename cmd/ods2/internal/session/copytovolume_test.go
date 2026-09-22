@@ -14,6 +14,7 @@ import (
 )
 
 const testDestinationName = "DEST"
+const testContentTwoLinesOfText = "line one\nline two\n"
 
 // newVolumeDestTestSession builds on newTypeTestSession's existing source
 // fixture (device "DUA0", mounted read-only: STREAM.TXT;1 "line
@@ -64,7 +65,7 @@ func TestCmdCopyToVolumeDestinationDefaultIsStreamText(t *testing.T) {
 		t.Fatalf("cmdType: %v", err)
 	}
 
-	if got, want := out.String(), "line one\nline two\n"; got != want {
+	if got, want := out.String(), testContentTwoLinesOfText; got != want {
 		t.Errorf("content read back from DEST:OUT.TXT = %q, want %q", got, want)
 	}
 
@@ -109,7 +110,7 @@ func TestCmdCopyToVolumeDestinationBinaryRoundTrips(t *testing.T) {
 		t.Fatalf("readFile: %v", err)
 	}
 
-	if want := "line one\nline two\n"; got != want {
+	if want := testContentTwoLinesOfText; got != want {
 		t.Errorf("round-tripped content = %q, want %q", got, want)
 	}
 }
@@ -183,7 +184,7 @@ func TestCmdCopyToVolumeDestinationRejectsReadOnlyMount(t *testing.T) {
 	s, _ := newTypeTestSession(t)
 
 	path := filepath.Join(t.TempDir(), "readonly.dsk")
-	
+
 	c, err := diskimage.Create(path, 600)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
@@ -218,7 +219,7 @@ func TestCmdCopyToVolumeDestinationTestQualifierDoesNotWrite(t *testing.T) {
 	s := newVolumeDestTestSession(t)
 
 	var out bytes.Buffer
-	
+
 	s.Stdout = &out
 
 	if err := cmdCopy(s, []string{"STREAM.TXT", "DEST:OUT.TXT"}, Qualifiers{"test": ""}); err != nil {
@@ -257,7 +258,7 @@ func TestCmdCopyToVolumeDestinationHostToVolumeDoesNotAffectHostDirection(t *tes
 		t.Fatalf("readFile: %v", err)
 	}
 
-	if want := "line one\nline two\n"; got != want {
+	if want := testContentTwoLinesOfText; got != want {
 		t.Errorf("content = %q, want %q", got, want)
 	}
 }

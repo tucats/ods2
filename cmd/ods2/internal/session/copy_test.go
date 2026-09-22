@@ -27,9 +27,9 @@ func TestCmdCopyToExplicitPath(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 
-	want := "line one\nline two\n"
+	want := testContentTwoLinesOfText
 	if string(got) != want {
-		t.Errorf("copied content = %q, want %q", got, "line one\nline two\n")
+		t.Errorf("copied content = %q, want %q", got, testContentTwoLinesOfText)
 	}
 }
 
@@ -108,8 +108,8 @@ func TestCmdCopyBinaryMatchesSourceBytes(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 
-	if string(got) != "line one\nline two\n" {
-		t.Errorf("binary-copied content = %q, want %q", got, "line one\nline two\n")
+	if string(got) != testContentTwoLinesOfText {
+		t.Errorf("binary-copied content = %q, want %q", got, testContentTwoLinesOfText)
 	}
 }
 
