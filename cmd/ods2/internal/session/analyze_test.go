@@ -56,11 +56,11 @@ func newAnalyzeSessionFixture(t *testing.T) (s *Session, key string) {
 	if err := cmdInitialize(s, []string{path, "400", "ANALYZE"}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdInitialize: %v", err)
 	}
-	if err := cmdMount(s, []string{path}, Qualifiers{"write": ""}); err != nil {
+	key = "DUA0"
+	if err := cmdMount(s, []string{key, path}, Qualifiers{"write": ""}); err != nil {
 		t.Fatalf("cmdMount /write: %v", err)
 	}
 
-	key = strings.ToUpper(path)
 	vol := s.Volumes[key]
 	t.Cleanup(func() {
 		for _, dev := range vol.Devices {

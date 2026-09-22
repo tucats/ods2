@@ -242,7 +242,7 @@ func TestIntegrationOneShotNonexistentImage(t *testing.T) {
 
 func TestIntegrationInteractiveREPL(t *testing.T) {
 	image := buildTestImage(t)
-	script := fmt.Sprintf("mount %s\ndir *.*\ntype README.TXT\nexit\n", image)
+	script := fmt.Sprintf("mount DUA0 %s\ndir *.*\ntype README.TXT\nexit\n", image)
 
 	out, err := run(t, script)
 	if err != nil {

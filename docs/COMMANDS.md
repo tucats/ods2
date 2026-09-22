@@ -13,8 +13,8 @@ With no arguments, `ods2` starts an interactive prompt:
 ```text
 $ ods2
 ODS2 (Go port) -- type HELP for a command summary, EXIT to quit.
-ODS2> mount myvolume.iso
-%MOUNT-I-MOUNTED, Volume MYVOLUME mounted on myvolume.iso
+ODS2> mount DUA0 myvolume.iso
+%MOUNT-I-MOUNTED, Volume MYVOLUME mounted on DUA0
 ODS2> dir *.txt
 ...
 ODS2> exit
@@ -49,8 +49,8 @@ or an equivalent script of command lines piped in on standard input:
 ```text
 $ ods2 <<'EOF'
 initialize myvolume.dsk 4000 MYVOL
-mount myvolume.dsk /write
-analyze myvolume.dsk /disk
+mount DUA0 myvolume.dsk /write
+analyze DUA0 /disk
 EOF
 ```
 
@@ -145,18 +145,30 @@ version field selects among them:
 ### MOUNT
 
 ```text
-MOUNT device[,device...] [label[,label...]] [/WRITE]
+MOUNT device[,device...] container[,container...] [/WRITE]
 ```
 
 Opens one or more disk image files and makes them available under the
-given device name(s). `device` is a **host file path** to the image (an
-ISO, a plain block dump, or a raw CD-ROM sector dump — both are detected
-automatically), not VMS syntax.
+given device name(s). `device` is the VMS-style name (e.g. `DUA0`) the
+volume is mounted under; `container` is a **host file path** to the
+backing image (an ISO, a plain block dump, or a raw CD-ROM sector dump —
+both are detected automatically), not VMS syntax. Both must always be
+given — there's no VMS-style device registry here that already knows
+which file a given device name backs.
 
-Give a comma-separated list of devices to mount a **volume set** (several
-member disks presented as one logical volume), in the same order VMS's
-own MOUNT command expects. Labels are accepted for compatibility but
-aren't checked against the volume's actual label.
+Give a comma-separated list for both `device` and `container` to mount a
+**volume set** (several member disks presented as one logical volume),
+pairing them up positionally, in the same order VMS's own MOUNT command
+expects. The two lists must be the same length — **unless** you give a
+single `device` name and several `container` paths, in which case the
+device name is expanded into one name per container, by synthesizing
+successive unit numbers onto it:
+
+- If the device name already ends in a unit number (e.g. `DUA1`), that
+  number is the **starting** unit: `MOUNT DUA1 foo.dsk,bar.dsk` mounts
+  `foo.dsk` as `DUA1` and `bar.dsk` as `DUA2`.
+- If it doesn't (e.g. `DUA`), unit numbers start at 0: `MOUNT DUA
+  foo.dsk,bar.dsk` mounts `foo.dsk` as `DUA0` and `bar.dsk` as `DUA1`.
 
 The **first** device name you mount becomes your current default device
 (with directory `[000000]`) if you haven't set one yet.
@@ -169,8 +181,16 @@ The **first** device name you mount becomes your current default device
   never be mounted `/WRITE`.
 
 ```text
-ODS2> mount DUA0: myvolume.iso
-%MOUNT-I-MOUNTED, Volume MYVOLUME mounted on myvolume.iso
+ODS2> mount DUA0 myvolume.iso
+%MOUNT-I-MOUNTED, Volume MYVOLUME mounted on DUA0
+```
+
+Mounting a volume set with a synthesized device name:
+
+```text
+ODS2> mount DUA1 disk1.dsk,disk2.dsk
+%MOUNT-I-MOUNTED, Volume MYSET mounted on DUA1
+%MOUNT-I-MOUNTED, Volume MYSET mounted on DUA2
 ```
 
 ### DISMOUNT
@@ -202,16 +222,16 @@ directory.
 
 Unlike every other command here, INITIALIZE doesn't mount the volume it
 just built — matching real VMS's own INITIALIZE, which formats a device
-without mounting it. Follow it with `MOUNT path`. It's also not available
-as a one-shot subcommand (`ods2 initialize ...`): the one-shot form's
-convention of mounting `path` before running the command doesn't apply to
-a file that doesn't exist yet.
+without mounting it. Follow it with `MOUNT device path`. It's also not
+available as a one-shot subcommand (`ods2 initialize ...`): the one-shot
+form's convention of mounting `path` before running the command doesn't
+apply to a file that doesn't exist yet.
 
 ```text
 ODS2> initialize myvolume.dsk 4000 MYVOL
 %INITIALIZE-I-DONE, Volume MYVOL initialized on myvolume.dsk (4000 blocks, 9 reserved files)
-ODS2> mount myvolume.dsk
-%MOUNT-I-MOUNTED, Volume MYVOL mounted on myvolume.dsk
+ODS2> mount DUA0 myvolume.dsk
+%MOUNT-I-MOUNTED, Volume MYVOL mounted on DUA0
 ```
 
 ### ANALYZE/DISK
@@ -242,15 +262,15 @@ mounted volume set (several devices mounted together) fails with a clear
 error.
 
 ```text
-ODS2> mount myvolume.dsk /write
-%MOUNT-I-MOUNTED, Volume MYVOL mounted on myvolume.dsk
-ODS2> analyze myvolume.dsk /disk
+ODS2> mount DUA0 myvolume.dsk /write
+%MOUNT-I-MOUNTED, Volume MYVOL mounted on DUA0
+ODS2> analyze DUA0 /disk
 %ANALYZE-W-DISCREP, 1 discrepancy(ies) found (400 cluster(s) examined)
   cluster 57 (LBN 57-57) is marked allocated but is not used by any file
-ODS2> analyze myvolume.dsk /disk /repair
+ODS2> analyze DUA0 /disk /repair
 %ANALYZE-W-DISCREP, 1 discrepancy(ies) found and repaired (400 cluster(s) examined)
   cluster 57 (LBN 57-57) is marked allocated but is not used by any file
-ODS2> analyze myvolume.dsk /disk
+ODS2> analyze DUA0 /disk
 %ANALYZE-I-CLEAN, no discrepancies found (400 cluster(s) examined)
 ```
 
@@ -436,7 +456,7 @@ Copying onto a volume mounted `/WRITE` (`DUA1:` here) instead of the host
 filesystem:
 
 ```text
-ODS2> mount dua1 /write
+ODS2> mount dua1 scratch.dsk /write
 %MOUNT-I-MOUNTED, Volume SCRATCH mounted on DUA1
 ODS2> copy foo.txt DUA1:*.* /verbose
 %COPY-I-COPYING, copying FOO.TXT;1 to DUA1:[000000]FOO.TXT
@@ -448,7 +468,7 @@ Copying a plain host file *onto* a volume mounted `/WRITE` with `/HOST`
 source):
 
 ```text
-ODS2> mount dua1 /write
+ODS2> mount dua1 scratch.dsk /write
 %MOUNT-I-MOUNTED, Volume SCRATCH mounted on DUA1
 ODS2> copy go.sum DUA1:*.* /verbose /host
 %COPY-I-COPYING, copying go.sum to DUA1:[000000]GO.SUM

@@ -2,7 +2,9 @@ package session
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/tucats/ods2/diskimage"
 	"github.com/tucats/ods2/filespec"
@@ -11,50 +13,96 @@ import (
 
 func init() {
 	Table = append(Table,
-		Command{Name: "mount", MinAbbrev: 3, MinArgs: 1, MaxArgs: 2, Qualifiers: []string{"write"}, Run: cmdMount},
+		Command{Name: "mount", MinAbbrev: 3, MinArgs: 2, MaxArgs: 2, Qualifiers: []string{"write"}, Run: cmdMount},
 		Command{Name: "dismount", MinAbbrev: 3, MinArgs: 1, MaxArgs: 1, Run: cmdDismount},
 	)
 }
 
-// cmdMount implements `mount device[,device...] [label[,label...]] [/write]`.
-// Multiple comma-separated device names mount a volume set, in the order
-// given (matching VMS's own MOUNT command); labels are accepted for
-// compatibility but, as in the reference implementation, are not
-// validated against the volume's actual label.
+// cmdMount implements `mount device[,device...] container[,container...]
+// [/write]`. device is the VMS-style name the volume is mounted under
+// (e.g. "DUA0"); container is the host file path to the disk image or
+// CD-ROM sector dump backing it (an ISO, a plain block dump, or a raw
+// sector dump — both are detected automatically). The two are always
+// given separately — unlike the reference implementation, which lets a
+// single MOUNT device name double as an actual VMS device that already
+// knows its own backing media, this port has no such device registry, so
+// the container path must always be spelled out.
 //
-// Without /write (the default), every device is opened read-only
+// Multiple comma-separated names mount a volume set (several member disks
+// presented as one logical volume), in the order given (matching VMS's
+// own MOUNT command); device and container must list the same number of
+// entries, paired up positionally.
+//
+// Without /write (the default), every container is opened read-only
 // (diskimage.Open): the resulting volume can be read from, but any
 // write-path operation on it (CreateFile, WriteBlock, ...) fails, since
 // those check for a diskimage.WritableContainer underneath — see
-// volume.File.OpenForWrite. With /write, every device is instead opened
-// via diskimage.OpenWritable, which returns a WritableContainer that
-// satisfies that check. A device whose backing image can't be written to
-// at all — a raw CD-ROM sector dump; see WritableContainer's doc comment
-// for why — fails right here with a clear error, rather than mounting
-// successfully and only failing later, confusingly, on the first actual
-// write attempt.
+// volume.File.OpenForWrite. With /write, every container is instead
+// opened via diskimage.OpenWritable, which returns a WritableContainer
+// that satisfies that check. A container whose backing image can't be
+// written to at all — a raw CD-ROM sector dump; see WritableContainer's
+// doc comment for why — fails right here with a clear error, rather than
+// mounting successfully and only failing later, confusingly, on the first
+// actual write attempt.
 func cmdMount(s *Session, args []string, quals Qualifiers) error {
 	deviceNames := splitDeviceList(args[0])
+	containerPaths := splitDeviceList(args[1])
+
+	// If the device name is singular, but the container list has multiple
+	// items, expand the device list to match. If the device name already
+	// has a trailing unit number (like DUA3) then 3 is the first unit number
+	// in the generated list, followed by DUA4, DUA5, etc.
+	//
+	// If the device name doesn't already include a unit number (like DUA)
+	// then unit numbers are synthesized starting at zero.
+	if len(deviceNames) == 1 && len(containerPaths) > 1 {
+		// Figure out the base device name. If it already has a unit number
+		// on it, that's our starting unit number. If no unit number is
+		// given, assume 0 is the start. The unit number is the full run of
+		// trailing digits, not just the last one, so "DUA10" starts at unit
+		// 10, not unit 0.
+		deviceBaseUnit := 0
+		deviceBaseName := strings.TrimSpace(deviceNames[0])
+
+		digitsAt := len(deviceBaseName)
+		for digitsAt > 0 && unicode.IsDigit(rune(deviceBaseName[digitsAt-1])) {
+			digitsAt--
+		}
+
+		if digitsAt < len(deviceBaseName) {
+			deviceBaseUnit, _ = strconv.Atoi(deviceBaseName[digitsAt:])
+			deviceBaseName = deviceBaseName[:digitsAt]
+		}
+
+		synthesized := make([]string, len(containerPaths))
+		for deviceIndex := range len(containerPaths) {
+			synthesized[deviceIndex] = fmt.Sprintf("%s%d", deviceBaseName, deviceBaseUnit+deviceIndex)
+		}
+		deviceNames = synthesized
+	}
+
+	if len(containerPaths) != len(deviceNames) {
+		return fmt.Errorf("mount: %d device name(s) but %d container name(s); give one container per device", len(deviceNames), len(containerPaths))
+	}
+
 	writable := quals.Has("write")
 
-	containers := make([]diskimage.Container, 0, len(deviceNames))
-	for _, name := range deviceNames {
-		trimmed := strings.TrimSuffix(name, ":")
-
+	containers := make([]diskimage.Container, 0, len(containerPaths))
+	for _, path := range containerPaths {
 		var (
 			c   diskimage.Container
 			err error
 		)
 		if writable {
-			c, err = diskimage.OpenWritable(trimmed)
+			c, err = diskimage.OpenWritable(path)
 		} else {
-			c, err = diskimage.Open(trimmed)
+			c, err = diskimage.Open(path)
 		}
 		if err != nil {
 			for _, opened := range containers {
 				_ = opened.Close()
 			}
-			return fmt.Errorf("mount: opening %s: %w", name, err)
+			return fmt.Errorf("mount: opening %s: %w", path, err)
 		}
 		containers = append(containers, c)
 	}

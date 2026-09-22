@@ -3,7 +3,6 @@ package session
 import (
 	"bytes"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -25,14 +24,13 @@ func TestCmdInitializeCreatesLoadableVolume(t *testing.T) {
 	// (see its own doc comment) -- confirm the file it created really is
 	// a mountable ODS-2 volume via an ordinary cmdMount, the same way a
 	// user would follow up interactively.
-	if err := cmdMount(s, []string{path}, Qualifiers{}); err != nil {
+	if err := cmdMount(s, []string{"DUA0", path}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdMount on freshly initialized volume: %v", err)
 	}
 
-	key := strings.ToUpper(path)
-	vol, ok := s.Volumes[key]
+	vol, ok := s.Volumes["DUA0"]
 	if !ok {
-		t.Fatalf("Volumes = %v, want an entry for %q", s.Volumes, key)
+		t.Fatalf("Volumes = %v, want a DUA0 entry", s.Volumes)
 	}
 	t.Cleanup(func() {
 		for _, dev := range vol.Devices {
@@ -54,11 +52,10 @@ func TestCmdInitializeHonorsClusterQualifier(t *testing.T) {
 		t.Fatalf("cmdInitialize: %v", err)
 	}
 
-	if err := cmdMount(s, []string{path}, Qualifiers{}); err != nil {
+	if err := cmdMount(s, []string{"DUA0", path}, Qualifiers{}); err != nil {
 		t.Fatalf("cmdMount: %v", err)
 	}
-	key := strings.ToUpper(path)
-	vol := s.Volumes[key]
+	vol := s.Volumes["DUA0"]
 	t.Cleanup(func() {
 		for _, dev := range vol.Devices {
 			_ = dev.Container.Close()
