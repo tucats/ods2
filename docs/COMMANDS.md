@@ -12,7 +12,6 @@ With no arguments, `ods2` starts an interactive prompt:
 
 ```text
 $ ods2
-ODS2 (Go port) -- type HELP for a command summary, EXIT to quit.
 ODS2> mount DUA0 myvolume.iso
 %MOUNT-I-MOUNTED, Volume MYVOLUME mounted on DUA0
 ODS2> dir *.txt

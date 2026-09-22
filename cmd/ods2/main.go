@@ -48,7 +48,7 @@ func newRootCommand() *cobra.Command {
 
 func runInteractive() error {
 	s := session.New()
-	fmt.Fprintln(s.Stdout, "ODS2 (Go port) -- type HELP for a command summary, EXIT to quit.")
+	fmt.Fprintln(s.Stdout, "ODS2 Container Manager")
 
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		return repl.RunInteractive(s, "ODS2> ", historyFilePath())

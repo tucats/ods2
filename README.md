@@ -1,10 +1,9 @@
 # ods2
 
-A native Go implementation of ODS2, a tool for reading VAX/VMS "Files-11"
-(ODS-2) disk volumes and images. This is a from-scratch Go rewrite of the
-architecture and file-format knowledge in the C [ods2](https://github.com/DaveShepperd/ods2)
-project (itself descended from Paul Nankervis's original, via Hunter
-Goatley and crwolff) — not a line-by-line translation.
+A native Go implementation of ODS2, a tool for managing VAX/VMS "Files-11"
+(ODS-2) disk container images. This is a from-scratch Go rewrite of the
+architecture and file-format knowledge in the C [ods2](https://github.com/DaveShepperd/ods2) project (itself descended from Paul Nankervis's original,
+via Hunter Goatley and crwolff) — not a line-by-line translation.
 
 ## Goals
 
@@ -62,13 +61,16 @@ to replicate:
 - A resumable, pointer-linked wildcard-search cursor, needed because VMS
   RMS's `$SEARCH` is a call-based iteration API — replaced by ordinary Go
   recursion/slices.
+- The C reference version does not propertly support writable containers,
+  file versioning, DELETE, or the aability to copy host files into the
+  container.
 
 What must be preserved faithfully, because it's the actual ODS-2 file
 format rather than an artifact of C or VMS RMS: the home block / index file
 / file header / directory record byte layouts, the four-format
 retrieval-pointer (extent) encoding, VAR/VFC record framing, and
 VMS-quadword time semantics. These are publically available data structure;
-the C reference version was consulted for comfiration but not copied
+the C reference version was consulted for comfirmation but not copied
 directly.
 
 ### Feature Set
