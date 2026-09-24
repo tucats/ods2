@@ -33,3 +33,6 @@ go.work.sum
 
 # Disk images
 *.dsk
+
+# Built binary
+/ods2
