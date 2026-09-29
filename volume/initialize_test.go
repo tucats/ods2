@@ -2,6 +2,7 @@ package volume
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -267,7 +268,7 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 		t.Fatalf("Initialize: %v", err)
 	}
 
-	layout, err := computeLayout(c.Blocks(), opts.ClusterSize, opts.MaxFiles)
+	layout, err := computeLayout(c.Blocks(), opts.ClusterSize, opts.MaxFiles, opts.MaxFiles)
 	if err != nil {
 		t.Fatalf("computeLayout: %v", err)
 	}
@@ -306,5 +307,105 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 	if ondisk.BitmapTest(ib.bits, ondisk.ReservedFileCount) {
 		t.Errorf("header slot %d (file number %d, the first non-reserved one) reads as in-use, want free",
 			ondisk.ReservedFileCount, ondisk.ReservedFileCount+1)
+	}
+}
+
+// TestIndexFileGrowsForNewHeaders initializes a volume with only a couple
+// of header slots beyond the reserved files, as VMS's INITIALIZE does by
+// default (/HEADERS=16), and creates far more files than that: INDEXF.SYS
+// must grow to hold their headers (ensureHeaderSlot), and every file must
+// still be there after an independent re-mount.
+func TestIndexFileGrowsForNewHeaders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "grow.dsk")
+	c, err := diskimage.Create(path, 2000)
+	if err != nil {
+		t.Fatalf("diskimage.Create: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	headers := uint32(ondisk.ReservedFileCount + 2)
+	if err := Initialize(c, InitializeOptions{Label: "GROW", MaxFiles: 200, Headers: headers}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	vol, err := Mount(c)
+	if err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+	dev := vol.Devices[0]
+	before := mappedBlocks(dev.IndexFile)
+
+	dir, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
+	if err != nil {
+		t.Fatalf("OpenDirectory: %v", err)
+	}
+	bm, err := dev.Bitmap()
+	if err != nil {
+		t.Fatalf("Bitmap: %v", err)
+	}
+	ib, err := dev.IndexBitmap()
+	if err != nil {
+		t.Fatalf("IndexBitmap: %v", err)
+	}
+
+	const files = 40
+	for i := range files {
+		name := fmt.Sprintf("F%02d.DAT", i)
+		f, err := vol.CreateFile(dir, name, ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+		if err != nil {
+			t.Fatalf("CreateFile(%s): %v", name, err)
+		}
+		if err := f.WriteBlock(1, bytes.Repeat([]byte{byte(i)}, ondisk.BlockSize)); err != nil {
+			t.Fatalf("WriteBlock(%s): %v", name, err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close(%s): %v", name, err)
+		}
+	}
+
+	after := mappedBlocks(dev.IndexFile)
+	if after <= before {
+		t.Errorf("INDEXF.SYS is still %d blocks after creating %d files", after, files)
+	}
+	if got := dev.IndexFile.Blocks(); got != after {
+		t.Errorf("INDEXF.SYS records %d blocks, but maps %d", got, after)
+	}
+	if hw, eof := dev.IndexFile.Header.HighWaterMark, dev.IndexFile.Header.RecordAttributes.EndOfFileBlock; hw != after+1 || eof != hw {
+		t.Errorf("INDEXF.SYS high-water mark %d and end of file %d, want both %d", hw, eof, after+1)
+	}
+
+	if err := vol.Dismount(); err != nil {
+		t.Fatalf("Dismount: %v", err)
+	}
+
+	reopened, err := diskimage.Open(path)
+	if err != nil {
+		t.Fatalf("diskimage.Open: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	vol2, err := Mount(reopened)
+	if err != nil {
+		t.Fatalf("Mount (reopened): %v", err)
+	}
+	dir2, err := vol2.OpenDirectory(ondisk.MasterFileDirectoryFid)
+	if err != nil {
+		t.Fatalf("OpenDirectory (reopened): %v", err)
+	}
+
+	buf := make([]byte, ondisk.BlockSize)
+	for i := range files {
+		name := fmt.Sprintf("F%02d.DAT", i)
+		e, err := dir2.Lookup(name, 0)
+		if err != nil {
+			t.Fatalf("Lookup(%s): %v", name, err)
+		}
+		f, err := vol2.OpenFID(e.Fid)
+		if err != nil {
+			t.Fatalf("OpenFID(%s): %v", name, err)
+		}
+		if err := f.ReadBlock(1, buf); err != nil || buf[0] != byte(i) || buf[ondisk.BlockSize-1] != byte(i) {
+			t.Errorf("%s reads back %#x...%#x, %v; want %#x", name, buf[0], buf[ondisk.BlockSize-1], err, i)
+		}
 	}
 }

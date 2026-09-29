@@ -83,6 +83,10 @@ func CreateHeader(dev *Device, ib *IndexBitmap, opts NewFileHeader) (*File, erro
 		return nil, fmt.Errorf("volume: creating file header: %w", err)
 	}
 
+	if err := ensureHeaderSlot(dev, ib, fileNumber); err != nil {
+		return nil, fmt.Errorf("volume: creating file header: %w", err)
+	}
+
 	fid, err := nextFileFid(dev, fileNumber)
 	if err != nil {
 		return nil, fmt.Errorf("volume: creating file header: %w", err)
@@ -452,6 +456,16 @@ func linkNewExtensionSegment(dev *Device, container diskimage.WritableContainer,
 	if err != nil {
 		return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("allocating extension header segment: %w", err)
 	}
+
+	// Growing INDEXF.SYS for the new segment's slot would mean extending
+	// INDEXF.SYS from inside an extension of INDEXF.SYS itself, so that
+	// one case is left to fail below, as it did before index file growth
+	// existed. Any other file's segment gets a slot the usual way.
+	if tail.Fid.Number() != ondisk.IndexFileFid.Number() {
+		if err := ensureHeaderSlot(dev, ib, segFileNumber); err != nil {
+			return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("allocating extension header segment: %w", err)
+		}
+	}
 	segFid, err := nextFileFid(dev, segFileNumber)
 	if err != nil {
 		return ondisk.FileHeader{}, ondisk.FileHeader{}, err
@@ -556,4 +570,95 @@ func allocateExtents(bm *Bitmap, blocks uint32) (extents []ondisk.Extent, err er
 	}
 
 	return extents, nil
+}
+
+// indexFileExtendBlocks is the least INDEXF.SYS grows by when a new file
+// needs a header slot beyond its end, so the index file isn't extended
+// (and its map fragmented) one block per new file.
+const indexFileExtendBlocks = 16
+
+// ensureHeaderSlot makes sure INDEXF.SYS is long enough to hold the header
+// slot for fileNumber, growing it if not.
+//
+// A header slot is a block of INDEXF.SYS: file N's header is at VBN
+// IndexBitmapVBN + IndexBitmapSize + N - 1 (fileHeaderVBN). The index file
+// bitmap tracks MaxFiles slots, but a volume doesn't have to allocate
+// blocks for all of them up front: real VMS INITIALIZE preallocates only a
+// few (16 by default, more with /HEADERS=n), and the file system extends
+// INDEXF.SYS when a new file's slot lies past its end. Without that, only a
+// handful of files could ever be created on a volume VMS initialized.
+//
+// The new blocks are zeroed, since a header slot must read as all zeros
+// until a header is written to it (IndexBitmap.FindFreeSlot checks this,
+// and the space may hold leftovers of a deleted file), and INDEXF.SYS's end
+// of file and high-water mark move past them, as VMS keeps them for the
+// index file.
+func ensureHeaderSlot(dev *Device, ib *IndexBitmap, fileNumber uint32) error {
+	idx := dev.IndexFile
+	vbn := fileHeaderVBN(dev.Home, fileNumber)
+	have := mappedBlocks(idx)
+
+	if vbn <= have {
+		return nil
+	}
+
+	container, ok := dev.Container.(diskimage.WritableContainer)
+	if !ok {
+		return fmt.Errorf("growing the index file: device is not open for write")
+	}
+
+	bm, err := dev.Bitmap()
+	if err != nil {
+		return fmt.Errorf("growing the index file: %w", err)
+	}
+
+	if err := Extend(idx, bm, ib, max(vbn-have, indexFileExtendBlocks)); err != nil {
+		return fmt.Errorf("growing the index file: %w", err)
+	}
+
+	mapped := mappedBlocks(idx)
+
+	zero := make([]byte, ondisk.BlockSize)
+	for v := have + 1; v <= mapped; v++ {
+		lbn, err := resolveExtentLBN(idx.Extents, v)
+		if err != nil {
+			return fmt.Errorf("growing the index file: %w", err)
+		}
+
+		if err := container.WriteBlock(lbn, zero); err != nil {
+			return fmt.Errorf("growing the index file: zeroing VBN %d: %w", v, err)
+		}
+	}
+
+	idx.Header.RecordAttributes.EndOfFileBlock = mapped + 1
+	idx.Header.RecordAttributes.FirstFreeByte = 0
+	idx.Header.HighWaterMark = mapped + 1
+
+	areas, err := existingAreas(idx.Header)
+	if err != nil {
+		return fmt.Errorf("growing the index file: %w", err)
+	}
+
+	decoded, err := writeHeader(dev, container, idx.Header.Fid.Number(), idx.Header, areas)
+	if err != nil {
+		return fmt.Errorf("growing the index file: recording its new size: %w", err)
+	}
+
+	idx.Header = decoded
+
+	return nil
+}
+
+// mappedBlocks is how many virtual blocks f's retrieval pointers map: the
+// blocks that really exist on disk for it. For deciding whether a header
+// slot exists, this is more trustworthy than the size the header records
+// (File.Blocks), which a hand-built or damaged index file header may not
+// keep in step with its map.
+func mappedBlocks(f *File) uint32 {
+	var n uint32
+	for _, e := range f.Extents {
+		n += e.Count
+	}
+
+	return n
 }

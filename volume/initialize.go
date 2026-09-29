@@ -52,6 +52,14 @@ type InitializeOptions struct {
 	// Defaults to a value scaled from the container's size if zero -- see
 	// defaultMaxFiles.
 	MaxFiles uint32
+
+	// Headers is how many file-header slots INDEXF.SYS gets up front,
+	// reserved files' slots included -- VMS's INITIALIZE/HEADERS. The
+	// index file grows by itself when a new file needs a slot beyond
+	// these (see ensureHeaderSlot), so a volume can still hold MaxFiles
+	// files. Defaults to MaxFiles (every slot preallocated) if zero, and
+	// is capped at MaxFiles.
+	Headers uint32
 }
 
 // reservedFile describes one entry of the fixed, nine-file reserved-file
@@ -147,7 +155,7 @@ type initLayout struct {
 // place, which nothing in the reference implementation ever needs to do
 // (it assumes a volume was already formatted by real VMS -- see
 // docs/PHASE-02.md subtask 12's own introduction).
-func computeLayout(blocks uint32, clusterSize uint16, maxFiles uint32) (initLayout, error) {
+func computeLayout(blocks uint32, clusterSize uint16, maxFiles, headers uint32) (initLayout, error) {
 	var l initLayout
 
 	// LBN 0 is the boot block (left alone, but still reserved); LBN 1 is
@@ -172,9 +180,9 @@ func computeLayout(blocks uint32, clusterSize uint16, maxFiles uint32) (initLayo
 	// on why matching it is what makes a freshly initialized volume
 	// mountable at all.
 	l.headerAreaLBN = l.indexBitmapLBN + uint32(l.indexBitmapSize)
-	l.indexFileBlocks = uint32(l.indexBitmapSize) + maxFiles
+	l.indexFileBlocks = uint32(l.indexBitmapSize) + headers
 
-	l.bitmapSCBLBN = l.headerAreaLBN + maxFiles
+	l.bitmapSCBLBN = l.headerAreaLBN + headers
 
 	// Independent of the layout above: how big BITMAP.SYS's own bits
 	// region needs to be depends only on the volume's total size and
@@ -320,6 +328,14 @@ func Initialize(c diskimage.WritableContainer, opts InitializeOptions) error {
 			maxFiles, ondisk.ReservedFileCount)
 	}
 
+	headers := opts.Headers
+	if headers == 0 || headers > maxFiles {
+		headers = maxFiles
+	}
+	if headers < ondisk.ReservedFileCount {
+		headers = ondisk.ReservedFileCount
+	}
+
 	owner := opts.Owner
 	if owner == (ondisk.Uic{}) {
 		owner = ondisk.Uic{Group: 1, Member: 1}
@@ -335,7 +351,7 @@ func Initialize(c diskimage.WritableContainer, opts InitializeOptions) error {
 		label = "NONAME"
 	}
 
-	layout, err := computeLayout(blocks, clusterSize, maxFiles)
+	layout, err := computeLayout(blocks, clusterSize, maxFiles, headers)
 	if err != nil {
 		return fmt.Errorf("volume: Initialize: %w", err)
 	}
