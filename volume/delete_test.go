@@ -3,6 +3,7 @@ package volume
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -1061,5 +1062,84 @@ func TestDeleteFileSlotReuseGetsNewFid(t *testing.T) {
 	}
 	if _, err := vol.OpenFID(old); err == nil {
 		t.Error("the deleted file's Fid still opens")
+	}
+}
+
+// TestDeleteHeaderByFid frees a file by its Fid alone: its slot and data
+// are reclaimed, the directory is left alone (the caller removed the
+// entry first), and the Fid no longer opens.
+func TestDeleteHeaderByFid(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "TESTDIR.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	f, err := vol.CreateFile(dir, "BYFID.DAT", ondisk.RecAttr{}, bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.WriteBlock(1, blockOf(0x33)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fid := f.Header.Fid
+
+	if err := dir.Remove("BYFID.DAT", 1, bm, ib); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteHeader(dev, fid, bm, ib); err != nil {
+		t.Fatalf("DeleteHeader: %v", err)
+	}
+
+	assertHeaderSlotIsZeroed(t, container, uint16(fid.Number()))
+	if _, err := vol.OpenFID(fid); err == nil {
+		t.Error("the deleted Fid still opens")
+	}
+	if err := DeleteHeader(dev, fid, bm, ib); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleting it again: %v, want ErrNotFound", err)
+	}
+}
+
+// TestDeleteHeaderRefusals: the volume's structure files, and a directory
+// with an entry in it.
+func TestDeleteHeaderRefusals(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3, 4}) // slot 4 is the MFD's number
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, fid := range []ondisk.Fid{ondisk.MasterFileDirectoryFid, ondisk.IndexFileFid, ondisk.BitmapFileFid} {
+		if err := DeleteHeader(dev, fid, bm, ib); !errors.Is(err, ErrReservedFile) {
+			t.Errorf("DeleteHeader(%v): %v, want ErrReservedFile", fid, err)
+		}
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "FULL.DIR")
+	if err := dir.Insert("X.DAT", 1, ondisk.Fid{Num: 99, Seq: 1}, bm, ib); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteHeader(dev, dir.Header.Fid, bm, ib); !errors.Is(err, ErrDirectoryNotEmpty) {
+		t.Errorf("a directory with an entry: %v, want ErrDirectoryNotEmpty", err)
 	}
 }

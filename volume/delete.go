@@ -2,6 +2,7 @@ package volume
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/tucats/ods2/diskimage"
@@ -107,6 +108,60 @@ func freeFileStorage(dev *Device, primary ondisk.FileHeader, bm *Bitmap, ib *Ind
 		if err := writeFreedSlot(dev, container, segment.Fid.Number(), freed); err != nil {
 			return fmt.Errorf("volume: freeing file %v: zeroing header slot for segment %v: %w", primary.Fid, segment.Fid, err)
 		}
+	}
+
+	return nil
+}
+
+// ErrReservedFile is the error DeleteFile and DeleteHeader wrap when asked
+// to delete one of the files the volume itself can't do without: the
+// master file directory, INDEXF.SYS, or BITMAP.SYS.
+var ErrReservedFile = errors.New("a volume structure file cannot be deleted")
+
+// ErrDirectoryNotEmpty is the error DeleteFile and DeleteHeader wrap when
+// asked to delete a directory that still has entries (VMS's
+// SS$_DIRNOTEMPTY).
+var ErrDirectoryNotEmpty = errors.New("directory is not empty")
+
+// DeleteHeader frees the file whose Fid is fid on dev — every header
+// segment and every data extent it owns, exactly as DeleteFile's
+// reclamation step does — without touching any directory. It's for a file
+// reached by its Fid alone: one that never had a directory entry (VMS
+// lets a program create such a file, typically a temporary work file only
+// its creator knows the Fid of), or one whose entry the caller has
+// already removed (Directory.Remove) or will remove itself. Deleting a
+// file that some directory still names leaves that entry dangling, so
+// that's the caller's to avoid.
+//
+// The same refusals as DeleteFile apply, checked before anything is
+// changed: the volume's structure files (ErrReservedFile), and a
+// directory that still has entries (ErrDirectoryNotEmpty). A Fid that no
+// longer names a file (its slot is free, or holds a newer file) wraps
+// ErrNotFound. As with DeleteFile, bm and ib changes are in memory until
+// their Flush.
+func DeleteHeader(dev *Device, fid ondisk.Fid, bm *Bitmap, ib *IndexBitmap) error {
+	switch fid.Number() {
+	case ondisk.MasterFileDirectoryFid.Number(), ondisk.IndexFileFid.Number(), ondisk.BitmapFileFid.Number():
+		return fmt.Errorf("volume: deleting file %v: %w", fid, ErrReservedFile)
+	}
+
+	primary, err := readFileHeaderViaIndex(dev, dev.IndexFile.Extents, fid)
+	if err != nil {
+		return fmt.Errorf("volume: deleting file %v: %v: %w", fid, err, ErrNotFound)
+	}
+
+	if primary.IsDirectory() {
+		empty, err := isEmptyDirectory(dev, primary)
+		if err != nil {
+			return fmt.Errorf("volume: deleting file %v: %w", fid, err)
+		}
+		if !empty {
+			return fmt.Errorf("volume: deleting file %v: %w", fid, ErrDirectoryNotEmpty)
+		}
+	}
+
+	if err := freeFileStorage(dev, primary, bm, ib); err != nil {
+		return fmt.Errorf("volume: deleting file %v: %w", fid, err)
 	}
 
 	return nil
@@ -229,7 +284,7 @@ func DeleteFile(dir *Directory, name string, version uint16, bm *Bitmap, ib *Ind
 	}
 
 	if entry.Fid.Number() == ondisk.MasterFileDirectoryFid.Number() {
-		return fmt.Errorf("volume: deleting %s;%d: the volume's master file directory cannot be deleted", name, version)
+		return fmt.Errorf("volume: deleting %s;%d: the volume's master file directory cannot be deleted: %w", name, version, ErrReservedFile)
 	}
 
 	// INDEXF.SYS (file number 1) and BITMAP.SYS (file number 2) are the
@@ -250,7 +305,7 @@ func DeleteFile(dir *Directory, name string, version uint16, bm *Bitmap, ib *Ind
 	// INDEXF.SYS/BITMAP.SYS never changes regardless of what name any
 	// directory happens to list them under).
 	if n := entry.Fid.Number(); n == ondisk.IndexFileFid.Number() || n == ondisk.BitmapFileFid.Number() {
-		return fmt.Errorf("volume: deleting %s;%d: the volume's index file and storage bitmap cannot be deleted", name, version)
+		return fmt.Errorf("volume: deleting %s;%d: the volume's index file and storage bitmap cannot be deleted: %w", name, version, ErrReservedFile)
 	}
 
 	dev := dir.Device
@@ -265,7 +320,7 @@ func DeleteFile(dir *Directory, name string, version uint16, bm *Bitmap, ib *Ind
 			return fmt.Errorf("volume: deleting %s;%d: %w", name, version, err)
 		}
 		if !empty {
-			return fmt.Errorf("volume: deleting %s;%d: directory is not empty", name, version)
+			return fmt.Errorf("volume: deleting %s;%d: %w", name, version, ErrDirectoryNotEmpty)
 		}
 	}
 
