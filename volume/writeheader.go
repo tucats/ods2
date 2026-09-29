@@ -192,6 +192,17 @@ func writeHeaderBytes(dev *Device, container diskimage.WritableContainer, fileNu
 		return ondisk.FileHeader{}, fmt.Errorf("writing header slot for file %d (LBN %d): %w", fileNumber, lbn, err)
 	}
 
+	// A VMS volume keeps a backup copy of INDEXF.SYS's header at the home
+	// block's AlternateIndexLBN, identical to the primary, so the index
+	// file can still be found if its primary header is damaged. Keep it in
+	// step whenever the primary changes: ANALYZE/DISK_STRUCTURE reports a
+	// stale copy as an invalid alternate index file header (ALTIHDBAD).
+	if fileNumber == uint32(ondisk.IndexFileFid.Number()) && dev.Home.AlternateIndexLBN != 0 {
+		if err := container.WriteBlock(dev.Home.AlternateIndexLBN, buf); err != nil {
+			return ondisk.FileHeader{}, fmt.Errorf("writing the alternate index file header (LBN %d): %w", dev.Home.AlternateIndexLBN, err)
+		}
+	}
+
 	decoded, err := ondisk.DecodeFileHeader(buf)
 	if err != nil {
 		// Unreachable: EncodeFileHeader always produces a checksum that

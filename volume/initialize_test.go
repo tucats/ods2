@@ -335,6 +335,12 @@ func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 	dev := vol.Devices[0]
 	before := mappedBlocks(dev.IndexFile)
 
+	// Initialize doesn't create the backup copy of INDEXF.SYS's header a
+	// VMS volume has; point AlternateIndexLBN at the volume's (unused)
+	// last block so the test can check the copy is kept in step.
+	const altIndexLBN = 1999
+	dev.Home.AlternateIndexLBN = altIndexLBN
+
 	dir, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
@@ -372,6 +378,14 @@ func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 	}
 	if hw, eof := dev.IndexFile.Header.HighWaterMark, dev.IndexFile.Header.RecordAttributes.EndOfFileBlock; hw != after+1 || eof != hw {
 		t.Errorf("INDEXF.SYS high-water mark %d and end of file %d, want both %d", hw, eof, after+1)
+	}
+
+	alt := make([]byte, ondisk.BlockSize)
+	if err := c.ReadBlock(altIndexLBN, alt); err != nil {
+		t.Fatalf("ReadBlock(alternate index header): %v", err)
+	}
+	if !bytes.Equal(alt, dev.IndexFile.Header.Raw()) {
+		t.Error("the alternate index file header doesn't match INDEXF.SYS's primary header after the index file grew")
 	}
 
 	if err := vol.Dismount(); err != nil {
