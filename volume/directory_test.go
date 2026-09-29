@@ -1,6 +1,7 @@
 package volume
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -96,14 +97,14 @@ func TestDirectoryListAndLookup(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		if _, err := dir.Lookup("NOSUCHFILE.TXT", 0); err == nil {
-			t.Fatal("Lookup for a nonexistent name: want error, got nil")
+		if _, err := dir.Lookup("NOSUCHFILE.TXT", 0); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Lookup for a nonexistent name: err = %v, want one wrapping ErrNotFound", err)
 		}
 	})
 
 	t.Run("wrong version not found", func(t *testing.T) {
-		if _, err := dir.Lookup("README.TXT", 99); err == nil {
-			t.Fatal("Lookup for a nonexistent version: want error, got nil")
+		if _, err := dir.Lookup("README.TXT", 99); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Lookup for a nonexistent version: err = %v, want one wrapping ErrNotFound", err)
 		}
 	})
 }

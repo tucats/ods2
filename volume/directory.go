@@ -1,6 +1,7 @@
 package volume
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -81,11 +82,23 @@ func (d *Directory) List() ([]ondisk.DirEntry, error) {
 	return all, nil
 }
 
+// ErrNotFound is the error Lookup wraps when the directory simply has no
+// entry for the requested name (or name and version), so a caller can
+// tell that ordinary outcome apart from a failure to read the directory
+// at all with errors.Is(err, ErrNotFound). A VMS-style caller needs the
+// distinction: "no such file" (SS$_NOSUCHFILE) is something to report to
+// the program, while an unreadable directory block is a device error.
+var ErrNotFound = errors.New("not found")
+
 // Lookup finds one specific (name, version) entry in the directory. Name
 // matching is case-insensitive, matching VMS's own convention. Passing
 // version 0 — not itself a legal VMS version number, so this is
 // unambiguous — selects the highest existing version of that name instead
 // of an exact version.
+//
+// A name (or version) that isn't there is reported as an error wrapping
+// ErrNotFound; any other error means the directory itself couldn't be
+// read.
 //
 // This is a simple, non-wildcard lookup: matching wildcards like "*" and
 // "%" against directory contents, and resolving relative version
@@ -118,9 +131,9 @@ func (d *Directory) Lookup(name string, version uint16) (ondisk.DirEntry, error)
 		return *best, nil
 	}
 	if version != 0 {
-		return ondisk.DirEntry{}, fmt.Errorf("volume: %s;%d not found", name, version)
+		return ondisk.DirEntry{}, fmt.Errorf("volume: %s;%d: %w", name, version, ErrNotFound)
 	}
-	return ondisk.DirEntry{}, fmt.Errorf("volume: %s not found", name)
+	return ondisk.DirEntry{}, fmt.Errorf("volume: %s: %w", name, ErrNotFound)
 }
 
 // NextVersion reports the version number a new entry named name should be
