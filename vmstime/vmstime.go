@@ -43,12 +43,19 @@ const ticksPerSecond = 10_000_000
 // 100 nanoseconds.
 const nanosecondsPerTick = 100
 
-// Time converts a VMSTime into a Go time.Time, in UTC. VMS timestamps
-// don't carry explicit time zone information (they're conventionally
-// interpreted in whatever local time zone the system that wrote them was
-// set to), so this conversion simply treats the tick count as an absolute
-// offset from the VMS epoch with no time zone adjustment — the same
-// assumption the original C implementation makes.
+// Location is the time zone VMS timestamps are in. A VMSTime carries no
+// time zone: VMS keeps its clock in local time, so a timestamp's tick
+// count is the local wall-clock time of the system that wrote it. Time
+// and FromTime interpret and produce tick counts as wall-clock time in
+// Location, which defaults to the host's own local time zone -- what a
+// simulated VAX's clock (simh sets it from the host) follows too. A file
+// stamped in UTC instead shows up on VMS as created hours in the future
+// (ANALYZE/DISK_STRUCTURE reports FUTCREDAT/FUTREVDAT) wherever local time
+// is behind UTC. Tests set it to time.UTC for predictable results.
+var Location = time.Local
+
+// Time converts a VMSTime into a Go time.Time: the instant whose
+// wall-clock time in Location is the timestamp's (see Location).
 func (t VMSTime) Time() time.Time {
 	unixTicks := int64(t) - vmsToUnixOffsetTicks
 
@@ -68,14 +75,18 @@ func (t VMSTime) Time() time.Time {
 
 	nanoseconds := remainderTicks * nanosecondsPerTick
 
-	return time.Unix(seconds, nanoseconds).UTC()
+	// The ticks are a wall-clock time: read them as one (in UTC, which has
+	// no offset), then place that same wall-clock time in Location.
+	w := time.Unix(seconds, nanoseconds).UTC()
+
+	return time.Date(w.Year(), w.Month(), w.Day(), w.Hour(), w.Minute(), w.Second(), w.Nanosecond(), Location)
 }
 
-// FromTime converts a Go time.Time into a VMSTime. The input is first
-// converted to UTC, for the same reason Time returns UTC: a VMSTime has no
-// time zone of its own.
+// FromTime converts a Go time.Time into a VMSTime: the tick count of t's
+// wall-clock time in Location (see Location).
 func FromTime(t time.Time) VMSTime {
-	u := t.UTC()
+	w := t.In(Location)
+	u := time.Date(w.Year(), w.Month(), w.Day(), w.Hour(), w.Minute(), w.Second(), w.Nanosecond(), time.UTC)
 	unixTicks := u.Unix()*ticksPerSecond + int64(u.Nanosecond())/nanosecondsPerTick
 
 	return VMSTime(unixTicks + vmsToUnixOffsetTicks)

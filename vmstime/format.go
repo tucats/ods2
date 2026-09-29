@@ -35,9 +35,10 @@ func (t VMSTime) String() string {
 // ParseVMSTime parses a VMS-formatted timestamp string, such as
 // "17-NOV-1858 00:00:00.00", into a VMSTime. It accepts the month
 // abbreviation in any letter case (VMS itself always displays it in upper
-// case, but this is more forgiving for hand-typed input).
+// case, but this is more forgiving for hand-typed input). Like every VMS
+// time, the string is a wall-clock time in Location.
 func ParseVMSTime(s string) (VMSTime, error) {
-	t, err := time.Parse(layout, lowerCaseMonthTail(s))
+	t, err := time.ParseInLocation(layout, lowerCaseMonthTail(s), Location)
 	if err != nil {
 		return 0, fmt.Errorf("vmstime: parsing %q as a VMS timestamp: %w", s, err)
 	}
