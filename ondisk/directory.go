@@ -21,16 +21,28 @@ type DirEntry struct {
 	Name    string
 	Version uint16
 	Fid     Fid
+
+	// VersionLimit is the most versions of Name the directory keeps. It is
+	// stored once per name (in the name record every version shares), so
+	// every entry decoded from one record carries the same value. VMS
+	// requires it to be 1 to 32767 (ANALYZE/DISK_STRUCTURE reports 0, or
+	// a value with the high bit set, as an invalid directory record), so
+	// EncodeDirectoryBlock writes NoVersionLimit for a name whose entries
+	// all leave it 0.
+	VersionLimit uint16
 }
+
+// NoVersionLimit is the directory record version limit meaning "keep any
+// number of versions": 32767, the largest value VMS accepts.
+const NoVersionLimit uint16 = 32767
 
 // Sizes of the two fixed-format pieces of a directory block, named to
 // match the on-disk structures dir$rec and dir$ent from the original
 // implementation:
 //
 //   - A "name record" starts with a 6-byte fixed header (a 2-byte overall
-//     size, a 2-byte version limit this project doesn't need, a 1-byte
-//     flags field, and a 1-byte name length), followed by that many bytes
-//     of name text.
+//     size, a 2-byte version limit, a 1-byte flags field, and a 1-byte
+//     name length), followed by that many bytes of name text.
 //   - Immediately after the name record (padded — see below) comes one or
 //     more 8-byte "version entries", each recording one existing version
 //     of that name: a 2-byte version number and that version's 6-byte Fid.
@@ -87,6 +99,7 @@ func DecodeDirectoryBlock(block []byte) ([]DirEntry, error) {
 			break
 		}
 
+		versionLimit := binary.LittleEndian.Uint16(block[offset+2 : offset+4])
 		nameCount := int(block[offset+5])
 		nameStart := offset + dirRecHeaderSize
 
@@ -120,9 +133,10 @@ func DecodeDirectoryBlock(block []byte) ([]DirEntry, error) {
 			}
 
 			entries = append(entries, DirEntry{
-				Name:    name,
-				Version: binary.LittleEndian.Uint16(block[pos : pos+2]),
-				Fid:     fid,
+				Name:         name,
+				Version:      binary.LittleEndian.Uint16(block[pos : pos+2]),
+				Fid:          fid,
+				VersionLimit: versionLimit,
 			})
 		}
 
@@ -190,12 +204,24 @@ func EncodeDirectoryBlock(entries []DirEntry) ([]byte, error) {
 		entriesStart := dirRecHeaderSize + paddedNameLen
 		recordLen := entriesStart + len(versions)*dirEntSize
 
+		// The name record holds one version limit for all its versions:
+		// the largest any of them carries (they normally agree), or
+		// NoVersionLimit if none has one.
+		var versionLimit uint16
+		for _, v := range versions {
+			versionLimit = max(versionLimit, v.VersionLimit)
+		}
+
+		if versionLimit == 0 || versionLimit > NoVersionLimit {
+			versionLimit = NoVersionLimit
+		}
+
 		record := make([]byte, recordLen)
 		binary.LittleEndian.PutUint16(record[0:2], uint16(recordLen-2)) // dir$size = total record length - 2
-		// Bytes [2:4] (version limit) and byte [4] (flags) are left zero:
-		// this project's own DecodeDirectoryBlock never reads them, the
-		// same "not needed" call this file's own package comment already
-		// makes about the version-limit field.
+		binary.LittleEndian.PutUint16(record[2:4], versionLimit)
+		// Byte [4] (flags) stays zero: its type field is DIR$C_FID (0), a
+		// name-to-file-ID record, and on ODS-2 its name type field must be
+		// 0 too.
 		record[5] = uint8(len(nameBytes))
 		copy(record[dirRecHeaderSize:dirRecHeaderSize+len(nameBytes)], nameBytes)
 

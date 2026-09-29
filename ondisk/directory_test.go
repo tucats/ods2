@@ -224,7 +224,7 @@ func TestDecodeDirectoryBlockWrongSize(t *testing.T) {
 // doesn't just happen to work when handed already-sorted input.
 func TestEncodeDirectoryBlockRoundTrip(t *testing.T) {
 	in := []DirEntry{
-		{Name: "DATA.DAT", Version: 1, Fid: Fid{Num: 30, Seq: 1}},
+		{Name: "DATA.DAT", Version: 1, Fid: Fid{Num: 30, Seq: 1}, VersionLimit: 3},
 		{Name: "A.TXT", Version: 3, Fid: Fid{Num: 20, Seq: 2, Rvn: 1}}, // odd-length name
 		{Name: "DATA.DAT", Version: 2, Fid: Fid{Num: 30, Seq: 2}},
 		{Name: "BETA.DIR", Version: 1, Fid: Fid{Num: 2, Seq: 1}},
@@ -240,12 +240,15 @@ func TestEncodeDirectoryBlockRoundTrip(t *testing.T) {
 		t.Fatalf("DecodeDirectoryBlock(EncodeDirectoryBlock(in)): %v", err)
 	}
 
-	// Names ascending; DATA.DAT's two versions descending.
+	// Names ascending; DATA.DAT's two versions descending. A name record
+	// holds one version limit for all its versions: DATA.DAT keeps the 3
+	// one of its entries gave, and the names with none get NoVersionLimit
+	// (VMS rejects a 0).
 	want := []DirEntry{
-		{Name: "A.TXT", Version: 3, Fid: Fid{Num: 20, Seq: 2, Rvn: 1}},
-		{Name: "BETA.DIR", Version: 1, Fid: Fid{Num: 2, Seq: 1}},
-		{Name: "DATA.DAT", Version: 2, Fid: Fid{Num: 30, Seq: 2}},
-		{Name: "DATA.DAT", Version: 1, Fid: Fid{Num: 30, Seq: 1}},
+		{Name: "A.TXT", Version: 3, Fid: Fid{Num: 20, Seq: 2, Rvn: 1}, VersionLimit: NoVersionLimit},
+		{Name: "BETA.DIR", Version: 1, Fid: Fid{Num: 2, Seq: 1}, VersionLimit: NoVersionLimit},
+		{Name: "DATA.DAT", Version: 2, Fid: Fid{Num: 30, Seq: 2}, VersionLimit: 3},
+		{Name: "DATA.DAT", Version: 1, Fid: Fid{Num: 30, Seq: 1}, VersionLimit: 3},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("DecodeDirectoryBlock(EncodeDirectoryBlock(in)) = %+v, want %+v", got, want)
@@ -300,6 +303,7 @@ func TestEncodeDirectoryBlockFillsBlockExactly(t *testing.T) {
 	// decoded order is in reversed.
 	want := make([]DirEntry, len(in))
 	for i, e := range in {
+		e.VersionLimit = NoVersionLimit
 		want[len(in)-1-i] = e
 	}
 	if !reflect.DeepEqual(got, want) {

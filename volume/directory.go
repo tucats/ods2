@@ -199,7 +199,11 @@ func (d *Directory) Insert(name string, version uint16, fid ondisk.Fid, bm *Bitm
 			return fmt.Errorf("volume: inserting %s;%d: %w", name, version, ErrExists)
 		}
 	}
-	entries = append(entries, ondisk.DirEntry{Name: name, Version: version, Fid: fid})
+	// A new version of an existing name shares that name's record, and so
+	// its version limit (see ondisk.EncodeDirectoryBlock). A new name gets
+	// the directory's own default version limit; 0 there means no limit,
+	// which the encoder writes as ondisk.NoVersionLimit.
+	entries = append(entries, ondisk.DirEntry{Name: name, Version: version, Fid: fid, VersionLimit: d.Header.RecordAttributes.VersionLimit})
 
 	blocks, err := packDirectoryBlocks(entries)
 	if err != nil {

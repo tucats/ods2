@@ -488,7 +488,8 @@ func Initialize(c diskimage.WritableContainer, opts InitializeOptions) error {
 	// before its header.
 	mfdEntries := make([]ondisk.DirEntry, 0, len(reservedFiles))
 	for _, spec := range reservedFiles {
-		mfdEntries = append(mfdEntries, ondisk.DirEntry{Name: spec.name, Version: 1, Fid: spec.fid})
+		// Version limit 1, as VMS INITIALIZE gives the reserved files.
+		mfdEntries = append(mfdEntries, ondisk.DirEntry{Name: spec.name, Version: 1, Fid: spec.fid, VersionLimit: 1})
 	}
 	mfdBlock, err := ondisk.EncodeDirectoryBlock(mfdEntries)
 	if err != nil {

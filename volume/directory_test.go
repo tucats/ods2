@@ -226,7 +226,7 @@ func TestDirectoryInsertIntoEmptyDirectory(t *testing.T) {
 		t.Errorf("Blocks() after first Insert = %d, want 1 (the directory had to be extended from 0)", dir.Blocks())
 	}
 
-	want := []ondisk.DirEntry{{Name: "README.TXT", Version: 1, Fid: fid}}
+	want := []ondisk.DirEntry{{Name: "README.TXT", Version: 1, Fid: fid, VersionLimit: ondisk.NoVersionLimit}}
 	entries, err := dir.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -298,8 +298,8 @@ func TestDirectoryInsertSecondVersionAndNextVersion(t *testing.T) {
 	// on-disk convention (see its doc comment) and Lookup's "version 0 means
 	// highest" rule.
 	want := []ondisk.DirEntry{
-		{Name: "DATA.DAT", Version: 2, Fid: fid2},
-		{Name: "DATA.DAT", Version: 1, Fid: fid1},
+		{Name: "DATA.DAT", Version: 2, Fid: fid2, VersionLimit: ondisk.NoVersionLimit},
+		{Name: "DATA.DAT", Version: 1, Fid: fid1, VersionLimit: ondisk.NoVersionLimit},
 	}
 	entries, err := dir.List()
 	if err != nil {
@@ -348,7 +348,7 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 		if err := dir.Insert(name, 1, fid, bm, ib); err != nil {
 			t.Fatalf("Insert(%s) (#%d): %v", name, i, err)
 		}
-		want = append(want, ondisk.DirEntry{Name: name, Version: 1, Fid: fid})
+		want = append(want, ondisk.DirEntry{Name: name, Version: 1, Fid: fid, VersionLimit: ondisk.NoVersionLimit})
 	}
 
 	if dir.Blocks() <= 1 {
@@ -482,9 +482,9 @@ func TestDirectoryRemoveOneOfSeveralVersions(t *testing.T) {
 	}
 
 	want := []ondisk.DirEntry{
-		{Name: "DATA.DAT", Version: 3, Fid: fid3},
-		{Name: "DATA.DAT", Version: 1, Fid: fid1},
-		{Name: "OTHER.TXT", Version: 1, Fid: otherFid},
+		{Name: "DATA.DAT", Version: 3, Fid: fid3, VersionLimit: ondisk.NoVersionLimit},
+		{Name: "DATA.DAT", Version: 1, Fid: fid1, VersionLimit: ondisk.NoVersionLimit},
+		{Name: "OTHER.TXT", Version: 1, Fid: otherFid, VersionLimit: ondisk.NoVersionLimit},
 	}
 	entries, err := dir.List()
 	if err != nil {
@@ -556,7 +556,7 @@ func TestDirectoryRemoveShrinksUsedBlocks(t *testing.T) {
 		t.Errorf("Blocks() after removing down to one name = %d, want unchanged at %d (allocation never shrinks)", dir.Blocks(), blocksBefore)
 	}
 
-	want := []ondisk.DirEntry{{Name: "LAST.TXT", Version: 1, Fid: lastFid}}
+	want := []ondisk.DirEntry{{Name: "LAST.TXT", Version: 1, Fid: lastFid, VersionLimit: ondisk.NoVersionLimit}}
 	entries, err := dir.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
