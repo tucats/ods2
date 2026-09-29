@@ -260,6 +260,7 @@ func (vol *Volume) CreateFileVersion(dir *Directory, name string, version uint16
 
 	f, err := CreateHeader(dir.Device, ib, NewFileHeader{
 		Name:             name,
+		Version:          version,
 		Directory:        dir.Header.Fid,
 		RecordAttributes: recAttr,
 	})
@@ -407,6 +408,7 @@ func (vol *Volume) CreateDirectory(parent *Directory, name string, versionLimit 
 
 	f, err := CreateHeader(parent.Device, ib, NewFileHeader{
 		Name:            name,
+		Version:         version,
 		Directory:       parent.Header.Fid,
 		Characteristics: ondisk.FchDirectory,
 		RecordAttributes: ondisk.RecAttr{

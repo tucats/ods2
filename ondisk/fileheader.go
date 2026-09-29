@@ -114,6 +114,17 @@ type FileHeader struct {
 	// for enforcing this when reading file data.
 	HighWaterMark uint32
 
+	// RecordProtection is FH2$W_RECPROT, a record-level protection mask.
+	// VMS INITIALIZE sets it to 0xFE00 on a volume's reserved files;
+	// ordinary files leave it 0.
+	RecordProtection uint16
+
+	// ClassProtection is the header's security classification mask, at
+	// byte offset 88. It exists only in a header whose IDENT area starts
+	// after it (IdentOffset of 54 or more): VMS itself puts the IDENT
+	// area at byte 80 (IdentOffset 40), right over this field's position,
+	// and so does EncodeFileHeader. It is zero otherwise, and
+	// EncodeFileHeader never writes it.
 	ClassProtection [20]byte
 
 	// Checksum is the checksum of the whole 512-byte header (see
@@ -139,32 +150,33 @@ const (
 	fhOffExtFid     = 14 // 6 bytes
 	fhOffRecAttr    = 20 // 32 bytes
 	fhOffFileChar   = 52
-	// 2 reserved bytes at offset 56.
-	fhOffMapInUse  = 58
-	fhOffAccMode   = 59
-	fhOffFileOwner = 60 // 4 bytes (Uic)
-	fhOffFileProt  = 64
-	fhOffBacklink  = 66 // 6 bytes
-	fhOffJournal   = 72
-	fhOffRuActive  = 73
+	fhOffRecProt    = 56
+	fhOffMapInUse   = 58
+	fhOffAccMode    = 59
+	fhOffFileOwner  = 60 // 4 bytes (Uic)
+	fhOffFileProt   = 64
+	fhOffBacklink   = 66 // 6 bytes
+	fhOffJournal    = 72
+	fhOffRuActive   = 73
 	// 2 reserved bytes at offset 74.
 	fhOffHighwater = 76
-	// 8 reserved bytes at offset 80.
-	fhOffClassProt = 88 // 20 bytes
-	// 402 bytes of IDENT/map/ACL area at offset 108, decoded elsewhere.
-	fhOffChecksum = 510
+	// The fixed part ends at byte 80 (FH2$C_LENGTH).
+	fhOffClassProt = 88 // 20 bytes, only when the IDENT area starts later
+	fhOffChecksum  = 510
 )
 
 // fhVariableAreaStart is the WORD offset (see IdentOffset's doc comment
 // for why these are word, not byte, offsets) where a freshly-encoded
-// header's variable-position IDENT/map/ACL areas begin: immediately after
-// every fixed field this package decodes (ClassProtection, the last of
-// them, ends at byte offset 108 — fhOffClassProt+20 — i.e. word offset
-// 54). A header read from a real volume can have its areas start
-// elsewhere (older on-disk layouts left less of the header fixed), but
-// EncodeFileHeader has no reason to: it's free to always start exactly
-// where its own fixed-field layout ends.
-const fhVariableAreaStart = (fhOffClassProt + 20) / 2
+// header's variable-position IDENT/map/ACL areas begin: byte 80, the end
+// of the fixed part (FH2$C_LENGTH), which is where VMS itself puts the
+// IDENT area (IdentOffset 40, and the map at 100 after the 120-byte IDENT
+// area) in every header it writes -- confirmed against a VMS-initialized
+// volume and files VMS created on it.
+const fhVariableAreaStart = 80 / 2
+
+// fhClassProtIdentOffset is the least IdentOffset a header can have and
+// still hold ClassProtection (which ends at byte 108).
+const fhClassProtIdentOffset = (fhOffClassProt + 20) / 2
 
 // Raw returns a copy of the complete 512-byte on-disk header this
 // FileHeader was decoded from — everything, including the IDENT, map, and
@@ -250,9 +262,12 @@ func DecodeFileHeader(b []byte) (FileHeader, error) {
 		Journaling:          b[fhOffJournal],
 		RecoveryUnitActive:  b[fhOffRuActive],
 		HighWaterMark:       binary.LittleEndian.Uint32(b[fhOffHighwater:]),
+		RecordProtection:    binary.LittleEndian.Uint16(b[fhOffRecProt:]),
 		Checksum:            binary.LittleEndian.Uint16(b[fhOffChecksum:]),
 	}
-	copy(h.ClassProtection[:], b[fhOffClassProt:fhOffClassProt+20])
+	if int(h.IdentOffset) >= fhClassProtIdentOffset {
+		copy(h.ClassProtection[:], b[fhOffClassProt:fhOffClassProt+20])
+	}
 	copy(h.raw[:], b)
 
 	sum, err := Checksum(b)
@@ -385,7 +400,7 @@ func EncodeFileHeader(h FileHeader, areas FileHeaderAreas) ([]byte, error) {
 	b[fhOffJournal] = h.Journaling
 	b[fhOffRuActive] = h.RecoveryUnitActive
 	binary.LittleEndian.PutUint32(b[fhOffHighwater:], h.HighWaterMark)
-	copy(b[fhOffClassProt:fhOffClassProt+20], h.ClassProtection[:])
+	binary.LittleEndian.PutUint16(b[fhOffRecProt:], h.RecordProtection)
 
 	if len(identBytes) > 0 {
 		copy(b[identOffsetWords*2:identOffsetWords*2+len(identBytes)], identBytes)

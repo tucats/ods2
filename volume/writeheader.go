@@ -23,6 +23,11 @@ type NewFileHeader struct {
 	// the Fid CreateHeader returns.
 	Name string
 
+	// Version is the directory version number the file is being created
+	// as. The IDENT area records the name with it ("NAME.TYP;3"), as VMS
+	// does (see ondisk.IdentName); 0 leaves it off.
+	Version uint16
+
 	// Directory is the Fid of the file's parent directory, stored as the
 	// new header's Backlink -- the reverse of the (directory -> file) link
 	// a directory entry records, letting a file be traced back to where it
@@ -107,12 +112,14 @@ func CreateHeader(dev *Device, ib *IndexBitmap, opts NewFileHeader) (*File, erro
 		FileProtection:      dev.Home.FileProtection,
 		Backlink:            opts.Directory,
 	}
+	filename, extension := ondisk.IdentName(opts.Name, opts.Version)
 	areas := ondisk.FileHeaderAreas{
 		Ident: &ondisk.Ident{
-			Filename:     opts.Name,
-			Revision:     1,
-			CreationDate: now,
-			RevisionDate: now,
+			Filename:          filename,
+			FilenameExtension: extension,
+			Revision:          1,
+			CreationDate:      now,
+			RevisionDate:      now,
 		},
 	}
 

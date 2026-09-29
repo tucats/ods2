@@ -128,7 +128,8 @@ func TestEncodeFileHeaderRoundTrip(t *testing.T) {
 		RecoveryUnitActive:  0,
 		HighWaterMark:       10,
 	}
-	in.ClassProtection[0] = 0xAB
+	in.ClassProtection[0] = 0xAB // not written: see FileHeader.ClassProtection
+	in.RecordProtection = 0xFE00
 
 	ident := Ident{Filename: "TEST.TXT", Revision: 3}
 	mapBytes := make([]byte, 6)
@@ -179,8 +180,16 @@ func TestEncodeFileHeaderRoundTrip(t *testing.T) {
 	if out.HighWaterMark != in.HighWaterMark {
 		t.Errorf("HighWaterMark = %d, want %d", out.HighWaterMark, in.HighWaterMark)
 	}
-	if out.ClassProtection != in.ClassProtection {
-		t.Errorf("ClassProtection = %v, want %v", out.ClassProtection, in.ClassProtection)
+	if out.RecordProtection != in.RecordProtection {
+		t.Errorf("RecordProtection = %#x, want %#x", out.RecordProtection, in.RecordProtection)
+	}
+	// VMS puts the IDENT area at byte 80, where ClassProtection would
+	// otherwise be, and so does EncodeFileHeader.
+	if out.IdentOffset != 40 || out.MapOffset != 100 {
+		t.Errorf("IdentOffset %d, MapOffset %d; want 40 and 100, as VMS lays out a header", out.IdentOffset, out.MapOffset)
+	}
+	if out.ClassProtection != ([20]byte{}) {
+		t.Errorf("ClassProtection = %v, want zero (the IDENT area is where it would be)", out.ClassProtection)
 	}
 
 	gotIdent, err := out.Ident()

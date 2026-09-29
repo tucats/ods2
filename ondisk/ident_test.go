@@ -2,6 +2,7 @@ package ondisk
 
 import (
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/tucats/ods2/vmstime"
@@ -154,5 +155,41 @@ func TestDecodeNulPaddedString(t *testing.T) {
 		if got := decodeNulPaddedString(c.in); got != c.want {
 			t.Errorf("decodeNulPaddedString(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestIdentNameAndPadding checks that a file's name is stored the way VMS
+// stores it: name, type, and version together, the first 20 characters in
+// Filename and the rest in FilenameExtension, both padded with spaces.
+func TestIdentNameAndPadding(t *testing.T) {
+	cases := []struct {
+		name      string
+		version   uint16
+		filename  string
+		extension string
+	}{
+		{"INDEXF.SYS", 1, "INDEXF.SYS;1", ""},
+		{"A.B", 0, "A.B", ""},
+		{"LONG_FILE_NAME_HERE.TXT", 12, "LONG_FILE_NAME_HERE.", "TXT;12"},
+	}
+
+	for _, c := range cases {
+		f, e := IdentName(c.name, c.version)
+		if f != c.filename || e != c.extension {
+			t.Errorf("IdentName(%q, %d) = %q, %q; want %q, %q", c.name, c.version, f, e, c.filename, c.extension)
+		}
+	}
+
+	b, err := EncodeIdent(Ident{Filename: "INDEXF.SYS;1", Revision: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := string(b[0:20]); got != "INDEXF.SYS;1        " {
+		t.Errorf("Filename field = %q, want it padded with spaces", got)
+	}
+
+	if got := string(b[54:120]); got != strings.Repeat(" ", 66) {
+		t.Errorf("FilenameExtension field = %q, want 66 spaces", got)
 	}
 }

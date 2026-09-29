@@ -92,12 +92,11 @@ func (h *FileHeader) Ident() (Ident, error) {
 
 // EncodeIdent encodes id into its 120-byte on-disk representation — the
 // fixed-size IDENT area (*FileHeader).Ident decodes, always identSize
-// bytes regardless of how short id's actual text fields are. Unlike the
-// home block's text fields (see encodePaddedString), this area's unused
-// trailing bytes are zero-filled rather than space-padded: decode accepts
-// either convention (see decodeNulPaddedString), so this is simply the
-// simpler of two equally-valid choices, not an attempt to reproduce
-// exactly what a real volume happens to write there.
+// bytes regardless of how short id's actual text fields are. Like the home
+// block's text fields (see encodePaddedString), the name fields are padded
+// with spaces, as VMS INITIALIZE and the VMS file system write them
+// (confirmed against a VMS-initialized volume); decode accepts either
+// spaces or NULs (see decodeNulPaddedString).
 //
 // The only way this can fail is Filename longer than 20 bytes or
 // FilenameExtension longer than 66 bytes — the fixed widths of those two
@@ -111,13 +110,41 @@ func EncodeIdent(id Ident) ([]byte, error) {
 	}
 
 	b := make([]byte, identSize)
-	copy(b[identOffFilename:identOffFilename+20], id.Filename)
+
+	// Both name fields are padded with spaces, as VMS writes them (see
+	// IdentName).
+	copy(b[identOffFilename:identOffFilename+20], fmt.Sprintf("%-20s", id.Filename))
 	binary.LittleEndian.PutUint16(b[identOffRevision:], id.Revision)
 	encodeVMSTime(b[identOffCreDate:], id.CreationDate)
 	encodeVMSTime(b[identOffRevDate:], id.RevisionDate)
 	encodeVMSTime(b[identOffExpDate:], id.ExpirationDate)
 	encodeVMSTime(b[identOffBakDate:], id.BackupDate)
-	copy(b[identOffFilenameExt:identOffFilenameExt+66], id.FilenameExtension)
+	copy(b[identOffFilenameExt:identOffFilenameExt+66], fmt.Sprintf("%-66s", id.FilenameExtension))
 
 	return b, nil
+}
+
+// IdentName returns the Filename and FilenameExtension an Ident holds for
+// the file name.typ;version, the way VMS stores a file's name in its
+// header: the name, type, and version together ("INDEXF.SYS;1"), the
+// first 20 characters in Filename and any more in FilenameExtension.
+// EncodeIdent pads both with spaces. A version of 0 leaves the ";version"
+// off, for a caller that doesn't know it. A name too long for both fields
+// is cut to fit: the directory entry, not the header, is what records a
+// file's name for lookup.
+func IdentName(name string, version uint16) (filename, extension string) {
+	full := name
+	if version != 0 {
+		full = fmt.Sprintf("%s;%d", name, version)
+	}
+
+	if len(full) > 20+66 {
+		full = full[:20+66]
+	}
+
+	if len(full) <= 20 {
+		return full, ""
+	}
+
+	return full[:20], full[20:]
 }
