@@ -90,6 +90,12 @@ func (d *Directory) List() ([]ondisk.DirEntry, error) {
 // the program, while an unreadable directory block is a device error.
 var ErrNotFound = errors.New("not found")
 
+// ErrExists is the error Insert (and so CreateFileVersion) wraps when the
+// directory already has an entry with the same name and version: VMS's
+// SS$_DUPFILENAME. A directory can hold many versions of one name, but
+// never two entries for the same version.
+var ErrExists = errors.New("already exists")
+
 // Lookup finds one specific (name, version) entry in the directory. Name
 // matching is case-insensitive, matching VMS's own convention. Passing
 // version 0 — not itself a legal VMS version number, so this is
@@ -156,7 +162,9 @@ func (d *Directory) NextVersion(name string) (uint16, error) {
 	return highest + 1, nil
 }
 
-// Insert adds one new (name, version, fid) entry to the directory. bm and ib
+// Insert adds one new (name, version, fid) entry to the directory, or
+// returns an error wrapping ErrExists, changing nothing, if the directory
+// already has that name and version. bm and ib
 // are the volume's storage- and index-file bitmap caches (see OpenBitmap/
 // OpenIndexBitmap) -- Insert consults them only to grow the directory's own
 // data (via Extend) when its current allocation has no room left for the
@@ -185,6 +193,11 @@ func (d *Directory) Insert(name string, version uint16, fid ondisk.Fid, bm *Bitm
 	entries, err := d.List()
 	if err != nil {
 		return fmt.Errorf("volume: inserting %s;%d: %w", name, version, err)
+	}
+	for _, e := range entries {
+		if e.Version == version && strings.EqualFold(e.Name, name) {
+			return fmt.Errorf("volume: inserting %s;%d: %w", name, version, ErrExists)
+		}
 	}
 	entries = append(entries, ondisk.DirEntry{Name: name, Version: version, Fid: fid})
 

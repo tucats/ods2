@@ -1,6 +1,7 @@
 package volume
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -215,9 +216,31 @@ func (f *File) CloseWithFinalByte(finalByte uint16) error {
 // oldest surviving versions are needed to bring the count back within the
 // resolved limit (a no-op when the limit is 0, meaning "unlimited").
 func (vol *Volume) CreateFile(dir *Directory, name string, recAttr ondisk.RecAttr, bm *Bitmap, ib *IndexBitmap) (*File, error) {
-	version, err := dir.NextVersion(name)
-	if err != nil {
-		return nil, fmt.Errorf("volume: creating %s: %w", name, err)
+	return vol.CreateFileVersion(dir, name, 0, recAttr, bm, ib)
+}
+
+// CreateFileVersion is CreateFile with an explicit version number: the new
+// file is entered in dir as name;version rather than as the next version.
+// version 0 means the next version (exactly CreateFile). This is what a
+// VMS program gets by creating "NAME.TYP;5": the version it asked for, as
+// long as the directory doesn't already have it — if it does, nothing is
+// created and the error wraps ErrExists (VMS's SS$_DUPFILENAME), checked
+// before anything is allocated. Replacing the existing version instead
+// ("superseding" it) is the caller's to do, by DeleteFile first.
+//
+// The new version's VersionLimit is resolved and enforced exactly as
+// CreateFile's: see resolveVersionLimit and enforceVersionLimit.
+func (vol *Volume) CreateFileVersion(dir *Directory, name string, version uint16, recAttr ondisk.RecAttr, bm *Bitmap, ib *IndexBitmap) (*File, error) {
+	if version == 0 {
+		next, err := dir.NextVersion(name)
+		if err != nil {
+			return nil, fmt.Errorf("volume: creating %s: %w", name, err)
+		}
+		version = next
+	} else if _, err := dir.Lookup(name, version); err == nil {
+		return nil, fmt.Errorf("volume: creating %s;%d: %w", name, version, ErrExists)
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, fmt.Errorf("volume: creating %s;%d: %w", name, version, err)
 	}
 
 	versionLimit, err := resolveVersionLimit(dir, name, version)
@@ -253,30 +276,29 @@ func (vol *Volume) CreateFile(dir *Directory, name string, recAttr ondisk.RecAtt
 // resolveVersionLimit computes the VersionLimit the version-th version of
 // name (about to be created in dir) should itself carry, per
 // docs/PHASE-03.md's "Version-limit design": the first version of a name
-// (version == 1) inherits dir's own current default
+// (no version of it exists yet) inherits dir's own current default
 // (RecordAttributes.VersionLimit on the directory file's own header); any
 // later version instead carries forward whatever VersionLimit the name's
-// immediately-previous version already had, captured once at that earlier
+// highest existing version already had, captured once at that earlier
 // version's own creation rather than re-derived from dir on every call.
 //
-// "The immediately-previous version" is exactly version-1: NextVersion
-// (dir.NextVersion) always returns one more than name's actual highest
-// existing version, regardless of whether earlier versions have since been
-// deleted leaving gaps, so version-1 is guaranteed to be that highest
-// existing version's own number, not merely "the previous version if
-// versions are contiguous."
+// For the usual case, a new file given the next version (dir.NextVersion:
+// one more than the highest existing version, whatever gaps there are
+// below it), the highest existing version is exactly version-1. For an
+// explicit version (CreateFileVersion) it's whichever version is highest,
+// above or below the new one; version itself only matters for the error
+// text.
 func resolveVersionLimit(dir *Directory, name string, version uint16) (uint16, error) {
-	if version <= 1 {
+	entry, err := dir.Lookup(name, 0)
+	if errors.Is(err, ErrNotFound) {
 		return dir.Header.RecordAttributes.VersionLimit, nil
 	}
-
-	entry, err := dir.Lookup(name, version-1)
 	if err != nil {
-		return 0, fmt.Errorf("resolving version limit from previous version %s;%d: %w", name, version-1, err)
+		return 0, fmt.Errorf("resolving version limit for %s;%d: %w", name, version, err)
 	}
 	previous, err := readFileHeaderViaIndex(dir.Device, dir.Device.IndexFile.Extents, entry.Fid)
 	if err != nil {
-		return 0, fmt.Errorf("resolving version limit from previous version %s;%d: %w", name, version-1, err)
+		return 0, fmt.Errorf("resolving version limit from previous version %s;%d: %w", name, entry.Version, err)
 	}
 	return previous.RecordAttributes.VersionLimit, nil
 }
