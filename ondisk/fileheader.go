@@ -166,6 +166,18 @@ const (
 // where its own fixed-field layout ends.
 const fhVariableAreaStart = (fhOffClassProt + 20) / 2
 
+// Raw returns a copy of the complete 512-byte on-disk header this
+// FileHeader was decoded from — everything, including the IDENT, map, and
+// ACL areas and any fields this package doesn't decode. It's what VMS's
+// ATR$C_HEADER attribute hands a program (the whole header block, as the
+// disk holds it). A FileHeader built in memory rather than decoded (never
+// passed through DecodeFileHeader) has all-zero Raw bytes.
+func (h FileHeader) Raw() []byte {
+	b := h.raw
+
+	return b[:]
+}
+
 // IsDirectory reports whether this header describes a directory rather
 // than an ordinary file. On ODS-2, a directory's contents are a sequence
 // of directory records (see package volume) rather than arbitrary data,
