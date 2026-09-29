@@ -35,7 +35,12 @@ func validHomeBlockBytes(t *testing.T) []byte {
 	binary.LittleEndian.PutUint16(b[homeOffVolOwner+2:], 1) // Uic.Group
 	binary.LittleEndian.PutUint16(b[homeOffProtection:], 0xFF00)
 	binary.LittleEndian.PutUint16(b[homeOffFileProtection:], 0xFF00)
-	binary.LittleEndian.PutUint16(b[homeOffChecksum1:], 0) // never validated; value is irrelevant
+	// Checksum1 is the sum of the 29 words before it; VMS MOUNT checks it.
+	var sum1 uint16
+	for off := 0; off < homeOffChecksum1; off += 2 {
+		sum1 += binary.LittleEndian.Uint16(b[off:])
+	}
+	binary.LittleEndian.PutUint16(b[homeOffChecksum1:], sum1)
 
 	binary.LittleEndian.PutUint64(b[homeOffCreationDate:], 0) // VMS epoch, 17-NOV-1858
 
@@ -192,10 +197,18 @@ func TestHomeBlockRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeHomeBlock(EncodeHomeBlock(want)): %v", err)
 	}
-	// Checksum2 is an output of encoding, not an input -- compare
-	// everything else, then check the checksum separately below.
-	got.Checksum2 = 0
-	want.Checksum2 = 0
+	// Both checksums are outputs of encoding, not inputs -- compare
+	// everything else, then check Checksum1 separately below.
+	var sum1 uint16
+	for off := 0; off < homeOffChecksum1; off += 2 {
+		sum1 += binary.LittleEndian.Uint16(b[off:])
+	}
+	if got.Checksum1 != sum1 || got.Checksum1 == 0 {
+		t.Errorf("Checksum1 = %#x, want %#x, the sum of the first 29 words (VMS MOUNT checks it)", got.Checksum1, sum1)
+	}
+
+	got.Checksum1, got.Checksum2 = 0, 0
+	want.Checksum1, want.Checksum2 = 0, 0
 	if got != want {
 		t.Errorf("round trip =\n%+v\nwant\n%+v", got, want)
 	}

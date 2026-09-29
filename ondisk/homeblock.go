@@ -78,7 +78,15 @@ type HomeBlock struct {
 
 	Protection     uint16
 	FileProtection uint16 // default protection mask applied to newly-created files
-	Checksum1      uint16 // a legacy secondary checksum; not validated by this package or its reference implementation
+
+	// RecordProtection is HM2$W_RECPROT, the default record protection
+	// (0xFE00 on a volume VMS INITIALIZE made).
+	RecordProtection uint16
+
+	// Checksum1 is the checksum of the block's first 29 words, the fields
+	// up to it (see EncodeHomeBlock). VMS MOUNT refuses a home block whose
+	// Checksum1 is wrong.
+	Checksum1 uint16
 
 	CreationDate vmstime.VMSTime
 
@@ -95,7 +103,7 @@ type HomeBlock struct {
 
 	SerialNumber uint32
 
-	StructureName string // e.g. "DECFILE11B" restated as a human-readable label
+	StructureName string // blank on a volume VMS INITIALIZE made
 	VolumeName    string // the volume label, e.g. what a MOUNT command displays
 	OwnerName     string
 	Format        string // should equal HomeBlockFormatID for a valid ODS-2 volume
@@ -130,17 +138,17 @@ const (
 	// 4 reserved bytes at offset 48
 	homeOffProtection     = 52
 	homeOffFileProtection = 54
-	// 2 reserved bytes at offset 56
-	homeOffChecksum1    = 58
-	homeOffCreationDate = 60 // 8 bytes
-	homeOffWindow       = 68
-	homeOffLruLimit     = 69
-	homeOffExtend       = 70
-	homeOffRetainMin    = 72  // 8 bytes
-	homeOffRetainMax    = 80  // 8 bytes
-	homeOffRevDate      = 88  // 8 bytes
-	homeOffMinClass     = 96  // 20 bytes
-	homeOffMaxClass     = 116 // 20 bytes
+	homeOffRecProtection  = 56
+	homeOffChecksum1      = 58
+	homeOffCreationDate   = 60 // 8 bytes
+	homeOffWindow         = 68
+	homeOffLruLimit       = 69
+	homeOffExtend         = 70
+	homeOffRetainMin      = 72  // 8 bytes
+	homeOffRetainMax      = 80  // 8 bytes
+	homeOffRevDate        = 88  // 8 bytes
+	homeOffMinClass       = 96  // 20 bytes
+	homeOffMaxClass       = 116 // 20 bytes
 	// 320 reserved bytes at offset 136
 	homeOffSerialNumber = 456
 	homeOffStrucName    = 460 // 12 bytes
@@ -232,6 +240,7 @@ func DecodeHomeBlock(b []byte) (HomeBlock, error) {
 		VolumeOwner:             owner,
 		Protection:              binary.LittleEndian.Uint16(b[homeOffProtection:]),
 		FileProtection:          binary.LittleEndian.Uint16(b[homeOffFileProtection:]),
+		RecordProtection:        binary.LittleEndian.Uint16(b[homeOffRecProtection:]),
 		Checksum1:               binary.LittleEndian.Uint16(b[homeOffChecksum1:]),
 		CreationDate:            decodeVMSTime(b[homeOffCreationDate:]),
 		WindowSize:              b[homeOffWindow],
@@ -268,10 +277,12 @@ func DecodeHomeBlock(b []byte) (HomeBlock, error) {
 }
 
 // EncodeHomeBlock encodes h into its 512-byte on-disk representation,
-// computing Checksum2 (see Checksum) from the rest of the block —
-// whatever value h.Checksum2 itself holds is ignored, since a checksum
-// only makes sense as the OUTPUT of encoding the rest of the block, never
-// an input to it.
+// computing both checksums from the rest of the block — whatever values
+// h.Checksum1 and h.Checksum2 hold are ignored, since a checksum only
+// makes sense as the OUTPUT of encoding the rest of the block, never an
+// input to it. (Checksum1 used to be passed through, so volumes this
+// package initialized had a zero Checksum1, which VMS MOUNT rejects with
+// NOHOMEBLK.)
 //
 // The only way this can fail is a text field (StructureName, VolumeName,
 // OwnerName, or Format) too long for its fixed 12-byte on-disk width;
@@ -300,7 +311,7 @@ func EncodeHomeBlock(h HomeBlock) ([]byte, error) {
 	copy(b[homeOffVolOwner:homeOffVolOwner+UicSize], EncodeUic(h.VolumeOwner))
 	binary.LittleEndian.PutUint16(b[homeOffProtection:], h.Protection)
 	binary.LittleEndian.PutUint16(b[homeOffFileProtection:], h.FileProtection)
-	binary.LittleEndian.PutUint16(b[homeOffChecksum1:], h.Checksum1)
+	binary.LittleEndian.PutUint16(b[homeOffRecProtection:], h.RecordProtection)
 	encodeVMSTime(b[homeOffCreationDate:], h.CreationDate)
 	b[homeOffWindow] = h.WindowSize
 	b[homeOffLruLimit] = h.DirectoryPreAccessLimit
@@ -326,6 +337,18 @@ func EncodeHomeBlock(h HomeBlock) ([]byte, error) {
 			return nil, fmt.Errorf("ondisk: encoding HomeBlock.%s: %w", f.name, err)
 		}
 	}
+
+	// Checksum1 is the 16-bit sum of the 29 words before it, and is
+	// stored before Checksum2 is computed, since Checksum2 covers it too.
+	// (VMS INITIALIZE's WRITE_HOMEBLOCK does the same, with the routine
+	// CHECKSUM2 for both.) Whatever h.Checksum1 and h.Checksum2 hold is
+	// ignored: both are outputs of encoding.
+	var sum1 uint16
+	for off := 0; off < homeOffChecksum1; off += 2 {
+		sum1 += binary.LittleEndian.Uint16(b[off:])
+	}
+
+	binary.LittleEndian.PutUint16(b[homeOffChecksum1:], sum1)
 
 	sum, err := Checksum(b)
 	if err != nil {

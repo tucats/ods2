@@ -83,23 +83,25 @@ var (
 	ContinuationFileFid = Fid{Num: 7, Seq: 7}
 	BackupFileFid       = Fid{Num: 8, Seq: 8}
 	BadBlockLogFileFid  = Fid{Num: 9, Seq: 9}
+
+	// SecurityFileFid is SECURITY.SYS, the volume's security profile,
+	// which VMS 7.3 INITIALIZE creates as a tenth reserved file (see
+	// ReservedFileCount). Volumes initialized by older VMS versions, like
+	// testdata/rq0-ra92.dsk, don't have it: their file 10 is an ordinary
+	// file.
+	SecurityFileFid = Fid{Num: 10, Seq: 10}
 )
 
-// ReservedFileCount is how many of a volume's file-header slots (1 through
-// this count) are reserved for the volume's own bookkeeping files —
-// INDEXF.SYS, BITMAP.SYS, BADBLK.SYS, 000000.DIR, CORIMG.SYS, VOLSET.SYS,
-// CONTIN.SYS, BACKUP.SYS, and BADLOG.SYS, in that order (file numbers 1
-// through 9). This is the same value a mounted volume's own
-// HomeBlock.ReservedFiles field records; package volume's allocators
-// always consult that field directly rather than a hardcoded constant
-// (see docs/PHASE-02.md's "what we're deliberately not porting" table,
-// on why this project doesn't repeat the reference implementation's own
-// hardcoded-10 mistake). ReservedFileCount exists for the one place that
-// has no HomeBlock to read yet: volume.Initialize, which is what DEFINES
-// a freshly built volume's HomeBlock.ReservedFiles value in the first
-// place, and needs a single authoritative source for it and for how many
-// entries its own reserved-file table above has.
-const ReservedFileCount = 9
+// ReservedFileCount is how many reserved files volume.Initialize creates,
+// with file numbers 1 through 10: INDEXF.SYS, BITMAP.SYS, BADBLK.SYS,
+// 000000.DIR, CORIMG.SYS, VOLSET.SYS, CONTIN.SYS, BACKUP.SYS, BADLOG.SYS,
+// and SECURITY.SYS, as VMS 7.3 INITIALIZE does (confirmed on volumes it
+// initialized). Older VMS versions reserved only the first nine (as
+// testdata/rq0-ra92.dsk records), so a mounted volume's own
+// HomeBlock.ReservedFiles is what package volume's allocators always
+// consult; this constant is only for Initialize, which is what sets that
+// field in the first place.
+const ReservedFileCount = 10
 
 // Number combines Num and Nmx into the full file number: Nmx supplies the
 // high-order bits for volumes large enough to need file numbers beyond

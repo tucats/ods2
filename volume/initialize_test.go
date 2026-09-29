@@ -162,8 +162,8 @@ func TestInitializeAppliesDefaults(t *testing.T) {
 	if home.VolumeName != "NONAME" {
 		t.Errorf("VolumeName = %q, want %q", home.VolumeName, "NONAME")
 	}
-	if home.VolumeOwner != (ondisk.Uic{Group: 1, Member: 1}) {
-		t.Errorf("VolumeOwner = %v, want [1,1]", home.VolumeOwner)
+	if home.VolumeOwner != (ondisk.Uic{Group: 1, Member: 4}) {
+		t.Errorf("VolumeOwner = %v, want [1,4]", home.VolumeOwner)
 	}
 	if home.FileProtection != defaultFileProtection {
 		t.Errorf("FileProtection = %#x, want %#x", home.FileProtection, uint16(defaultFileProtection))
@@ -171,8 +171,12 @@ func TestInitializeAppliesDefaults(t *testing.T) {
 	if home.ClusterSize != 1 {
 		t.Errorf("ClusterSize = %d, want 1", home.ClusterSize)
 	}
-	if home.MaxFiles != defaultMaxFiles(c.Blocks()) {
-		t.Errorf("MaxFiles = %d, want %d", home.MaxFiles, defaultMaxFiles(c.Blocks()))
+	// INIT's default: blocks / ((cluster+1) * 2).
+	if home.MaxFiles != 300/4 {
+		t.Errorf("MaxFiles = %d, want %d", home.MaxFiles, 300/4)
+	}
+	if home.ReservedFiles != ondisk.ReservedFileCount {
+		t.Errorf("ReservedFiles = %d, want %d", home.ReservedFiles, ondisk.ReservedFileCount)
 	}
 }
 
@@ -268,9 +272,13 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 		t.Fatalf("Initialize: %v", err)
 	}
 
-	layout, err := computeLayout(c.Blocks(), opts.ClusterSize, opts.MaxFiles, opts.MaxFiles)
+	p, err := resolveInitParams(c.Blocks(), opts)
 	if err != nil {
-		t.Fatalf("computeLayout: %v", err)
+		t.Fatalf("resolveInitParams: %v", err)
+	}
+	a, err := allocateStructures(p)
+	if err != nil {
+		t.Fatalf("allocateStructures: %v", err)
 	}
 
 	vol, err := Mount(c)
@@ -283,16 +291,33 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
 	}
-	for cluster := uint32(0); cluster < layout.reservedClusters; cluster++ {
-		if ondisk.BitmapTest(bm.bits, cluster) {
-			t.Errorf("cluster %d (within the reserved prefix) reads as free, want allocated", cluster)
+
+	used := map[uint32]bool{}
+	for e := range allocCount {
+		if !a.placed[e] {
+			continue
+		}
+		for cl := a.lbn[e] / p.cluster; cl < (a.lbn[e]+a.count[e])/p.cluster && cl < p.volumeSize/p.cluster; cl++ {
+			used[cl] = true
+			if ondisk.BitmapTest(bm.bits, cl) {
+				t.Errorf("cluster %d (allocation table entry %d) reads as free, want allocated", cl, e)
+			}
 		}
 	}
-	// One cluster past the reserved prefix should be free -- otherwise
-	// nothing on this small a volume could ever be allocated to a new
-	// file.
-	if !ondisk.BitmapTest(bm.bits, layout.reservedClusters) {
-		t.Errorf("cluster %d (just past the reserved prefix) reads as allocated, want free", layout.reservedClusters)
+
+	// Everything else is free: on this small a volume, the space after
+	// the fixed structures is what new files get.
+	free := 0
+	for cl := uint32(0); cl < p.volumeSize/p.cluster; cl++ {
+		if !used[cl] {
+			if !ondisk.BitmapTest(bm.bits, cl) {
+				t.Errorf("cluster %d reads as allocated, but no fixed structure uses it", cl)
+			}
+			free++
+		}
+	}
+	if free == 0 {
+		t.Error("no free clusters on the volume")
 	}
 
 	ib, err := OpenIndexBitmap(dev)
