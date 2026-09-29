@@ -300,9 +300,11 @@ type FileHeaderAreas struct {
 }
 
 // EncodeFileHeader encodes h into its 512-byte on-disk representation,
-// laying out areas' IDENT/map/ACL content immediately after h's fixed
-// fields and computing IdentOffset, MapOffset, AclOffset, EndOffset,
-// MapWordsInUse, and Checksum from that layout. Whatever values h itself
+// laying out areas' IDENT and map content immediately after h's fixed
+// fields and the ACL content at the end of the header, so the map area
+// has all the free room in between (see the comment in the body), and
+// computing IdentOffset, MapOffset, AclOffset, EndOffset, MapWordsInUse,
+// and Checksum from that layout. Whatever values h itself
 // carries in those six fields are ignored: they only make sense as the
 // OUTPUT of this layout decision, unlike h's other fields (Fid,
 // RecordAttributes, HighWaterMark, and so on), which really are just
@@ -338,14 +340,25 @@ func EncodeFileHeader(h FileHeader, areas FileHeaderAreas) ([]byte, error) {
 	mapWords := len(areas.MapBytes) / 2
 	aclWords := len(areas.AclBytes) / 2
 
+	// The map area runs from MapOffset up to AclOffset, and only its first
+	// MapWordsInUse words hold retrieval pointers: the rest is free room
+	// for more. VMS adds a retrieval pointer to a header only when that
+	// free room (AclOffset - MapOffset - MapWordsInUse) has space for it,
+	// and otherwise reports SS$_HEADERFULL. So, as VMS itself lays out a
+	// header, the ACL (usually empty) goes at the very end of the header,
+	// just before the checksum, and the map area gets everything between
+	// the IDENT area and it. EndOffset (FH2$B_RSOFFSET, the start of the
+	// application-reserved area after the ACL) is then the end of the
+	// header too: word 255, where VMS puts both offsets for a header with
+	// no ACL.
 	identOffsetWords := fhVariableAreaStart
 	mapOffsetWords := identOffsetWords + identWords
-	aclOffsetWords := mapOffsetWords + mapWords
-	endOffsetWords := aclOffsetWords + aclWords
+	endOffsetWords := fhOffChecksum / 2
+	aclOffsetWords := endOffsetWords - aclWords
 
-	if endOffsetWords*2 > fhOffChecksum {
+	if mapOffsetWords+mapWords > aclOffsetWords {
 		available := fhOffChecksum - fhVariableAreaStart*2
-		needed := endOffsetWords*2 - fhVariableAreaStart*2
+		needed := (identWords + mapWords + aclWords) * 2
 
 		return nil, fmt.Errorf(
 			"ondisk: FileHeader IDENT+map+ACL areas need %d bytes, only %d available before the checksum",

@@ -1,6 +1,7 @@
 package ondisk
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 )
@@ -247,5 +248,59 @@ func TestFidIsZero(t *testing.T) {
 	// Seq and Rvn are not part of the zero-Fid convention.
 	if !(Fid{Seq: 99, Rvn: 3}).IsZero() {
 		t.Error("Fid{Seq: 99, Rvn: 3}.IsZero() = false, want true (only Num/Nmx matter)")
+	}
+}
+
+// TestEncodeFileHeaderLeavesMapRoom checks that an encoded header's map
+// area runs to the ACL at the end of the header, as VMS lays out a header,
+// so VMS sees free room to add retrieval pointers. With the ACL packed
+// right after the pointers in use, every header looked full to VMS, which
+// then reported SS$_HEADERFULL when it tried to extend the file.
+func TestEncodeFileHeaderLeavesMapRoom(t *testing.T) {
+	ident := Ident{Filename: "ROOM.DAT", Revision: 1}
+	mapBytes, err := EncodeRetrievalPointers([]Extent{{Count: 10, StartLBN: 500}})
+	if err != nil {
+		t.Fatalf("EncodeRetrievalPointers: %v", err)
+	}
+
+	b, err := EncodeFileHeader(FileHeader{Fid: Fid{Num: 12, Seq: 1}}, FileHeaderAreas{Ident: &ident, MapBytes: mapBytes})
+	if err != nil {
+		t.Fatalf("EncodeFileHeader: %v", err)
+	}
+
+	h, err := DecodeFileHeader(b)
+	if err != nil {
+		t.Fatalf("DecodeFileHeader: %v", err)
+	}
+
+	if h.AclOffset != 255 || h.EndOffset != 255 {
+		t.Errorf("AclOffset %d, EndOffset %d; want both 255, the end of the header, as VMS writes a header with no ACL", h.AclOffset, h.EndOffset)
+	}
+
+	if free := int(h.AclOffset) - int(h.MapOffset) - int(h.MapWordsInUse); free <= 0 {
+		t.Errorf("map area has %d free words; VMS needs room to add retrieval pointers", free)
+	}
+
+	// An ACL, if one is given, sits at the end of the header, after the
+	// map area's free room.
+	acl := []byte{1, 2, 3, 4}
+
+	b, err = EncodeFileHeader(FileHeader{Fid: Fid{Num: 12, Seq: 1}}, FileHeaderAreas{Ident: &ident, MapBytes: mapBytes, AclBytes: acl})
+	if err != nil {
+		t.Fatalf("EncodeFileHeader with an ACL: %v", err)
+	}
+
+	h, err = DecodeFileHeader(b)
+	if err != nil {
+		t.Fatalf("DecodeFileHeader with an ACL: %v", err)
+	}
+
+	if h.EndOffset != 255 || h.AclOffset != 253 || !bytes.Equal(b[506:510], acl) {
+		t.Errorf("with a 2-word ACL: AclOffset %d, EndOffset %d, ACL bytes % x", h.AclOffset, h.EndOffset, b[506:510])
+	}
+
+	// Content that can't fit is still refused.
+	if _, err := EncodeFileHeader(FileHeader{}, FileHeaderAreas{Ident: &ident, MapBytes: make([]byte, 400)}); err == nil {
+		t.Error("EncodeFileHeader accepted a map area too large for the header")
 	}
 }
