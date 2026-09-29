@@ -1,6 +1,7 @@
 package volume
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/tucats/ods2/diskimage"
@@ -33,9 +34,21 @@ import (
 // a since-deleted file's old header content (nonzero checksum, nonzero
 // Fid) would still be sitting there — FindFreeSlot would treat the slot as
 // permanently unusable even though its bitmap bit says it's free. Writing
-// an all-zero 512-byte block avoids this: it decodes with Checksum == 0
-// (the checksum of an all-zero block is itself zero — see
-// ondisk.Checksum) and Fid.Number() == 0, exactly satisfying the check.
+// a zeroed 512-byte block avoids this: it decodes with Checksum == 0 (the
+// stored checksum field is zero) and Fid.Number() == 0, exactly satisfying
+// the check.
+//
+// "Zeroed" with one exception: the segment's sequence number (the Seq of
+// its Fid, FH2$W_FID_SEQ) is kept. The next file to use the slot gets one
+// more than whatever Seq the slot last held (CreateHeader's nextFileFid),
+// which is what makes a Fid captured before this deletion stale rather
+// than silently naming the slot's next occupant. Zeroing the Seq too
+// would restart it at 1, handing the next file the very same Fid as the
+// one deleted. VMS does the same: a deleted header keeps its sequence
+// number. The block is no longer a valid header (its checksum field no
+// longer matches its content), so every reader that decodes it —
+// readFileHeaderViaIndex, countFiles, AnalyzeDisk — still treats the slot
+// as empty.
 //
 // bm and ib mutations are in-memory only until their own Flush is called,
 // matching every other write-path operation's deferred-flush design (see
@@ -56,6 +69,11 @@ import (
 // explicitly in docs/PHASE-03.md's non-goals — a future ANALYZE/DISK
 // enhancement scanning for header slots with no owning directory entry
 // would be able to find and reclaim it.
+// fidSeqOffset is the byte offset, in a header block, of the header's own
+// Fid's sequence number (FH2$W_FID_SEQ: the Fid starts at byte 8, and its
+// file number word comes first).
+const fidSeqOffset = 10
+
 func freeFileStorage(dev *Device, primary ondisk.FileHeader, bm *Bitmap, ib *IndexBitmap) error {
 	container, ok := dev.Container.(diskimage.WritableContainer)
 	if !ok {
@@ -66,8 +84,6 @@ func freeFileStorage(dev *Device, primary ondisk.FileHeader, bm *Bitmap, ib *Ind
 	if err != nil {
 		return fmt.Errorf("volume: freeing file %v: %w", primary.Fid, err)
 	}
-
-	zero := make([]byte, ondisk.BlockSize)
 
 	for _, segment := range chain {
 		extents, err := segment.RetrievalPointers()
@@ -84,11 +100,31 @@ func freeFileStorage(dev *Device, primary ondisk.FileHeader, bm *Bitmap, ib *Ind
 			return fmt.Errorf("volume: freeing file %v: freeing header slot for segment %v: %w", primary.Fid, segment.Fid, err)
 		}
 
-		if _, err := writeHeaderBytes(dev, container, segment.Fid.Number(), zero); err != nil {
+		// All zero but the sequence number (see above).
+		freed := make([]byte, ondisk.BlockSize)
+		binary.LittleEndian.PutUint16(freed[fidSeqOffset:], segment.Fid.Seq)
+
+		if err := writeFreedSlot(dev, container, segment.Fid.Number(), freed); err != nil {
 			return fmt.Errorf("volume: freeing file %v: zeroing header slot for segment %v: %w", primary.Fid, segment.Fid, err)
 		}
 	}
 
+	return nil
+}
+
+// writeFreedSlot writes a freed header slot's block (see freeFileStorage)
+// to fileNumber's slot in the index file. It's writeHeaderBytes without
+// decoding the result back, since the block is deliberately not a valid
+// header.
+func writeFreedSlot(dev *Device, container diskimage.WritableContainer, fileNumber uint32, buf []byte) error {
+	vbn := fileHeaderVBN(dev.Home, fileNumber)
+	lbn, err := resolveExtentLBN(dev.IndexFile.Extents, vbn)
+	if err != nil {
+		return fmt.Errorf("locating header slot for file %d (VBN %d): %w", fileNumber, vbn, err)
+	}
+	if err := container.WriteBlock(lbn, buf); err != nil {
+		return fmt.Errorf("writing header slot for file %d (LBN %d): %w", fileNumber, lbn, err)
+	}
 	return nil
 }
 

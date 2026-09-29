@@ -2,6 +2,7 @@ package volume
 
 import (
 	"bytes"
+	"encoding/binary"
 	"reflect"
 	"testing"
 
@@ -994,11 +995,12 @@ func TestPurgeVersionsIndependentNamesEachTrimmedSeparately(t *testing.T) {
 }
 
 // assertHeaderSlotIsZeroed confirms fileNum's on-disk header slot is
-// genuinely all-zero bytes -- not merely that it decodes with a zero
-// checksum and zero file number (which an all-zero block would share with,
-// say, a header IndexBitmap.FindFreeSlot's consistency check would also
-// accept), but that freeFileStorage actually wrote zeros rather than, say,
-// leaving stale bytes behind that only coincidentally still checksum to 0.
+// genuinely zero bytes -- not merely that it decodes with a zero checksum
+// and zero file number, but that freeFileStorage actually wrote zeros
+// rather than, say, leaving stale bytes behind that only coincidentally
+// still checksum to 0 -- except for the sequence number word
+// (fidSeqOffset), which freeFileStorage deliberately keeps, nonzero, so
+// the slot's next file gets a different Fid.
 func assertHeaderSlotIsZeroed(t *testing.T, container interface {
 	ReadBlock(lbn uint32, buf []byte) error
 }, fileNum uint16) {
@@ -1008,7 +1010,56 @@ func assertHeaderSlotIsZeroed(t *testing.T, container interface {
 	if err := container.ReadBlock(fileHeaderLBN(fileNum), buf); err != nil {
 		t.Fatalf("ReadBlock(header slot for file %d): %v", fileNum, err)
 	}
+	if binary.LittleEndian.Uint16(buf[fidSeqOffset:]) == 0 {
+		t.Errorf("header slot for file %d lost its sequence number", fileNum)
+	}
+	buf[fidSeqOffset], buf[fidSeqOffset+1] = 0, 0
 	if !bytes.Equal(buf, make([]byte, ondisk.BlockSize)) {
-		t.Errorf("header slot for file %d is not all-zero after freeing", fileNum)
+		t.Errorf("header slot for file %d is not zero (but for its sequence number) after freeing", fileNum)
+	}
+}
+
+// TestDeleteFileSlotReuseGetsNewFid deletes a file and creates another
+// that lands in the same header slot: its Fid's sequence number is one
+// more, so the old Fid is stale (OpenFID fails) rather than naming the new
+// file.
+func TestDeleteFileSlotReuseGetsNewFid(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "TESTDIR.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	first, err := vol.CreateFile(dir, "ONE.DAT", ondisk.RecAttr{}, bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := first.Header.Fid
+
+	if err := DeleteFile(dir, "ONE.DAT", 1, bm, ib); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := vol.CreateFile(dir, "TWO.DAT", ondisk.RecAttr{}, bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fid := second.Header.Fid
+
+	if fid.Number() != old.Number() || fid.Seq != old.Seq+1 {
+		t.Fatalf("new file %v in the old slot %v: want the same number, sequence one more", fid, old)
+	}
+	if _, err := vol.OpenFID(old); err == nil {
+		t.Error("the deleted file's Fid still opens")
 	}
 }
