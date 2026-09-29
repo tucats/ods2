@@ -97,6 +97,15 @@ func (f *File) WriteBlock(vbn uint32, data []byte) error {
 	if vbn > f.maxWrittenVBN {
 		f.maxWrittenVBN = vbn
 	}
+
+	// The in-memory high-water mark moves past the block too, so reading
+	// it back through f (ReadBlock) returns what was just written rather
+	// than the zeros ReadBlock gives a never-written block. Close records
+	// the same value on disk; any earlier header rewrite through f
+	// (Extend, UpdateHeader) records it, correctly, sooner.
+	if f.Header.HighWaterMark < vbn+1 {
+		f.Header.HighWaterMark = vbn + 1
+	}
 	return nil
 }
 

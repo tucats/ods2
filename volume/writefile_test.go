@@ -902,3 +902,35 @@ func TestCreateDirectoryZeroVersionLimitMeansUnlimited(t *testing.T) {
 		t.Errorf("VersionLimit = %d, want 0", got)
 	}
 }
+
+// TestFileWriteBlockReadsBackBeforeClose: a block written through a File
+// reads back through the same File at once, not as the zeros of a
+// never-written block, though the header on disk isn't updated until
+// Close.
+func TestFileWriteBlockReadsBackBeforeClose(t *testing.T) {
+	_, f := updateHeaderFixture(t) // NOTE.TXT, one block written, closed
+
+	bm, err := f.Device.Bitmap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ib, err := f.Device.IndexBitmap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.OpenForWrite(bm, ib); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.WriteBlock(2, blockOf(0x42)); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, ondisk.BlockSize)
+	if err := f.ReadBlock(2, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf, blockOf(0x42)) {
+		t.Errorf("block 2 read back as % x..., want the block written", buf[:4])
+	}
+}
