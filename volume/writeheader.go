@@ -505,13 +505,13 @@ func linkNewExtensionSegment(dev *Device, container diskimage.WritableContainer,
 // returned Extent has already been marked allocated in bm (in memory only
 // -- see Bitmap.Flush for when that reaches disk).
 //
-// Finding the largest run that still fits the remaining request is a
-// simple linear search (try the full remaining amount, then one less, and
-// so on, until FindFree succeeds) rather than anything cleverer -- matching
-// this project's general preference (see docs/PHASE-02.md's "what we're
-// deliberately not porting" table) for the simplest design that gets the
-// job done correctly, over a more elaborate search this project's actual
-// (small, synthetic, or modestly-sized real) volumes have no real need for.
+// Each extent is the first free run of the largest size that still fits
+// the remaining request: the whole remainder if some run is that long,
+// otherwise the volume's longest free run (LargestFreeRun), found in one
+// scan of the bitmap. (This used to try the remainder, then one cluster
+// less, and so on, a scan per step: a request far larger than the volume
+// took effectively forever to fail.) A request for more clusters than the
+// volume has free fails at once, allocating nothing.
 func allocateExtents(bm *Bitmap, blocks uint32) (extents []ondisk.Extent, err error) {
 	if blocks == 0 {
 		return nil, fmt.Errorf("volume: allocateExtents requires at least one block, got 0")
@@ -531,21 +531,21 @@ func allocateExtents(bm *Bitmap, blocks uint32) (extents []ondisk.Extent, err er
 		}
 	}()
 
-	clusters := (blocks + bm.clusterSize - 1) / bm.clusterSize
-	remaining := clusters
+	clusters := (uint64(blocks) + uint64(bm.clusterSize) - 1) / uint64(bm.clusterSize)
+	if free := uint64(bm.FreeClusters()); free < clusters {
+		return nil, fmt.Errorf("not enough free space: %d cluster(s) needed, %d free", clusters, free)
+	}
+
+	remaining := uint32(clusters)
 	for remaining > 0 {
-		request := remaining
-		var extent ondisk.Extent
-		var findErr error
-		for request > 0 {
-			extent, findErr = bm.FindFree(request)
-			if findErr == nil {
-				break
-			}
-			request--
-		}
+		request := min(remaining, bm.LargestFreeRun())
 		if request == 0 {
 			return extents, fmt.Errorf("not enough free space: %d cluster(s) still needed, none available", remaining)
+		}
+		extent, findErr := bm.FindFree(request)
+		if findErr != nil {
+			// Unreachable: a run of request clusters was just found.
+			return extents, findErr
 		}
 
 		if err := bm.MarkAllocated(extent); err != nil {

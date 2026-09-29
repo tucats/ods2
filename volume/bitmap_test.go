@@ -334,3 +334,24 @@ func TestBitmapFlushIsDeferredUntilCalled(t *testing.T) {
 		t.Errorf("FindFree(4) after Flush = %+v, want %+v (clusters 6-9 should be the only free run left)", got, want)
 	}
 }
+
+// TestBitmapFreeClustersAndLargestRun checks the two counts on a bitmap
+// with runs of 3 and 5 free clusters.
+func TestBitmapFreeClustersAndLargestRun(t *testing.T) {
+	bm := &Bitmap{clusterSize: 1, totalClusters: 16, bits: make([]byte, 2)}
+	for _, c := range []uint32{1, 2, 3, 8, 9, 10, 11, 12} {
+		bm.bits[c/8] |= 1 << (c % 8) // a set bit is a free cluster
+	}
+
+	if got := bm.FreeClusters(); got != 8 {
+		t.Errorf("FreeClusters = %d, want 8", got)
+	}
+	if got := bm.LargestFreeRun(); got != 5 {
+		t.Errorf("LargestFreeRun = %d, want 5", got)
+	}
+
+	empty := &Bitmap{clusterSize: 1, totalClusters: 8, bits: make([]byte, 1)}
+	if empty.FreeClusters() != 0 || empty.LargestFreeRun() != 0 {
+		t.Error("a full bitmap has free clusters")
+	}
+}

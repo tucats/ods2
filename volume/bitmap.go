@@ -191,6 +191,34 @@ func (bm *Bitmap) FindFree(clusters uint32) (ondisk.Extent, error) {
 	return ondisk.Extent{}, fmt.Errorf("volume: no free run of %d cluster(s) found", clusters)
 }
 
+// FreeClusters counts the clusters bm shows free (in memory, including
+// allocations not yet flushed).
+func (bm *Bitmap) FreeClusters() uint32 {
+	var free uint32
+	for c := uint32(0); c < bm.totalClusters; c++ {
+		if ondisk.BitmapTest(bm.bits, c) {
+			free++
+		}
+	}
+	return free
+}
+
+// LargestFreeRun reports the length, in clusters, of the longest run of
+// consecutive free clusters in bm (0 if none are free): the largest
+// request FindFree can satisfy.
+func (bm *Bitmap) LargestFreeRun() uint32 {
+	var run, longest uint32
+	for c := uint32(0); c < bm.totalClusters; c++ {
+		if ondisk.BitmapTest(bm.bits, c) {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	return longest
+}
+
 // clusterRange converts an extent expressed in blocks (as every other
 // package in this project works with them) into the cluster range it
 // covers, validating that it's genuinely cluster-aligned -- space is only
