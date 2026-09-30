@@ -211,7 +211,7 @@ func (d *Directory) Insert(name string, version uint16, fid ondisk.Fid, bm *Bitm
 	}
 
 	if needed := uint32(len(blocks)); needed > d.Blocks() {
-		if err := Extend(d.File, bm, ib, needed-d.Blocks()); err != nil {
+		if err := d.relocate(container, bm, needed); err != nil {
 			return fmt.Errorf("volume: inserting %s;%d: extending directory: %w", name, version, err)
 		}
 	}
@@ -230,6 +230,67 @@ func (d *Directory) Insert(name string, version uint16, fid ondisk.Fid, bm *Bitm
 	if err := d.recordUsedBlocks(container, uint32(len(blocks))); err != nil {
 		return fmt.Errorf("volume: inserting %s;%d: %w", name, version, err)
 	}
+
+	return nil
+}
+
+// relocate gives the directory a new, contiguous allocation of at least
+// blocks blocks, and frees its old one. VMS keeps every directory in one
+// contiguous run (a directory's header has FCH$V_CONTIG, and the file
+// system maps its blocks as a single range), so a directory can't grow by
+// adding extents the way Extend grows other files: VMS reported "bad
+// directory file format" for an MFD this package had extended into three
+// pieces, reading the blocks after its first extent in their place. Like
+// VMS, relocate moves the directory instead. The caller (Insert) then
+// writes every block of the directory's new content, so nothing is
+// copied here, and flushes bm.
+func (d *Directory) relocate(container diskimage.WritableContainer, bm *Bitmap, blocks uint32) error {
+	if d.Header.ExtensionFid.Number() != 0 {
+		return fmt.Errorf("directory %v has extension headers, which a directory can't", d.Header.Fid)
+	}
+
+	clusters := (blocks + bm.clusterSize - 1) / bm.clusterSize
+
+	extent, err := bm.FindFree(clusters)
+	if err != nil {
+		return err
+	}
+
+	if err := bm.MarkAllocated(extent); err != nil {
+		return err
+	}
+
+	old, err := d.Header.RetrievalPointers()
+	if err != nil {
+		return fmt.Errorf("decoding the directory's retrieval pointers: %w", err)
+	}
+
+	areas, err := existingAreas(d.Header)
+	if err != nil {
+		return err
+	}
+
+	if areas.MapBytes, err = ondisk.EncodeRetrievalPointers([]ondisk.Extent{extent}); err != nil {
+		return err
+	}
+
+	h := d.Header
+	h.RecordAttributes.HighestBlock = extent.Count
+	h.FileCharacteristics |= ondisk.FchContig
+
+	decoded, err := writeHeader(d.Device, container, h.Fid.Number(), h, areas)
+	if err != nil {
+		return fmt.Errorf("moving the directory to LBN %d: %w", extent.StartLBN, err)
+	}
+
+	for _, e := range old {
+		if err := bm.MarkFree(e); err != nil {
+			return fmt.Errorf("freeing the directory's old blocks: %w", err)
+		}
+	}
+
+	d.Header = decoded
+	d.Extents = []ExtentLocation{{Extent: extent, Rvn: d.Device.Rvn}}
 
 	return nil
 }

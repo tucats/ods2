@@ -316,7 +316,7 @@ func TestDirectoryInsertSecondVersionAndNextVersion(t *testing.T) {
 
 // TestDirectoryInsertForcesDirectoryExtension inserts enough distinctly
 // named entries that they can't all fit in the directory's first block,
-// forcing Insert to grow the directory's own allocation via Extend --
+// forcing Insert to grow the directory's own allocation --
 // exactly the case the reference implementation's insert_ent() simply
 // crashes on (see docs/PHASE-02.md's "what we're deliberately not porting"
 // table) and this project handles as an ordinary case instead.
@@ -340,8 +340,13 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 	// version entry) = 26 bytes, so a single 512-byte block holds roughly
 	// 19 of them; 60 comfortably forces at least a second (and likely a
 	// third) block.
+	//
+	// Each insert is followed by an allocation of the next free cluster,
+	// as creating each file would allocate its data, so the space right
+	// after the directory is taken whenever it needs to grow.
 	const count = 60
 	want := make([]ondisk.DirEntry, 0, count)
+	freeBefore, blocksBefore := bm.FreeClusters(), dir.Blocks()
 	for i := 0; i < count; i++ {
 		name := fmt.Sprintf("FILE%04d.TXT", i)
 		fid := ondisk.Fid{Num: uint16(100 + i), Seq: 1}
@@ -349,10 +354,27 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 			t.Fatalf("Insert(%s) (#%d): %v", name, i, err)
 		}
 		want = append(want, ondisk.DirEntry{Name: name, Version: 1, Fid: fid, VersionLimit: ondisk.NoVersionLimit})
+
+		other, err := bm.FindFree(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := bm.MarkAllocated(other); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if dir.Blocks() <= 1 {
 		t.Fatalf("Blocks() after %d inserts = %d, want more than 1 (the directory should have needed to extend)", count, dir.Blocks())
+	}
+
+	// VMS keeps a directory contiguous: it grew by moving to one new run,
+	// not by adding extents, and its old runs are free again.
+	if len(dir.Extents) != 1 || dir.Header.FileCharacteristics&ondisk.FchContig == 0 {
+		t.Errorf("directory extents %+v, characteristics %#x: want one contiguous extent", dir.Extents, dir.Header.FileCharacteristics)
+	}
+	if used, want := freeBefore-bm.FreeClusters(), uint32(count)+dir.Blocks()-blocksBefore; used != want/bm.clusterSize {
+		t.Errorf("%d clusters newly in use, want %d (the other allocations and the directory's growth)", used, want/bm.clusterSize)
 	}
 
 	byName := func(entries []ondisk.DirEntry) []ondisk.DirEntry {
