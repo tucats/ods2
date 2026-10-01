@@ -1,5 +1,7 @@
 # Phase 4 — directories as VMS's CREATE/DIRECTORY makes them
 
+**Status:** done (2026-10-01), with govax's Phase 34.
+
 This phase is planned and tracked in govax's
 [`docs/PHASE-34.md`](https://github.com/tucats/govax/blob/main/docs/PHASE-34.md),
 which adds VMS's `CREATE/DIRECTORY` to govax and checks the result against
