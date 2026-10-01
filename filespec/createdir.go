@@ -9,6 +9,11 @@ import (
 	"github.com/tucats/ods2/volume"
 )
 
+// MaxDirectoryDepth is how many levels below the MFD an ODS-2 directory
+// path can have: VMS 7.3 makes [L1.L2.L3.L4.L5.L6.L7.L8] but refuses a
+// ninth level with RMS$_DIR.
+const MaxDirectoryDepth = 8
+
 // CreatedDirectory reports one level of a CreateDirectoryPath walk.
 type CreatedDirectory struct {
 	// Path is the directory's path from the MFD, e.g. ["A", "B"] for
@@ -44,7 +49,9 @@ func (c CreatedDirectory) String() string {
 // volume.InheritedDirectoryOptions.
 //
 // Each component must be a plain name: wildcards ("*", "%") are refused,
-// since a directory being made has to be one directory. If a level can't
+// since a directory being made has to be one directory. A path more than
+// MaxDirectoryDepth levels deep, or with a name too long, wraps
+// volume.ErrDirectoryName, and nothing is made. If a level can't
 // be made, the levels already made stay made (as they do on VMS), and the
 // returned slice reports them, along with the error. bm and ib are the
 // volume's bitmap caches, whose changes are in memory until the caller
@@ -57,6 +64,18 @@ func CreateDirectoryPath(vol *volume.Volume, dirs []string, options func(parent 
 	for _, d := range dirs {
 		if d == "" || strings.ContainsAny(d, "*%") {
 			return nil, fmt.Errorf("filespec: creating %s: %q is not a directory name", formatDirPath(dirs), d)
+		}
+	}
+
+	// Checked before anything is made: VMS makes none of a path that's too
+	// deep, or has a name too long, rather than the levels above it.
+	if len(dirs) > MaxDirectoryDepth {
+		return nil, fmt.Errorf("filespec: creating %s: more than %d levels: %w", formatDirPath(dirs), MaxDirectoryDepth, volume.ErrDirectoryName)
+	}
+
+	for _, d := range dirs {
+		if len(d) > volume.MaxDirectoryNameLength {
+			return nil, fmt.Errorf("filespec: creating %s: %q is longer than %d characters: %w", formatDirPath(dirs), d, volume.MaxDirectoryNameLength, volume.ErrDirectoryName)
 		}
 	}
 

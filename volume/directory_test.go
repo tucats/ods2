@@ -571,11 +571,10 @@ func TestDirectoryRemoveOneOfSeveralVersions(t *testing.T) {
 
 // TestDirectoryRemoveShrinksUsedBlocks inserts enough entries to force the
 // directory across two blocks, then removes enough of them that everything
-// left re-packs into just the first block -- confirming HighWaterMark
-// moves backward (the one case, per recordUsedBlocks' own doc comment,
-// where nothing else in this codebase legitimately shrinks it) and that a
-// subsequent List() correctly stops seeing the second block's now-stale
-// physical content instead of trying to decode it.
+// left re-packs into just the first block -- confirming the end of file
+// moves backward and that a subsequent List() correctly stops seeing the
+// second block's now-stale physical content instead of trying to decode
+// it.
 func TestDirectoryRemoveShrinksUsedBlocks(t *testing.T) {
 	dev, container := newWritableHeaderTestVolume(t)
 	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
@@ -640,7 +639,7 @@ func TestDirectoryRemoveShrinksUsedBlocks(t *testing.T) {
 	}
 
 	// Independent reopen must see the same, smaller content -- proving
-	// HighWaterMark's new, smaller value was actually written to disk, not
+	// the new, smaller end of file was actually written to disk, not
 	// just held in the in-memory Header this test already mutated.
 	vol := &Volume{Devices: []*Device{dev}}
 	reopened, err := vol.OpenDirectory(dir.Header.Fid)

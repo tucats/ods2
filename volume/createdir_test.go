@@ -145,8 +145,11 @@ func TestCreateDirectoryOwnerProtectionAndAllocation(t *testing.T) {
 		t.Errorf("extents = %+v, want one run of 4 blocks", sub.Extents)
 	}
 
-	if ra := h.RecordAttributes; ra.HighestBlock != 4 || ra.EndOfFileBlock != 2 {
-		t.Errorf("HIBLK/EFBLK = %d/%d, want 4/2", ra.HighestBlock, ra.EndOfFileBlock)
+	// The whole allocation counts as written (VMS 7.3's [ALLOC], made
+	// with /ALLOCATION=4, has its high-water mark at 5), and stays so as
+	// entries are added.
+	if ra := h.RecordAttributes; ra.HighestBlock != 4 || ra.EndOfFileBlock != 2 || h.HighWaterMark != 5 {
+		t.Errorf("HIBLK/EFBLK/HWM = %d/%d/%d, want 4/2/5", ra.HighestBlock, ra.EndOfFileBlock, h.HighWaterMark)
 	}
 
 	// The directory is still usable, and keeps its single run as it fills.
@@ -159,6 +162,10 @@ func TestCreateDirectoryOwnerProtectionAndAllocation(t *testing.T) {
 	if entries, err := sub.List(); err != nil || len(entries) != 3 {
 		t.Errorf("List() = %+v, %v, want 3 entries", entries, err)
 	}
+
+	if sub.Header.HighWaterMark != 5 {
+		t.Errorf("HWM after inserts = %d, want 5 still", sub.Header.HighWaterMark)
+	}
 }
 
 func TestCreateDirectoryNameLength(t *testing.T) {
@@ -170,8 +177,8 @@ func TestCreateDirectoryNameLength(t *testing.T) {
 	}
 
 	for _, name := range []string{strings.Repeat("B", MaxDirectoryNameLength+1) + ".DIR", ".DIR"} {
-		if _, err := vol.CreateDirectory(parent, name, DirectoryOptions{}, bm, ib); err == nil {
-			t.Errorf("CreateDirectory(%q): want an error, got none", name)
+		if _, err := vol.CreateDirectory(parent, name, DirectoryOptions{}, bm, ib); !errors.Is(err, ErrDirectoryName) {
+			t.Errorf("CreateDirectory(%q): err = %v, want ErrDirectoryName", name, err)
 		}
 	}
 }
@@ -204,5 +211,39 @@ func TestCreateDirectoryFailureGivesSpaceBack(t *testing.T) {
 
 	if slot, err := ib.FindFreeSlot(); err != nil || slot != slotBefore {
 		t.Errorf("first free header slot = %d, %v, want %d as before", slot, err, slotBefore)
+	}
+}
+
+// TestCreateDirectoryEntryHasNoVersionLimit: a new directory's entry in its
+// parent has no version limit, even when the parent has a default limit --
+// as VMS 7.3 writes [LIMITED]'s entries for its subdirectories.
+func TestCreateDirectoryEntryHasNoVersionLimit(t *testing.T) {
+	vol, parent, bm, ib, _ := createDirFixture(t)
+
+	limited, err := vol.CreateDirectory(parent, "LIMITED.DIR", DirectoryOptions{VersionLimit: 3}, bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := vol.CreateDirectory(limited, "INHERIT.DIR", DirectoryOptions{VersionLimit: 3}, bm, ib); err != nil {
+		t.Fatal(err)
+	}
+
+	entry, err := limited.Lookup("INHERIT.DIR", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if entry.VersionLimit != ondisk.NoVersionLimit {
+		t.Errorf("INHERIT.DIR's entry version limit = %d, want none (%d)", entry.VersionLimit, ondisk.NoVersionLimit)
+	}
+
+	// An ordinary file's new name still takes the directory's default.
+	if err := limited.Insert("FILE.DAT", 1, ondisk.Fid{Num: 90, Seq: 1}, bm, ib); err != nil {
+		t.Fatal(err)
+	}
+
+	if entry, err := limited.Lookup("FILE.DAT", 0); err != nil || entry.VersionLimit != 3 {
+		t.Errorf("FILE.DAT's entry = %+v, %v, want version limit 3", entry, err)
 	}
 }

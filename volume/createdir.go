@@ -14,6 +14,12 @@ import (
 // characters, and a directory's name is the name part of its NAME.DIR file.
 const MaxDirectoryNameLength = 39
 
+// ErrDirectoryName is a directory name ODS-2 can't hold: empty, longer
+// than MaxDirectoryNameLength, or (filespec.CreateDirectoryPath) a path
+// deeper than ODS-2 allows. VMS reports it as RMS$_DIR, "error in directory
+// name".
+var ErrDirectoryName = errors.New("volume: invalid directory name")
+
 // DirectoryOptions holds what CreateDirectory can be told about a new
 // directory, beyond its name and parent. Each field's zero value gives what
 // VMS's CREATE/DIRECTORY gives without the matching qualifier, except where
@@ -52,10 +58,11 @@ type DirectoryOptions struct {
 //   - Its records are variable-length, at most 512 bytes, and may not span
 //     blocks (ondisk.AttrNoSpan): a directory record never crosses from one
 //     block into the next.
-//   - It's given opts.Allocation blocks (1 by default) at once, the first
-//     of which is written as an empty directory block (one that reads as
+//   - It's given opts.Allocation blocks (1 by default) at once, all zeroed,
+//     the first written as an empty directory block (one that reads as
 //     "no entries", see ondisk.EncodeDirectoryBlock), so its end of file
-//     is just past block 1. The rest, if any, are allocated but unused.
+//     is just past block 1 and its high-water mark past the last block.
+//   - Its entry in parent has no version limit, whatever parent's default.
 //   - It's always version 1. VMS doesn't keep versions of a directory: if
 //     parent already has any version of name, nothing is created and the
 //     error wraps ErrExists.
@@ -64,7 +71,7 @@ type DirectoryOptions struct {
 // suffix filespec.Glob's own directory-walking logic
 // (matchingSubdirectories) checks for when it decides whether a directory
 // entry names a subdirectory worth descending into -- and the part before
-// it can be at most MaxDirectoryNameLength characters.
+// it can be at most MaxDirectoryNameLength characters (ErrDirectoryName).
 //
 // The new directory's entry in parent is made last, after the directory
 // itself is complete, so a failure part way (a full disk, say) never leaves
@@ -79,7 +86,7 @@ func (vol *Volume) CreateDirectory(parent *Directory, name string, opts Director
 	}
 
 	if base := len(name) - len(".DIR"); base == 0 || base > MaxDirectoryNameLength {
-		return nil, fmt.Errorf("volume: creating directory %s: name must be 1 to %d characters before \".DIR\"", name, MaxDirectoryNameLength)
+		return nil, fmt.Errorf("volume: creating directory %s: name must be 1 to %d characters before \".DIR\": %w", name, MaxDirectoryNameLength, ErrDirectoryName)
 	}
 
 	container, ok := parent.Device.Container.(diskimage.WritableContainer)
@@ -131,7 +138,10 @@ func (vol *Volume) CreateDirectory(parent *Directory, name string, opts Director
 		return nil, fmt.Errorf("volume: creating directory %s;%d: %w", name, version, err)
 	}
 
-	if err := parent.Insert(name, version, dir.Header.Fid, bm, ib); err != nil {
+	// The entry has no version limit, whatever parent's default: VMS
+	// writes a new directory's entry in a parent with a default limit of 3
+	// with no limit (32767), since a directory never has a second version.
+	if err := parent.insert(name, version, dir.Header.Fid, 0, bm, ib); err != nil {
 		_ = DeleteHeader(dir.Device, dir.Header.Fid, bm, ib)
 
 		return nil, fmt.Errorf("volume: creating directory %s;%d: %w", name, version, err)
@@ -141,12 +151,12 @@ func (vol *Volume) CreateDirectory(parent *Directory, name string, opts Director
 }
 
 // initialize gives a brand-new (zero-block) directory its first allocation,
-// blocks blocks in one contiguous run (1 if blocks is 0), and writes its
-// first block as an empty directory block -- exactly what VMS 7.3 leaves in
-// a directory nothing has been entered in yet: the 0xFFFF end-of-data
-// marker, then zeros. The header then records one block used (end of file
-// at block 2, first free byte 0) and the high-water mark past it, as VMS's
-// do.
+// blocks blocks in one contiguous run (1 if blocks is 0), zeroed, and
+// writes its first block as an empty directory block -- exactly what VMS
+// 7.3 leaves in a directory nothing has been entered in yet: the 0xFFFF
+// end-of-data marker, then zeros. The header then records one block used
+// (end of file at block 2, first free byte 0), and the high-water mark
+// past the whole allocation, as VMS's do.
 func (d *Directory) initialize(container diskimage.WritableContainer, bm *Bitmap, blocks uint32) error {
 	if blocks == 0 {
 		blocks = 1

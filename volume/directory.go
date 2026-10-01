@@ -185,6 +185,13 @@ func (d *Directory) NextVersion(name string) (uint16, error) {
 // isn't that kind of API) into the ordinary, already-tested "allocate more
 // space" path every other file uses.
 func (d *Directory) Insert(name string, version uint16, fid ondisk.Fid, bm *Bitmap, ib *IndexBitmap) error {
+	return d.insert(name, version, fid, d.Header.RecordAttributes.VersionLimit, bm, ib)
+}
+
+// insert is Insert, with the version limit a new name's record gets given
+// explicitly rather than taken from the directory's default: an entry for
+// a new directory has no limit (see CreateDirectory).
+func (d *Directory) insert(name string, version uint16, fid ondisk.Fid, newNameLimit uint16, bm *Bitmap, ib *IndexBitmap) error {
 	container, ok := d.Device.Container.(diskimage.WritableContainer)
 	if !ok {
 		return fmt.Errorf("volume: inserting %s;%d: device is not open for write", name, version)
@@ -201,9 +208,9 @@ func (d *Directory) Insert(name string, version uint16, fid ondisk.Fid, bm *Bitm
 	}
 	// A new version of an existing name shares that name's record, and so
 	// its version limit (see ondisk.EncodeDirectoryBlock). A new name gets
-	// the directory's own default version limit; 0 there means no limit,
-	// which the encoder writes as ondisk.NoVersionLimit.
-	entries = append(entries, ondisk.DirEntry{Name: name, Version: version, Fid: fid, VersionLimit: d.Header.RecordAttributes.VersionLimit})
+	// newNameLimit (Insert: the directory's own default version limit); 0
+	// means no limit, which the encoder writes as ondisk.NoVersionLimit.
+	entries = append(entries, ondisk.DirEntry{Name: name, Version: version, Fid: fid, VersionLimit: newNameLimit})
 
 	blocks, err := packDirectoryBlocks(entries)
 	if err != nil {
@@ -243,7 +250,7 @@ func (d *Directory) Insert(name string, version uint16, fid ondisk.Fid, bm *Bitm
 // pieces, reading the blocks after its first extent in their place. Like
 // VMS, relocate moves the directory instead. The caller (Insert) then
 // writes every block of the directory's new content, so nothing is
-// copied here, and flushes bm.
+// copied here, and flushes bm. The new blocks are zeroed first.
 func (d *Directory) relocate(container diskimage.WritableContainer, bm *Bitmap, blocks uint32) error {
 	if d.Header.ExtensionFid.Number() != 0 {
 		return fmt.Errorf("directory %v has extension headers, which a directory can't", d.Header.Fid)
@@ -274,9 +281,22 @@ func (d *Directory) relocate(container diskimage.WritableContainer, bm *Bitmap, 
 		return err
 	}
 
+	// The new blocks are zeroed, every one, and the high-water mark set
+	// past them all, as VMS keeps a directory: a directory VMS 7.3 made
+	// with /ALLOCATION=4 has its high-water mark at 5, with one block in
+	// use. Nothing past the end of file is ever read as entries (List stops
+	// at UsedBlocks), but zeros there are what VMS would find.
+	zero := make([]byte, ondisk.BlockSize)
+	for i := uint32(0); i < extent.Count; i++ {
+		if err := container.WriteBlock(extent.StartLBN+i, zero); err != nil {
+			return fmt.Errorf("zeroing the directory's new block %d: %w", i+1, err)
+		}
+	}
+
 	h := d.Header
 	h.RecordAttributes.HighestBlock = extent.Count
 	h.FileCharacteristics |= ondisk.FchContig
+	h.HighWaterMark = extent.Count + 1
 
 	decoded, err := writeHeader(d.Device, container, h.Fid.Number(), h, areas)
 	if err != nil {
@@ -366,12 +386,11 @@ func (d *Directory) Remove(name string, version uint16, bm *Bitmap, ib *IndexBit
 		}
 	}
 
-	// recordUsedBlocks may move HighWaterMark BACKWARD here, unlike every
-	// other caller of it (Insert only ever grows) -- see its own doc
-	// comment. Any now-stale bytes physically sitting in blocks beyond the
-	// new count are harmless: List's UsedBlocks-bounded walk never reads
-	// past the new, smaller HighWaterMark, so that leftover content is
-	// simply never looked at again unless a future Insert overwrites it.
+	// Fewer blocks are used now, so the end of file moves back; the
+	// high-water mark doesn't (see recordUsedBlocks). Any now-stale bytes
+	// physically sitting in blocks beyond the new count are harmless:
+	// List's walk stops at UsedBlocks, so that leftover content is never
+	// looked at again unless a future Insert overwrites it.
 	if err := d.recordUsedBlocks(container, uint32(len(blocks))); err != nil {
 		return fmt.Errorf("volume: removing %s;%d: %w", name, version, err)
 	}
@@ -406,7 +425,11 @@ func (d *Directory) recordUsedBlocks(container diskimage.WritableContainer, used
 	h := d.Header
 	h.RecordAttributes.EndOfFileBlock = usedBlocks + 1
 	h.RecordAttributes.FirstFreeByte = 0
-	h.HighWaterMark = usedBlocks + 1
+	// The high-water mark only ever rises: relocate already zeroed the
+	// whole allocation and set it past the end, as VMS has it.
+	if h.HighWaterMark < usedBlocks+1 {
+		h.HighWaterMark = usedBlocks + 1
+	}
 
 	areas, err := existingAreas(h)
 	if err != nil {

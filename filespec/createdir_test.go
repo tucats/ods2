@@ -1,7 +1,9 @@
 package filespec
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tucats/ods2/diskimage"
@@ -197,5 +199,30 @@ func TestCreateDirectoryPathFullDisk(t *testing.T) {
 
 	if _, err := ResolveDirectory(vol, []string{"P"}); err != nil {
 		t.Errorf("[P] after the failure: %v", err)
+	}
+}
+
+// TestCreateDirectoryPathLimits: VMS 7.3 makes eight levels, and refuses a
+// ninth or a 40-character name with RMS$_DIR, making none of the path.
+func TestCreateDirectoryPathLimits(t *testing.T) {
+	vol, bm, ib := newCreateDirVolume(t, 2000)
+
+	eight := []string{"L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"}
+	if _, err := CreateDirectoryPath(vol, eight, nil, bm, ib); err != nil {
+		t.Fatalf("eight levels: %v", err)
+	}
+
+	for _, dirs := range [][]string{
+		append(append([]string{}, eight...), "L9"),
+		{"NEW", strings.Repeat("X", volume.MaxDirectoryNameLength+1)},
+	} {
+		levels, err := CreateDirectoryPath(vol, dirs, nil, bm, ib)
+		if !errors.Is(err, volume.ErrDirectoryName) || len(levels) != 0 {
+			t.Errorf("CreateDirectoryPath(%v) = %v, %v, want nothing made and ErrDirectoryName", dirs, createdFlags(levels), err)
+		}
+	}
+
+	if _, err := ResolveDirectory(vol, []string{"NEW"}); err == nil {
+		t.Error("[NEW] was made")
 	}
 }

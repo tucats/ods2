@@ -37,3 +37,11 @@ repository.
   them, makes several levels, reports an existing directory (the MFD too)
   as `%CREATE-I-EXISTS`, and gains `/OWNER`, `/PROTECTION`, and
   `/ALLOCATION`.
+- 2026-10-01: Reconciled with VMS 7.3's run of govax's CREATE/DIRECTORY
+  oracle. A new directory's entry in its parent has no version limit,
+  whatever the parent's default (`Directory.insert`). A directory's new
+  space is zeroed, every block, and its high-water mark set past it
+  (VMS's `/ALLOCATION=4` directory reads HWM 5), and adding or removing
+  entries never lowers the mark. `CreateDirectoryPath` refuses a ninth
+  level, and a name over 39 characters, before making anything
+  (`volume.ErrDirectoryName`, VMS's RMS$_DIR).
