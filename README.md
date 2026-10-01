@@ -82,6 +82,8 @@ The Go packages in this project (and the CLI that uses them) have the following 
   for read/write.
 - Manager a "default directory" path.
 - Get a directory listing of files
+- Create directories, several levels at once, with an owner, protection,
+  version limit, and allocation, laid out as VMS lays them out.
 - Type the contents of a file
 - Copy files within the container
 - Copy container files to the host system, and host system files into

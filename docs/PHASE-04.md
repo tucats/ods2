@@ -26,3 +26,14 @@ repository.
   exists, in any version, is now `ErrExists` rather than a new version. A
   failure part way gives back the header and space. The layout was read
   from directories VMS 7.3 made on govax's Phase 33 oracle volume.
+- 2026-10-01: `ondisk.ParseUic`, `ParseProtection`, `FormatProtection`,
+  and `ProtectionAccess`, so ods2's CLI and govax read `/OWNER_UIC` and
+  `/PROTECTION` the same way.
+- 2026-10-01: `filespec.CreateDirectoryPath` (`createdir.go`) makes every
+  missing level, each with options from a callback given its own parent;
+  levels made before a failure stay made and are reported.
+  `volume.InheritedDirectoryOptions` gives VMS's defaults (the parent's
+  limit, its protection less delete). The CLI's `CREATE DIRECTORY` uses
+  them, makes several levels, reports an existing directory (the MFD too)
+  as `%CREATE-I-EXISTS`, and gains `/OWNER`, `/PROTECTION`, and
+  `/ALLOCATION`.

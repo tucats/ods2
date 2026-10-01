@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tucats/ods2/diskimage"
+	"github.com/tucats/ods2/filespec"
 	"github.com/tucats/ods2/ondisk"
 	"github.com/tucats/ods2/volume"
 )
@@ -227,11 +228,89 @@ func TestCmdCreateDirectoryNested(t *testing.T) {
 	}
 }
 
-func TestCmdCreateDirectoryUnderMissingParentErrors(t *testing.T) {
+// TestCmdCreateDirectoryMakesMissingParents: as on VMS, every missing
+// level of the path is made, and each is reported.
+func TestCmdCreateDirectoryMakesMissingParents(t *testing.T) {
 	s := newCreateTestSession(t)
 
-	if err := cmdCreate(s, []string{"directory", "[NOSUCHPARENT.CHILD]"}, Qualifiers{}); err == nil {
-		t.Fatal("cmdCreate with a nonexistent parent: want error, got nil")
+	if err := cmdCreate(s, []string{"directory", "[NEWPARENT.CHILD]"}, Qualifiers{}); err != nil {
+		t.Fatalf("cmdCreate: %v", err)
+	}
+
+	out := s.Stdout.(*bytes.Buffer).String()
+	if !strings.Contains(out, "[000000]NEWPARENT.DIR;1 created") || !strings.Contains(out, "[NEWPARENT]CHILD.DIR;1 created") {
+		t.Errorf("output = %q, want both levels reported created", out)
+	}
+
+	if _, err := filespec.ResolveDirectory(s.Volumes["DUA0"], []string{"NEWPARENT", "CHILD"}); err != nil {
+		t.Errorf("[NEWPARENT.CHILD]: %v", err)
+	}
+}
+
+// TestCmdCreateDirectoryExisting: a directory that's already there,
+// including the MFD, is reported, not an error.
+func TestCmdCreateDirectoryExisting(t *testing.T) {
+	for _, spec := range []string{"[EXISTING]", "[000000]"} {
+		s := newCreateTestSession(t)
+
+		if err := cmdCreate(s, []string{"directory", spec}, Qualifiers{}); err != nil {
+			t.Fatalf("cmdCreate(%s): %v", spec, err)
+		}
+
+		if out := s.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "%CREATE-I-EXISTS") || !strings.Contains(out, ", DUA0:"+spec+" already exists") {
+			t.Errorf("cmdCreate(%s) output = %q, want CREATE-I-EXISTS", spec, out)
+		}
+	}
+}
+
+func TestCmdCreateDirectoryOwnerProtectionAllocation(t *testing.T) {
+	s := newCreateTestSession(t)
+
+	quals := Qualifiers{"owner": "[200,201]", "protection": "(G:R,W)", "allocation": "3"}
+	if err := cmdCreate(s, []string{"directory", "[OWNED]"}, quals); err != nil {
+		t.Fatalf("cmdCreate: %v", err)
+	}
+
+	vol := s.Volumes["DUA0"]
+
+	dir, err := filespec.ResolveDirectory(vol, []string{"OWNED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mfd, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The default is the MFD's protection less delete; (G:R,W) then
+	// replaces the group and world fields.
+	want, _ := ondisk.ParseProtection("(G:R,W)", mfd.Header.FileProtection|ondisk.ProtectionNoDeleteAll)
+
+	h := dir.Header
+	if h.Owner != (ondisk.Uic{Group: 0o200, Member: 0o201}) || h.FileProtection != want || h.RecordAttributes.HighestBlock < 3 {
+		t.Errorf("owner %v, protection %#x, HIBLK %d; want [200,201], %#x, at least 3",
+			h.Owner, h.FileProtection, h.RecordAttributes.HighestBlock, want)
+	}
+}
+
+func TestCmdCreateDirectoryBadQualifiers(t *testing.T) {
+	for _, quals := range []Qualifiers{
+		{"owner": "[SYSTEM]"},
+		{"owner": "[1,9]"},
+		{"protection": "(X:R)"},
+		{"allocation": "0"},
+		{"version": "40000"},
+	} {
+		s := newCreateTestSession(t)
+
+		if err := cmdCreate(s, []string{"directory", "[BAD]"}, quals); err == nil {
+			t.Errorf("cmdCreate with %v: want an error, got none", quals)
+		}
+
+		if _, err := filespec.ResolveDirectory(s.Volumes["DUA0"], []string{"BAD"}); err == nil {
+			t.Errorf("cmdCreate with %v made [BAD] anyway", quals)
+		}
 	}
 }
 
@@ -250,14 +329,6 @@ func TestCmdCreateDirectoryRejectsBareName(t *testing.T) {
 	// syntax; a bare word is parsed as a file name, not a directory path.
 	if err := cmdCreate(s, []string{"directory", "NEWDIR"}, Qualifiers{}); err == nil {
 		t.Fatal("cmdCreate with an unbracketed name: want error, got nil")
-	}
-}
-
-func TestCmdCreateDirectoryRejectsMasterFileDirectorySpec(t *testing.T) {
-	s := newCreateTestSession(t)
-
-	if err := cmdCreate(s, []string{"directory", "[000000]"}, Qualifiers{}); err == nil {
-		t.Fatal("cmdCreate targeting [000000] (no new name given): want error, got nil")
 	}
 }
 

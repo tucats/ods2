@@ -549,32 +549,54 @@ ODS2> delete old.txt;*
 ### CREATE DIRECTORY
 
 ```text
-CREATE DIRECTORY dir-spec [/VERSION=n]
+CREATE DIRECTORY dir-spec [/VERSION=n] [/OWNER=[g,m]] [/PROTECTION=(...)]
+                          [/ALLOCATION=n]
 ```
 
-Creates a new subdirectory. `dir-spec` is a bracketed directory path whose
-**last** component names the subdirectory being created; everything
-before it names the parent directory, which must already exist —
-`CREATE DIRECTORY [FOO.BAR]` creates `BAR.DIR` inside `[FOO]`, the same
-way real VMS's own `CREATE/DIRECTORY` works. `dir-spec` may be written
-relative to your current default (`[.BAR]`) the same as any other
-directory spec (see **Directories** above); it's an error for it to name
-a file (a trailing name/type/version, or a `...` recursive suffix) rather
-than a bare directory path.
+Creates a directory, the way VMS's own `CREATE/DIRECTORY` does.
+`dir-spec` is a bracketed directory path: `CREATE DIRECTORY [FOO.BAR]`
+creates `BAR.DIR` inside `[FOO]`, and creates `[FOO]` first if it doesn't
+exist yet either. `dir-spec` may be written relative to your current
+default (`[.BAR]`) the same as any other directory spec (see
+**Directories** above); it's an error for it to name a file (a trailing
+name/type/version, or a `...` recursive suffix) rather than a bare
+directory path. Each directory made is reported; a directory that already
+exists is reported as existing, and isn't an error.
+
+The directory file is laid out as VMS 7.3 lays one out: version 1,
+contiguous, with variable-length records, and born with its allocation and
+an empty first block. Without qualifiers, each new directory takes VMS's
+defaults from its parent; the qualifiers apply to every level made.
 
 - `/VERSION=n` — sets the new directory's own default version limit
   (`RecordAttributes.VersionLimit` — see `docs/PHASE-03.md`'s
   "Version-limit design"), the value a name created directly inside it
-  later inherits if it doesn't specify its own limit. Without `/VERSION`,
-  the new directory inherits its **parent's** current version limit at
-  the moment of creation — a one-time snapshot, not a live link back to
-  the parent.
+  later inherits if it doesn't specify its own limit; 0 is no limit.
+  Without `/VERSION`, the new directory inherits its **parent's** current
+  version limit at the moment of creation — a one-time snapshot, not a
+  live link back to the parent.
+- `/OWNER=[g,m]` — the owner UIC, group and member in octal. Without it,
+  the volume's owner.
+- `/PROTECTION=(S:RWED,O:RWED,G:RE,W)` — the protection: for each
+  category (`SYSTEM`, `OWNER`, `GROUP`, `WORLD`, or an abbreviation), the
+  access it's granted (`R`ead, `W`rite, `E`xecute, `D`elete), or none.
+  Without it, the parent's protection less delete access; a category the
+  qualifier leaves out keeps that default.
+- `/ALLOCATION=n` — the number of blocks to give the directory at once.
+  Without it, 1.
+
+Qualifiers are written without spaces in their values.
 
 ```text
 ODS2> create directory [PROJECTS]
 %CREATE-S-CREATED, DUA0:[000000]PROJECTS.DIR;1 created
-ODS2> create directory [PROJECTS.SCRATCH] /version=1
+ODS2> create directory [PROJECTS.SCRATCH] /version=1 /owner=[200,201]
 %CREATE-S-CREATED, DUA0:[PROJECTS]SCRATCH.DIR;1 created
+ODS2> create directory [A.B]
+%CREATE-S-CREATED, DUA0:[000000]A.DIR;1 created
+%CREATE-S-CREATED, DUA0:[A]B.DIR;1 created
+ODS2> create directory [PROJECTS]
+%CREATE-I-EXISTS, DUA0:[PROJECTS] already exists
 ```
 
 ### SET DEFAULT

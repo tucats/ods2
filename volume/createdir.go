@@ -174,3 +174,21 @@ func (d *Directory) initialize(container diskimage.WritableContainer, bm *Bitmap
 
 	return d.recordUsedBlocks(container, 1)
 }
+
+// InheritedDirectoryOptions returns what VMS's CREATE/DIRECTORY gives a new
+// directory in parent when no qualifier says otherwise: parent's own
+// default version limit, and parent's protection less delete access for
+// every category (ondisk.ProtectionNoDeleteAll) -- a directory VMS 7.3 made
+// in an MFD protected (S:RWED,O:RWED,G:RE,W) is (S:RWE,O:RWE,G:RE,W).
+//
+// Owner is left nil, the volume's default owner. VMS gives a new directory
+// the creating process's UIC, which only a caller that has a process (like
+// govax) knows; a caller that does fills it in.
+func InheritedDirectoryOptions(parent *Directory) DirectoryOptions {
+	protection := parent.Header.FileProtection | ondisk.ProtectionNoDeleteAll
+
+	return DirectoryOptions{
+		VersionLimit: parent.Header.RecordAttributes.VersionLimit,
+		Protection:   &protection,
+	}
+}
