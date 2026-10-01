@@ -56,3 +56,23 @@ func TestUicRoundTrip(t *testing.T) {
 		t.Errorf("round trip = %+v, want %+v", got, want)
 	}
 }
+
+func TestParseUic(t *testing.T) {
+	for text, want := range map[string]Uic{
+		"[1,4]":          {Group: 1, Member: 4},
+		"[360,4]":        {Group: 0o360, Member: 4},
+		" < 200 , 201 >": {Group: 0o200, Member: 0o201},
+		"[37776,177776]": {Group: MaxUicGroup, Member: MaxUicMember},
+	} {
+		got, err := ParseUic(text)
+		if err != nil || got != want {
+			t.Errorf("ParseUic(%q) = %v, %v, want %v", text, got, err, want)
+		}
+	}
+
+	for _, text := range []string{"", "1,4", "[1]", "[8,4]", "[1,4", "[40000,1]", "[400000,1]", "[1,200000]", "[SYSTEM]", "[1,4]x"} {
+		if got, err := ParseUic(text); err == nil {
+			t.Errorf("ParseUic(%q) = %v, want an error", text, got)
+		}
+	}
+}
