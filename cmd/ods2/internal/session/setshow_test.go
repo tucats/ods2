@@ -143,7 +143,7 @@ func newSetFileTestSession(t *testing.T) *Session {
 		}
 	}
 
-	if _, err := vol.CreateDirectory(mfd, "SUBDIR.DIR", 0, bm, ib); err != nil {
+	if _, err := vol.CreateDirectory(mfd, "SUBDIR.DIR", volume.DirectoryOptions{VersionLimit: 0}, bm, ib); err != nil {
 		t.Fatalf("CreateDirectory(SUBDIR.DIR): %v", err)
 	}
 

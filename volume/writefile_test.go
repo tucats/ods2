@@ -2,6 +2,7 @@ package volume
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/tucats/ods2/ondisk"
@@ -514,7 +515,7 @@ func TestVolumeCreateDirectoryEndToEnd(t *testing.T) {
 	parent := newWritableTestDirectory(t, dev, ib, "PARENT.DIR")
 	vol := &Volume{Devices: []*Device{dev}}
 
-	sub, err := vol.CreateDirectory(parent, "SUB.DIR", 5, bm, ib)
+	sub, err := vol.CreateDirectory(parent, "SUB.DIR", DirectoryOptions{VersionLimit: 5}, bm, ib)
 	if err != nil {
 		t.Fatalf("CreateDirectory: %v", err)
 	}
@@ -540,10 +541,8 @@ func TestVolumeCreateDirectoryEndToEnd(t *testing.T) {
 		t.Errorf("parent's directory entry Fid = %v, want %v", entry.Fid, sub.Header.Fid)
 	}
 
-	// The new (zero-block) directory must immediately accept an Insert of
-	// its own -- Directory.Insert already knows how to Extend a zero-block
-	// directory the first time something is added to it (see
-	// CreateDirectory's own doc comment).
+	// The new directory, born with one empty block, must accept an Insert
+	// of its own straight away.
 	childFid := ondisk.Fid{Num: 90, Seq: 1}
 	if err := sub.Insert("CHILD.TXT", 1, childFid, bm, ib); err != nil {
 		t.Fatalf("Insert into brand-new directory: %v", err)
@@ -556,22 +555,18 @@ func TestVolumeCreateDirectoryEndToEnd(t *testing.T) {
 		t.Errorf("List after Insert = %+v, want a single CHILD.TXT entry", childEntries)
 	}
 
-	// A second CreateDirectory with the same name must get the next
-	// version, not overwrite/collide with the first -- matching CreateFile's
-	// own auto-versioning behavior (TestVolumeCreateFileEndToEnd above).
-	second, err := vol.CreateDirectory(parent, "SUB.DIR", 5, bm, ib)
+	// A second CreateDirectory with the same name is refused: VMS keeps
+	// no versions of a directory, so the name simply already exists.
+	_, err = vol.CreateDirectory(parent, "SUB.DIR", DirectoryOptions{VersionLimit: 5}, bm, ib)
+	if !errors.Is(err, ErrExists) {
+		t.Fatalf("CreateDirectory (same name again): err = %v, want ErrExists", err)
+	}
+	entries, err := parent.List()
 	if err != nil {
-		t.Fatalf("CreateDirectory (second version): %v", err)
+		t.Fatalf("List: %v", err)
 	}
-	secondEntry, err := parent.Lookup("SUB.DIR", 0)
-	if err != nil {
-		t.Fatalf("Lookup(SUB.DIR) after second CreateDirectory: %v", err)
-	}
-	if secondEntry.Version != 2 {
-		t.Errorf("second CreateDirectory's directory entry version = %d, want 2", secondEntry.Version)
-	}
-	if second.Header.Fid == sub.Header.Fid {
-		t.Error("second CreateDirectory's Fid collides with the first version's")
+	if len(entries) != 1 {
+		t.Errorf("parent entries after refused second CreateDirectory = %+v, want just SUB.DIR;1", entries)
 	}
 }
 
@@ -597,7 +592,7 @@ func TestCreateDirectoryRejectsNameWithoutDirType(t *testing.T) {
 	parent := newWritableTestDirectory(t, dev, ib, "PARENT.DIR")
 	vol := &Volume{Devices: []*Device{dev}}
 
-	if _, err := vol.CreateDirectory(parent, "SUB.TXT", 0, bm, ib); err == nil {
+	if _, err := vol.CreateDirectory(parent, "SUB.TXT", DirectoryOptions{VersionLimit: 0}, bm, ib); err == nil {
 		t.Fatal("CreateDirectory with a non-.DIR name: want error, got nil")
 	}
 
@@ -894,7 +889,7 @@ func TestCreateDirectoryZeroVersionLimitMeansUnlimited(t *testing.T) {
 	parent := newWritableTestDirectory(t, dev, ib, "PARENT.DIR")
 	vol := &Volume{Devices: []*Device{dev}}
 
-	sub, err := vol.CreateDirectory(parent, "SUB.DIR", 0, bm, ib)
+	sub, err := vol.CreateDirectory(parent, "SUB.DIR", DirectoryOptions{VersionLimit: 0}, bm, ib)
 	if err != nil {
 		t.Fatalf("CreateDirectory: %v", err)
 	}

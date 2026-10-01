@@ -11,8 +11,8 @@ import (
 
 // NewFileHeader bundles what CreateHeader needs to build a brand-new file
 // header: everything about the file that isn't derived from the volume
-// itself (Owner/FileProtection come from the home block -- see CreateHeader)
-// or chosen by the allocator (the header slot and Fid).
+// itself (Owner/FileProtection default to the home block's -- see
+// CreateHeader) or chosen by the allocator (the header slot and Fid).
 type NewFileHeader struct {
 	// Name is stored in the new header's IDENT area (see ondisk.Ident) --
 	// this is the file's own record of its name, independent of whatever
@@ -49,6 +49,18 @@ type NewFileHeader struct {
 	// write path is what advances EndOfFileBlock/FirstFreeByte as data is
 	// actually written.
 	RecordAttributes ondisk.RecAttr
+
+	// Owner is the new file's owner UIC (see ondisk.Uic: the "user
+	// identification code" VMS checks a file's protection against). nil
+	// means the volume's default owner, HomeBlock.VolumeOwner.
+	Owner *ondisk.Uic
+
+	// Protection is the new file's protection mask (FileHeader.
+	// FileProtection: four 4-bit fields, system/owner/group/world from the
+	// low bits up, where each SET bit DENIES read, write, execute, or
+	// delete access in that order). nil means the volume's default for new
+	// files, HomeBlock.FileProtection.
+	Protection *uint16
 }
 
 // CreateHeader allocates a free header slot from ib (see
@@ -57,8 +69,9 @@ type NewFileHeader struct {
 // Extents is empty, since nothing has been allocated to the file yet (see
 // Extend for growing it).
 //
-// The new header's owner and default protection come from the volume's own
-// home block (HomeBlock.VolumeOwner/FileProtection), not a hardcoded UIC --
+// Unless opts says otherwise (Owner, Protection), the new header's owner and
+// protection come from the volume's own home block
+// (HomeBlock.VolumeOwner/FileProtection), not a hardcoded UIC --
 // unlike the reference implementation's update_addhead(), which hardcodes
 // UIC [1,4] regardless of the volume it's writing to (see
 // docs/PHASE-02.md's design overview for why this project doesn't reproduce
@@ -102,14 +115,34 @@ func CreateHeader(dev *Device, ib *IndexBitmap, opts NewFileHeader) (*File, erro
 	recAttr.EndOfFileBlock = 0
 	recAttr.FirstFreeByte = 0
 
+	owner := dev.Home.VolumeOwner
+	if opts.Owner != nil {
+		owner = *opts.Owner
+	}
+
+	protection := dev.Home.FileProtection
+	if opts.Protection != nil {
+		protection = *opts.Protection
+	}
+
+	// The IDENT area's revision count records how many times the file has
+	// been changed. VMS starts a file it writes at 1, but a directory at 0,
+	// and leaves a directory's count alone as entries come and go: every
+	// directory VMS 7.3's CREATE/DIRECTORY made on govax's Phase 33 oracle
+	// volume reads 0, however many files it holds.
+	revision := uint16(1)
+	if opts.Characteristics&ondisk.FchDirectory != 0 {
+		revision = 0
+	}
+
 	now := vmstime.FromTime(time.Now())
 	h := ondisk.FileHeader{
 		StructureLevel:      ondisk.FileHeaderStructureLevel,
 		Fid:                 fid,
 		RecordAttributes:    recAttr,
 		FileCharacteristics: opts.Characteristics,
-		Owner:               dev.Home.VolumeOwner,
-		FileProtection:      dev.Home.FileProtection,
+		Owner:               owner,
+		FileProtection:      protection,
 		Backlink:            opts.Directory,
 	}
 	filename, extension := ondisk.IdentName(opts.Name, opts.Version)
@@ -117,7 +150,7 @@ func CreateHeader(dev *Device, ib *IndexBitmap, opts NewFileHeader) (*File, erro
 		Ident: &ondisk.Ident{
 			Filename:          filename,
 			FilenameExtension: extension,
-			Revision:          1,
+			Revision:          revision,
 			CreationDate:      now,
 			RevisionDate:      now,
 		},

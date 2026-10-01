@@ -62,7 +62,7 @@ func newCreateTestSession(t *testing.T) *Session {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
 
-	if _, err := vol.CreateDirectory(mfd, "EXISTING.DIR", 0, bm, ib); err != nil {
+	if _, err := vol.CreateDirectory(mfd, "EXISTING.DIR", volume.DirectoryOptions{VersionLimit: 0}, bm, ib); err != nil {
 		t.Fatalf("CreateDirectory(EXISTING.DIR): %v", err)
 	}
 

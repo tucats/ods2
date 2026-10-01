@@ -42,11 +42,11 @@ func newRenameFixture(t *testing.T) renameFixture {
 
 	fx := renameFixture{vol: vol, mfd: mfd, bm: bm, ib: ib}
 
-	if fx.sub1, err = vol.CreateDirectory(mfd, "SUB1.DIR", 0, bm, ib); err != nil {
+	if fx.sub1, err = vol.CreateDirectory(mfd, "SUB1.DIR", DirectoryOptions{VersionLimit: 0}, bm, ib); err != nil {
 		t.Fatal(err)
 	}
 
-	if fx.sub2, err = vol.CreateDirectory(mfd, "SUB2.DIR", 0, bm, ib); err != nil {
+	if fx.sub2, err = vol.CreateDirectory(mfd, "SUB2.DIR", DirectoryOptions{VersionLimit: 0}, bm, ib); err != nil {
 		t.Fatal(err)
 	}
 
@@ -337,7 +337,7 @@ func TestRenameMovesDirectory(t *testing.T) {
 func TestRenameDirectoryIntoItselfRefused(t *testing.T) {
 	fx := newRenameFixture(t)
 
-	deeper, err := fx.vol.CreateDirectory(fx.sub1, "DEEPER.DIR", 0, fx.bm, fx.ib)
+	deeper, err := fx.vol.CreateDirectory(fx.sub1, "DEEPER.DIR", DirectoryOptions{VersionLimit: 0}, fx.bm, fx.ib)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +372,7 @@ func TestRenameDirectoryIntoItselfRefused(t *testing.T) {
 func TestRenamePurgesToVersionLimit(t *testing.T) {
 	fx := newRenameFixture(t)
 
-	limited, err := fx.vol.CreateDirectory(fx.mfd, "LIMITED.DIR", 2, fx.bm, fx.ib)
+	limited, err := fx.vol.CreateDirectory(fx.mfd, "LIMITED.DIR", DirectoryOptions{VersionLimit: 2}, fx.bm, fx.ib)
 	if err != nil {
 		t.Fatal(err)
 	}

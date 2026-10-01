@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/tucats/ods2/filespec"
+	"github.com/tucats/ods2/volume"
 )
 
 func init() {
@@ -107,7 +108,7 @@ func cmdCreateDirectory(s *Session, arg string, quals Qualifiers) error {
 	}
 
 	fullName := name + ".DIR"
-	if _, err := vol.CreateDirectory(parent, fullName, versionLimit, bm, ib); err != nil {
+	if _, err := vol.CreateDirectory(parent, fullName, volume.DirectoryOptions{VersionLimit: versionLimit}, bm, ib); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
