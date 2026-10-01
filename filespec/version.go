@@ -27,17 +27,19 @@ const (
 	// ";5".
 	versionExact
 
-	// versionRelative selects the Nth version back from the highest,
-	// counting the highest itself as 1st. Written as e.g. ";-1" (the
-	// highest version — equivalent to versionHighest) or ";-2" (the
-	// second-highest).
+	// versionRelative selects the Nth version below the highest, as VMS
+	// reads a negative version: ";-1" is the second-highest, ";-2" the
+	// third-highest.
 	versionRelative
+
+	// versionLowest selects the lowest-numbered version. Written ";-0".
+	versionLowest
 )
 
 // versionSelector is a parsed Spec.Version string.
 type versionSelector struct {
 	kind  versionSelectorKind
-	value int // meaningful for versionExact (the version number) and versionRelative (how many back, 1 = highest)
+	value int // meaningful for versionExact (the version number) and versionRelative (how many below the highest)
 }
 
 // parseVersionSelector interprets a Spec.Version string.
@@ -47,6 +49,8 @@ func parseVersionSelector(v string) (versionSelector, error) {
 		return versionSelector{kind: versionHighest}, nil
 	case "*":
 		return versionSelector{kind: versionAll}, nil
+	case "-0":
+		return versionSelector{kind: versionLowest}, nil
 	}
 
 	n, err := strconv.Atoi(v)
@@ -111,10 +115,14 @@ func selectVersions(entries []ondisk.DirEntry, sel versionSelector) []ondisk.Dir
 				}
 			}
 
-		default: // versionHighest or versionRelative
+		default: // versionHighest, versionRelative, or versionLowest
 			index := 0
-			if sel.kind == versionRelative {
-				index = sel.value - 1
+
+			switch sel.kind {
+			case versionRelative:
+				index = sel.value
+			case versionLowest:
+				index = len(g.entries) - 1
 			}
 
 			if index >= 0 && index < len(g.entries) {

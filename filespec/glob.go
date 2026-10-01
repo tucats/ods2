@@ -181,21 +181,26 @@ func ResolveDirectory(vol *volume.Volume, dirs []string) (*volume.Directory, err
 
 // expandRecursive returns nodes plus every directory nested beneath each
 // one, to any depth, for spec.Recursive's "and everything below" behavior.
+//
+// The walk is depth-first, each directory followed by its subdirectories
+// in directory order, as VMS walks "[dir...]": [A], [A.B], [A.B.C], [A.D].
 func expandRecursive(vol *volume.Volume, nodes []dirNode) ([]dirNode, error) {
-	all := append([]dirNode{}, nodes...)
-	queue := append([]dirNode{}, nodes...)
+	var all []dirNode
 
-	for len(queue) > 0 {
-		node := queue[0]
-		queue = queue[1:]
+	for _, node := range nodes {
+		all = append(all, node)
 
 		children, err := matchingSubdirectories(vol, node, "*")
 		if err != nil {
 			return nil, err
 		}
 
-		all = append(all, children...)
-		queue = append(queue, children...)
+		below, err := expandRecursive(vol, children)
+		if err != nil {
+			return nil, err
+		}
+
+		all = append(all, below...)
 	}
 
 	return all, nil
@@ -227,6 +232,12 @@ func matchingSubdirectories(vol *volume.Volume, node dirNode, namePattern string
 	for _, e := range dirEntries {
 		name, _ := splitEntryNameType(e.Name)
 		if !matchWildcard(namePattern, name) {
+			continue
+		}
+
+		// The MFD's own entry, 000000.DIR, names the MFD itself, not a
+		// subdirectory of it.
+		if e.Fid.Equal(node.dir.Header.Fid) {
 			continue
 		}
 

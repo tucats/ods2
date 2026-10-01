@@ -99,20 +99,34 @@ func TestSelectVersionsRelative(t *testing.T) {
 		{Name: "A.TXT", Version: 2, Fid: fid(2)},
 		{Name: "A.TXT", Version: 3, Fid: fid(3)},
 	}
-	// -1 (1 back from highest) is the highest itself.
+	// -1 is the version below the highest, as VMS reads it (VMS 7.3's
+	// RMS $SEARCH returns A.TXT;2 for A.TXT;-1).
 	got := selectVersions(entries, versionSelector{kind: versionRelative, value: 1})
-	want := []ondisk.DirEntry{{Name: "A.TXT", Version: 3, Fid: fid(3)}}
+	want := []ondisk.DirEntry{{Name: "A.TXT", Version: 2, Fid: fid(2)}}
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("selectVersions(relative 1) = %+v, want %+v", got, want)
 	}
 
-	// -2 (2 back from highest) is the second-highest.
+	// -2 is two below the highest.
 	got = selectVersions(entries, versionSelector{kind: versionRelative, value: 2})
-	want = []ondisk.DirEntry{{Name: "A.TXT", Version: 2, Fid: fid(2)}}
+	want = []ondisk.DirEntry{{Name: "A.TXT", Version: 1, Fid: fid(1)}}
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("selectVersions(relative 2) = %+v, want %+v", got, want)
+	}
+
+	// -0 is the lowest.
+	sel, err := parseVersionSelector("-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got = selectVersions(entries, sel)
+	want = []ondisk.DirEntry{{Name: "A.TXT", Version: 1, Fid: fid(1)}}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("selectVersions(-0) = %+v, want %+v", got, want)
 	}
 }
 
