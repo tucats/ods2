@@ -234,20 +234,19 @@ func EncodeDirectoryBlock(entries []DirEntry) ([]byte, error) {
 		block = append(block, record...)
 	}
 
-	if len(block) > BlockSize {
-		return nil, fmt.Errorf("ondisk: directory entries need %d bytes, more than fit in one %d-byte block", len(block), BlockSize)
+	// Every block ends its records with the 0xFFFF end-of-data sentinel, so
+	// the records may use at most BlockSize-2 bytes. VMS insists on it:
+	// MOUNT rejected a volume whose MFD had one block filled to exactly
+	// 512 bytes with no sentinel ("bad directory file format"), though
+	// DecodeDirectoryBlock, which stops on its own when no room is left
+	// for another record header, reads such a block without complaint.
+	if len(block)+2 > BlockSize {
+		return nil, fmt.Errorf("ondisk: directory entries need %d bytes, more than fit in one %d-byte block with its end-of-data marker", len(block), BlockSize)
 	}
 
 	out := make([]byte, BlockSize)
 	copy(out, block)
-
-	if len(block)+2 <= BlockSize {
-		// The 0xFFFF end-of-data sentinel. When the encoded records
-		// happen to fill the block exactly, there's no room (or need) for
-		// it: DecodeDirectoryBlock's scan loop stops on its own once
-		// there's no room left for even a record header.
-		binary.LittleEndian.PutUint16(out[len(block):len(block)+2], 0xFFFF)
-	}
+	binary.LittleEndian.PutUint16(out[len(block):len(block)+2], 0xFFFF)
 
 	return out, nil
 }

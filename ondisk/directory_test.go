@@ -270,14 +270,12 @@ func TestEncodeDirectoryBlockEmpty(t *testing.T) {
 	}
 }
 
-// TestEncodeDirectoryBlockFillsBlockExactly confirms entries that encode
-// to exactly BlockSize bytes (no room left for the 0xFFFF sentinel) still
-// round-trip correctly -- DecodeDirectoryBlock's scan loop must stop on
-// its own once there's no room left for another record header.
-func TestEncodeDirectoryBlockFillsBlockExactly(t *testing.T) {
-	// One record: a 2-byte name plus enough version entries that the
-	// header, name, and entries add up to exactly BlockSize, leaving no
-	// room for the sentinel.
+// fullBlockEntries returns one name's versions whose record (header, name,
+// and entries) adds up to exactly BlockSize bytes, leaving no room for the
+// 0xFFFF sentinel.
+func fullBlockEntries(t *testing.T) []DirEntry {
+	t.Helper()
+
 	const nameLen = 2
 	numVersions := (BlockSize - dirRecHeaderSize - nameLen) / dirEntSize
 	if dirRecHeaderSize+nameLen+numVersions*dirEntSize != BlockSize {
@@ -289,9 +287,51 @@ func TestEncodeDirectoryBlockFillsBlockExactly(t *testing.T) {
 		in = append(in, DirEntry{Name: "XX", Version: uint16(v), Fid: Fid{Num: uint16(v), Seq: 1}})
 	}
 
-	block, err := EncodeDirectoryBlock(in)
+	return in
+}
+
+// TestEncodeDirectoryBlockKeepsSentinel confirms a block always ends its
+// records with the 0xFFFF sentinel: entries that would fill the block to
+// exactly BlockSize bytes don't fit (VMS's MOUNT rejects such a block as a
+// bad directory), and one version fewer fits, with the sentinel after it.
+func TestEncodeDirectoryBlockKeepsSentinel(t *testing.T) {
+	in := fullBlockEntries(t)
+
+	if _, err := EncodeDirectoryBlock(in); err == nil {
+		t.Error("EncodeDirectoryBlock filled a block with no room for its sentinel")
+	}
+
+	block, err := EncodeDirectoryBlock(in[1:])
 	if err != nil {
 		t.Fatalf("EncodeDirectoryBlock: %v", err)
+	}
+
+	if end := BlockSize - dirEntSize; binary.LittleEndian.Uint16(block[end:end+2]) != 0xFFFF {
+		t.Errorf("no 0xFFFF sentinel at offset %d", end)
+	}
+}
+
+// TestDecodeDirectoryBlockFilledExactly confirms a block whose records fill
+// it to exactly BlockSize bytes, with no room for the 0xFFFF sentinel,
+// still decodes -- DecodeDirectoryBlock's scan loop must stop on its own
+// once there's no room left for another record header. EncodeDirectoryBlock
+// never writes one, but a volume from elsewhere might.
+func TestDecodeDirectoryBlockFilledExactly(t *testing.T) {
+	in := fullBlockEntries(t)
+
+	// The record by hand: one name, its versions descending, as
+	// EncodeDirectoryBlock lays them out.
+	block := make([]byte, BlockSize)
+	binary.LittleEndian.PutUint16(block[0:2], uint16(BlockSize-2))
+	binary.LittleEndian.PutUint16(block[2:4], NoVersionLimit)
+	block[5] = 2
+	copy(block[dirRecHeaderSize:], "XX")
+
+	for i := range in {
+		e := in[len(in)-1-i]
+		pos := dirRecHeaderSize + 2 + i*dirEntSize
+		binary.LittleEndian.PutUint16(block[pos:pos+2], e.Version)
+		copy(block[pos+2:pos+dirEntSize], EncodeFid(e.Fid))
 	}
 
 	got, err := DecodeDirectoryBlock(block)

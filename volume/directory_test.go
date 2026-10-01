@@ -1,6 +1,7 @@
 package volume
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"reflect"
@@ -404,6 +405,57 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 	}
 	if got, want := byName(reentries), byName(want); !reflect.DeepEqual(got, want) {
 		t.Errorf("List() after reopen = %+v, want %+v", got, want)
+	}
+}
+
+// TestDirectoryInsertKeepsBlockSentinels inserts names whose records are
+// 32 bytes each (6 header + 18 name + 8 version entry), so 16 of them would
+// fill a 512-byte block exactly. Every block the directory uses must still
+// end its records with the 0xFFFF sentinel: VMS's MOUNT rejected an MFD
+// with one block filled exactly ("bad directory file format").
+func TestDirectoryInsertKeepsBlockSentinels(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "FULL.DIR")
+
+	const count = 40
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("FILE%010d.TXT", i) // 18 characters
+		if err := dir.Insert(name, 1, ondisk.Fid{Num: uint16(100 + i), Seq: 1}, bm, ib); err != nil {
+			t.Fatalf("Insert(%s): %v", name, err)
+		}
+	}
+
+	block := make([]byte, ondisk.BlockSize)
+	for vbn := uint32(1); vbn < dir.Header.RecordAttributes.EndOfFileBlock; vbn++ {
+		if err := dir.ReadBlock(vbn, block); err != nil {
+			t.Fatalf("ReadBlock(%d): %v", vbn, err)
+		}
+
+		p := 0
+		for p+2 <= ondisk.BlockSize && binary.LittleEndian.Uint16(block[p:]) != 0xFFFF {
+			p += int(binary.LittleEndian.Uint16(block[p:])) + 2
+		}
+
+		if p+2 > ondisk.BlockSize {
+			t.Errorf("block %d's records end at byte %d, with no 0xFFFF sentinel", vbn, p)
+		}
+	}
+
+	entries, err := dir.List()
+	if err != nil || len(entries) != count {
+		t.Errorf("List() = %d entries, %v; want %d", len(entries), err, count)
 	}
 }
 
