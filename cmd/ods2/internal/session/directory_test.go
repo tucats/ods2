@@ -108,6 +108,11 @@ func TestCmdDirectoryBasic(t *testing.T) {
 	if !strings.Contains(got, "Total of 2 file(s)") {
 		t.Errorf("output = %q, want a total-files summary", got)
 	}
+
+	// The MFD is headed [000000], as VMS writes it, not [].
+	if !strings.Contains(got, ":[000000]\n") {
+		t.Errorf("output = %q, want a Directory ...:[000000] heading", got)
+	}
 }
 
 func TestCmdDirectorySpecificFile(t *testing.T) {

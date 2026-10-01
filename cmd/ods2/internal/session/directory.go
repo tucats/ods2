@@ -56,7 +56,12 @@ func cmdDirectory(s *Session, args []string, quals Qualifiers) error {
 	var totalBlocks uint32
 
 	for _, group := range groupMatchesByDir(matches) {
-		fmt.Fprintf(s.Stdout, "\nDirectory %s:[%s]\n\n", spec.Device, strings.Join(group.dirs, "."))
+		dir := strings.Join(group.dirs, ".")
+		if dir == "" {
+			dir = "000000" // the MFD, which VMS writes [000000]
+		}
+
+		fmt.Fprintf(s.Stdout, "\nDirectory %s:[%s]\n\n", spec.Device, dir)
 
 		for _, m := range group.matches {
 			line, blocks, err := formatDirectoryEntry(vol, m, showFile, showSize, showDate, full, s.Delim)
