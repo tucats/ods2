@@ -1,6 +1,7 @@
 package filespec
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -261,5 +262,12 @@ func TestParseDeviceOnly(t *testing.T) {
 	want := Spec{Device: "DUB1", Dirs: []string{"A"}, Name: "OLD", Type: "OLD", Version: "1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Parse() = %+v, want %+v", got, want)
+	}
+}
+
+func TestParseAboveMFDIsErrAboveMFD(t *testing.T) {
+	_, err := Parse("[-.UP]", Spec{})
+	if !errors.Is(err, ErrAboveMFD) {
+		t.Errorf("Parse([-.UP]) err = %v, want ErrAboveMFD", err)
 	}
 }

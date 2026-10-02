@@ -50,3 +50,5 @@ repository.
 - 2026-10-01: `InheritedDirectoryOptions` gives a new directory its
   parent's owner, as VMS 7.3 did and as LIB$CREATE_DIR's manual documents
   (govax Phase 34, Decisions 6); the CLI's `CREATE DIRECTORY` follows.
+- 2026-10-01: `filespec.ErrAboveMFD` names a relative directory that goes
+  above the MFD, so govax can report it as VMS does (RMS$_DIR).

@@ -1,9 +1,15 @@
 package filespec
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
+
+// ErrAboveMFD is a relative directory ("[-.X]", "[--]") that goes up past
+// the master file directory, which has no parent. VMS reports it as
+// RMS$_DIR, "error in directory name".
+var ErrAboveMFD = errors.New("goes above the master file directory")
 
 // Parse parses a VMS file specification, filling in any component the
 // input text leaves unspecified from def — typically the caller's current
@@ -184,7 +190,7 @@ func resolveDirectory(dirText string, defDirs []string) (dirs []string, recursiv
 	}
 
 	if ups > len(defDirs) {
-		return nil, false, fmt.Errorf("filespec: directory spec %q goes above the master file directory", dirText)
+		return nil, false, fmt.Errorf("filespec: directory spec %q %w", dirText, ErrAboveMFD)
 	}
 
 	base := append([]string{}, defDirs[:len(defDirs)-ups]...)
