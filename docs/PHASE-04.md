@@ -47,3 +47,6 @@ repository.
   entries never lowers the mark. `CreateDirectoryPath` refuses a ninth
   level, and a name over 39 characters, before making anything
   (`volume.ErrDirectoryName`, VMS's RMS$_DIR).
+- 2026-10-01: `InheritedDirectoryOptions` gives a new directory its
+  parent's owner, as VMS 7.3 did and as LIB$CREATE_DIR's manual documents
+  (govax Phase 34, Decisions 6); the CLI's `CREATE DIRECTORY` follows.

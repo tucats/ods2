@@ -60,7 +60,7 @@ func cmdCreate(s *Session, args []string, quals Qualifiers) error {
 //     limit is copied (a one-time snapshot, not a live link back to the
 //     parent).
 //   - /OWNER=[g,m] sets the owner UIC (ondisk.ParseUic); without it, the
-//     volume's default owner.
+//     parent directory's owner.
 //   - /PROTECTION=(S:RWED,...) sets the protection (ondisk.ParseProtection;
 //     a category it leaves out keeps the default); without it, the
 //     parent's protection less delete access.

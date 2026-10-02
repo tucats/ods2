@@ -247,3 +247,28 @@ func TestCreateDirectoryEntryHasNoVersionLimit(t *testing.T) {
 		t.Errorf("FILE.DAT's entry = %+v, %v, want version limit 3", entry, err)
 	}
 }
+
+// TestInheritedDirectoryOptions: without qualifiers a new directory gets
+// its parent's owner, version limit, and protection less delete.
+func TestInheritedDirectoryOptions(t *testing.T) {
+	vol, parent, bm, ib, _ := createDirFixture(t)
+
+	owner := ondisk.Uic{Group: 0o200, Member: 0o201}
+	protection := uint16(0x0000)
+
+	owned, err := vol.CreateDirectory(parent, "OWNED.DIR", DirectoryOptions{VersionLimit: 4, Owner: &owner, Protection: &protection}, bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	child, err := vol.CreateDirectory(owned, "CHILD.DIR", InheritedDirectoryOptions(owned), bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := child.Header
+	if h.Owner != owner || h.RecordAttributes.VersionLimit != 4 || h.FileProtection != ondisk.ProtectionNoDeleteAll {
+		t.Errorf("owner %v, limit %d, protection %#x; want %v, 4, %#x",
+			h.Owner, h.RecordAttributes.VersionLimit, h.FileProtection, owner, ondisk.ProtectionNoDeleteAll)
+	}
+}

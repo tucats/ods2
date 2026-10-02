@@ -576,7 +576,7 @@ defaults from its parent; the qualifiers apply to every level made.
   version limit at the moment of creation — a one-time snapshot, not a
   live link back to the parent.
 - `/OWNER=[g,m]` — the owner UIC, group and member in octal. Without it,
-  the volume's owner.
+  the parent directory's owner.
 - `/PROTECTION=(S:RWED,O:RWED,G:RE,W)` — the protection: for each
   category (`SYSTEM`, `OWNER`, `GROUP`, `WORLD`, or an abbreviation), the
   access it's granted (`R`ead, `W`rite, `E`xecute, `D`elete), or none.
