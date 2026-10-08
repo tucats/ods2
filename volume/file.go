@@ -84,9 +84,11 @@ func (f *File) UsedBlocks() uint32 {
 	if eof == 0 {
 		return 0
 	}
+
 	if f.Header.RecordAttributes.FirstFreeByte == 0 {
 		return eof - 1
 	}
+
 	return eof
 }
 
@@ -105,6 +107,7 @@ func (f *File) UsedBlocks() uint32 {
 // left in place for future growth).
 func (f *File) isUnwritten(vbn uint32) bool {
 	hasHighWaterMark := f.Header.IdentOffset > 39
+
 	return hasHighWaterMark && vbn >= f.Header.HighWaterMark
 }
 
@@ -131,6 +134,7 @@ func (f *File) ReadBlock(vbn uint32, buf []byte) error {
 
 	if f.isUnwritten(vbn) {
 		clear(buf[:ondisk.BlockSize])
+
 		return nil
 	}
 
@@ -138,7 +142,9 @@ func (f *File) ReadBlock(vbn uint32, buf []byte) error {
 	if err != nil {
 		return fmt.Errorf("volume: reading virtual block %d of file %v: %w", vbn, f.Header.Fid, err)
 	}
+
 	copy(buf, data)
+
 	return nil
 }
 
@@ -159,6 +165,7 @@ func resolveExtentLBN(extents []ExtentLocation, vbn uint32) (uint32, error) {
 		if remaining <= e.Count {
 			return e.StartLBN + (remaining - 1), nil
 		}
+
 		remaining -= e.Count
 	}
 
@@ -177,6 +184,9 @@ func readExtents(dev *Device, extents []ExtentLocation, vbn uint32) ([]byte, err
 	if err := dev.Container.ReadBlock(lbn, buf); err != nil {
 		return nil, fmt.Errorf("reading LBN %d: %w", lbn, err)
 	}
+
+	dev.CountOperation(1)
+
 	return buf, nil
 }
 
@@ -199,11 +209,13 @@ func buildFile(dev *Device, primary ondisk.FileHeader) (*File, error) {
 	f := &File{Device: dev, Header: primary}
 
 	header := primary
+
 	for {
 		extents, err := header.RetrievalPointers()
 		if err != nil {
 			return nil, fmt.Errorf("decoding retrieval pointers for file %v: %w", header.Fid, err)
 		}
+
 		for _, e := range extents {
 			// Every extent of a file is treated as living on the same
 			// device the file was opened against (dev.Rvn), rather than
@@ -238,6 +250,7 @@ func buildFile(dev *Device, primary ondisk.FileHeader) (*File, error) {
 		if err != nil {
 			return nil, fmt.Errorf("following header extension chain for file %v: %w", header.Fid, err)
 		}
+		
 		header = nextHeader
 	}
 

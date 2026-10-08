@@ -28,9 +28,11 @@ func (f *File) OpenForWrite(bm *Bitmap, ib *IndexBitmap) error {
 	if _, ok := f.Device.Container.(diskimage.WritableContainer); !ok {
 		return fmt.Errorf("volume: opening file %v for write: device is not open for write", f.Header.Fid)
 	}
+
 	f.bm = bm
 	f.ib = ib
 	f.maxWrittenVBN = f.UsedBlocks()
+
 	return nil
 }
 
@@ -65,9 +67,11 @@ func (f *File) WriteBlock(vbn uint32, data []byte) error {
 	if f.bm == nil || f.ib == nil {
 		return fmt.Errorf("volume: WriteBlock: file %v is not open for write", f.Header.Fid)
 	}
+
 	if len(data) != ondisk.BlockSize {
 		return fmt.Errorf("volume: WriteBlock: data must be exactly %d bytes, got %d", ondisk.BlockSize, len(data))
 	}
+
 	if vbn == 0 {
 		return fmt.Errorf("volume: WriteBlock: virtual block numbers are 1-based; 0 is not a valid VBN")
 	}
@@ -90,6 +94,7 @@ func (f *File) WriteBlock(vbn uint32, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("volume: WriteBlock: locating virtual block %d of file %v: %w", vbn, f.Header.Fid, err)
 	}
+
 	if err := container.WriteBlock(lbn, data); err != nil {
 		return fmt.Errorf("volume: WriteBlock: writing virtual block %d of file %v: %w", vbn, f.Header.Fid, err)
 	}
@@ -106,6 +111,9 @@ func (f *File) WriteBlock(vbn uint32, data []byte) error {
 	if f.Header.HighWaterMark < vbn+1 {
 		f.Header.HighWaterMark = vbn + 1
 	}
+
+	f.Device.CountOperation(1)
+
 	return nil
 }
 
@@ -159,6 +167,7 @@ func (f *File) CloseWithFinalByte(finalByte uint16) error {
 	if f.bm == nil || f.ib == nil {
 		return nil
 	}
+
 	if finalByte >= ondisk.BlockSize {
 		return fmt.Errorf("volume: closing file %v: finalByte %d is not a valid offset within a %d-byte block", f.Header.Fid, finalByte, ondisk.BlockSize)
 	}
@@ -171,6 +180,7 @@ func (f *File) CloseWithFinalByte(finalByte uint16) error {
 	h := f.Header
 	h.RecordAttributes.EndOfFileBlock = 0
 	h.RecordAttributes.FirstFreeByte = 0
+
 	if f.maxWrittenVBN > 0 {
 		h.RecordAttributes.EndOfFileBlock = f.maxWrittenVBN + 1
 		if finalByte != 0 {
@@ -181,6 +191,7 @@ func (f *File) CloseWithFinalByte(finalByte uint16) error {
 			h.RecordAttributes.EndOfFileBlock = f.maxWrittenVBN
 			h.RecordAttributes.FirstFreeByte = finalByte
 		}
+
 		if h.HighWaterMark < f.maxWrittenVBN+1 {
 			h.HighWaterMark = f.maxWrittenVBN + 1
 		}
@@ -190,6 +201,7 @@ func (f *File) CloseWithFinalByte(finalByte uint16) error {
 	if err != nil {
 		return fmt.Errorf("volume: closing file %v: %w", f.Header.Fid, err)
 	}
+
 	decoded, err := writeHeader(f.Device, container, h.Fid.Number(), h, areas)
 	if err != nil {
 		return fmt.Errorf("volume: closing file %v: recording final size: %w", f.Header.Fid, err)
@@ -251,6 +263,7 @@ func (vol *Volume) CreateFileVersion(dir *Directory, name string, version uint16
 		if err != nil {
 			return nil, fmt.Errorf("volume: creating %s: %w", name, err)
 		}
+
 		version = next
 	} else if _, err := dir.Lookup(name, version); err == nil {
 		return nil, fmt.Errorf("volume: creating %s;%d: %w", name, version, ErrExists)
@@ -262,6 +275,7 @@ func (vol *Volume) CreateFileVersion(dir *Directory, name string, version uint16
 	if err != nil {
 		return nil, fmt.Errorf("volume: creating %s;%d: %w", name, version, err)
 	}
+
 	recAttr.VersionLimit = versionLimit
 
 	f, err := CreateHeader(dir.Device, ib, NewFileHeader{
@@ -270,6 +284,7 @@ func (vol *Volume) CreateFileVersion(dir *Directory, name string, version uint16
 		Directory:        dir.Header.Fid,
 		RecordAttributes: recAttr,
 	})
+
 	if err != nil {
 		return nil, fmt.Errorf("volume: creating %s;%d: %w", name, version, err)
 	}
@@ -309,13 +324,16 @@ func resolveVersionLimit(dir *Directory, name string, version uint16) (uint16, e
 	if errors.Is(err, ErrNotFound) {
 		return dir.Header.RecordAttributes.VersionLimit, nil
 	}
+
 	if err != nil {
 		return 0, fmt.Errorf("resolving version limit for %s;%d: %w", name, version, err)
 	}
+
 	previous, err := readFileHeaderViaIndex(dir.Device, dir.Device.IndexFile.Extents, entry.Fid)
 	if err != nil {
 		return 0, fmt.Errorf("resolving version limit from previous version %s;%d: %w", name, entry.Version, err)
 	}
+
 	return previous.RecordAttributes.VersionLimit, nil
 }
 
@@ -344,6 +362,7 @@ func enforceVersionLimit(dir *Directory, name string, limit uint16, bm *Bitmap, 
 			return fmt.Errorf("enforcing version limit for %s: deleting excess version %d: %w", name, v, err)
 		}
 	}
+
 	return nil
 }
 
@@ -356,15 +375,18 @@ func enforceVersionLimit(dir *Directory, name string, limit uint16, bm *Bitmap, 
 // versions.
 func excessVersions(entries []ondisk.DirEntry, name string, keep uint16) []uint16 {
 	var versions []uint16
+
 	for _, e := range entries {
 		if strings.EqualFold(e.Name, name) {
 			versions = append(versions, e.Version)
 		}
 	}
+
 	if uint16(len(versions)) <= keep {
 		return nil
 	}
 
 	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
+	
 	return versions[:len(versions)-int(keep)]
 }

@@ -2,6 +2,7 @@ package volume
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/tucats/ods2/diskimage"
 	"github.com/tucats/ods2/ondisk"
@@ -48,6 +49,9 @@ type Device struct {
 	// accessed is the files accessed now (Volume.Access, access.go), by
 	// file number: each one's shared File.
 	accessed map[uint32]*File
+
+	// Operations count is an atomic counter for tracking block I/O operations.
+	operations atomic.Int64
 }
 
 // Volume is a mounted ODS-2 volume, spanning one or more member Devices.
@@ -70,6 +74,7 @@ func Mount(containers ...diskimage.Container) (*Volume, error) {
 	}
 
 	vol := &Volume{}
+
 	for i, c := range containers {
 		rvn := uint8(i + 1)
 
@@ -139,6 +144,7 @@ func bootstrapIndexFile(dev *Device) error {
 	if err != nil {
 		return fmt.Errorf("decoding index file header at LBN %d: %w", lbn, err)
 	}
+
 	if header.Fid.Number() != ondisk.IndexFileFid.Number() || header.Fid.Seq != ondisk.IndexFileFid.Seq {
 		return fmt.Errorf("index file header at LBN %d has unexpected file ID %v", lbn, header.Fid)
 	}
@@ -149,6 +155,7 @@ func bootstrapIndexFile(dev *Device) error {
 	}
 
 	dev.IndexFile = indexFile
+
 	return nil
 }
 
@@ -162,11 +169,13 @@ func (vol *Volume) deviceByRvn(rvn uint8) (*Device, error) {
 	if target == 0 {
 		target = 1
 	}
+
 	for _, d := range vol.Devices {
 		if d.Rvn == target {
 			return d, nil
 		}
 	}
+
 	return nil, fmt.Errorf("volume: no device with relative volume number %d is mounted", target)
 }
 
@@ -193,6 +202,7 @@ func (vol *Volume) OpenFID(fid ondisk.Fid) (*File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("volume: opening file %v: %w", fid, err)
 	}
+
 	return f, nil
 }
 
@@ -215,20 +225,24 @@ func findHomeBlock(c diskimage.Container) (ondisk.HomeBlock, error) {
 	}
 
 	var lastErr error
+
 	for lbn := uint32(1); lbn <= limit; lbn++ {
 		if err := c.ReadBlock(lbn, buf); err != nil {
 			lastErr = err
+
 			continue
 		}
 
 		home, err := ondisk.DecodeHomeBlock(buf)
 		if err != nil {
 			lastErr = err
+
 			continue
 		}
 
 		if home.HomeLBN != lbn {
 			lastErr = fmt.Errorf("home block at LBN %d reports its own location as LBN %d", lbn, home.HomeLBN)
+
 			continue
 		}
 
@@ -238,5 +252,27 @@ func findHomeBlock(c diskimage.Container) (ondisk.HomeBlock, error) {
 	if lastErr != nil {
 		return ondisk.HomeBlock{}, fmt.Errorf("no valid ODS-2 home block found in the first %d blocks: %w", limit, lastErr)
 	}
+
 	return ondisk.HomeBlock{}, fmt.Errorf("no valid ODS-2 home block found in the first %d blocks", limit)
+}
+
+// CountOperation increments the number of logical I/O operations for the device.
+func (d *Device) CountOperation(n int) {
+	d.operations.Add(int64(n))
+}
+
+// Operations returns the total number of logical I/O operations for the device.
+func (d *Device) Operations() int64 {
+	return d.operations.Load()
+}
+
+// Operations returns the totla number of logical I/O operations for the volume.
+func (vol *Volume) Operations() int64 {
+	count := int64(0)
+	
+	for _, dev := range vol.Devices {
+		count += dev.Operations()
+	}
+
+	return count
 }

@@ -47,6 +47,13 @@ func TestCreateDirectoryLayoutMatchesVMS(t *testing.T) {
 		t.Fatalf("CreateDirectory: %v", err)
 	}
 
+	// This should be at least the logical operations performed on the volume to
+	// create the directory, between MFD and BITMAP access as well as writing the
+	// actual directory file.
+	if ops := vol.Operations(); ops < 10 {
+		t.Fatalf("CreateDirectory: insufficient block operations performed, got %d, want at least 10", ops)
+	}
+
 	h := sub.Header
 	if want := ondisk.FchDirectory | ondisk.FchContig; h.FileCharacteristics != want {
 		t.Errorf("FileCharacteristics = %#x, want %#x", h.FileCharacteristics, want)
