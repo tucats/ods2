@@ -39,6 +39,18 @@ type Reader struct {
 	format ondisk.RecordFormat
 
 	fixedSize int // for RecordFormatFixed/Undefined: the size of every record
+
+	// recordOffset is where the record Next last returned starts.
+	recordOffset int64
+}
+
+// RecordOffset is the byte offset in the file at which the record Next
+// last returned starts: its framing (a length word, for Variable and
+// VFC records) included. RMS names a sequential file's record by it, as
+// its record's file address (RFA): the virtual block holding that byte
+// (offset/512+1) and the byte's offset in it.
+func (r *Reader) RecordOffset() int64 {
+	return r.recordOffset
 }
 
 // NewReader creates a Reader over f's contents, starting at its first
@@ -92,6 +104,18 @@ func FileByteLength(attr ondisk.RecAttr) int64 {
 // read; see ErrCorruptRecord for how a truncated or corrupt trailing
 // record is reported instead.
 func (r *Reader) Next() ([]byte, error) {
+	start := r.stream.offset()
+
+	rec, err := r.next()
+	if err == nil {
+		r.recordOffset = start
+	}
+
+	return rec, err
+}
+
+// next is Next's work, by record format.
+func (r *Reader) next() ([]byte, error) {
 	switch r.format {
 	case ondisk.RecordFormatFixed, ondisk.RecordFormatUndefined:
 		return r.nextFixed()

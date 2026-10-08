@@ -347,3 +347,48 @@ func ondiskHeader(vol *volume.Volume, fid ondisk.Fid) (ondisk.FileHeader, error)
 
 	return f.Header, nil
 }
+
+// TestRecordOffsets: Reader and Writer report where each record starts,
+// its length word included; an odd-length Variable record's pad byte
+// goes before the next one's start.
+func TestRecordOffsets(t *testing.T) {
+	fx := newSharedFixture(t)
+	a := fx.access(t, volume.AccessMode{Write: true})
+
+	w, err := NewAppender(a.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	long := strings.Repeat("y", 600)
+	want := []int64{0, 6, 16, 618}
+
+	for i, r := range []string{"abc", "defghijk", long, "z"} {
+		put(t, w, r)
+
+		if got := w.RecordOffset(); got != want[i] {
+			t.Errorf("Put %d: offset %d, want %d", i, got, want[i])
+		}
+	}
+
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := NewReader(a.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range want {
+		if _, err := r.Next(); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := r.RecordOffset(); got != want[i] {
+			t.Errorf("Next %d: offset %d, want %d", i, got, want[i])
+		}
+	}
+
+	_ = a.Deaccess()
+}

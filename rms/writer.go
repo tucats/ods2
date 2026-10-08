@@ -45,6 +45,16 @@ type Writer struct {
 	// is then, and is on the disk, with the end of file moved past it,
 	// before Put returns.
 	shared bool
+
+	// recordOffset is where the record Put last wrote starts.
+	recordOffset int64
+}
+
+// RecordOffset is the byte offset in the file at which the record Put
+// last wrote starts (see Reader.RecordOffset): for a shared Writer, where
+// the file's end of file was when it was put.
+func (w *Writer) RecordOffset() int64 {
+	return w.recordOffset
 }
 
 // NewWriter creates a Writer that appends records to f, starting at f's
@@ -187,9 +197,13 @@ func (w *Writer) Put(record []byte) error {
 		}
 	}
 
+	start := w.offset()
+
 	if err := w.put(record); err != nil {
 		return err
 	}
+
+	w.recordOffset = start
 
 	if w.shared {
 		return w.flush()

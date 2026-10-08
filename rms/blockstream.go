@@ -75,6 +75,11 @@ func (s *blockStream) fill(n int) error {
 	return nil
 }
 
+// offset is the byte offset in the file of the next byte to be read.
+func (s *blockStream) offset() int64 {
+	return s.fetched - int64(len(s.buf)-s.bufOff)
+}
+
 func (s *blockStream) ReadByte() (byte, error) {
 	if err := s.fill(1); err != nil {
 		return 0, err
