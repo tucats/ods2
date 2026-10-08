@@ -392,3 +392,86 @@ func TestRecordOffsets(t *testing.T) {
 
 	_ = a.Deaccess()
 }
+
+// TestReaderSeek: SeekTo rereads a record at its RecordOffset, and starts
+// at the next one from Offset; a record changed on the disk after the
+// Reader buffered its block is read as it is now.
+func TestReaderSeek(t *testing.T) {
+	fx := newSharedFixture(t, "one", "two", "three")
+	a := fx.access(t, volume.AccessMode{Write: true})
+
+	r, err := NewReader(a.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := r.Next(); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := r.Next()
+	if err != nil || string(rec) != "two" {
+		t.Fatalf("second record %q, %v", rec, err)
+	}
+
+	two, next := r.RecordOffset(), r.Offset()
+
+	// Change "two" to "TWO" on the disk, past the Reader's buffer: its
+	// length word is 2 bytes, then the text.
+	block := make([]byte, ondisk.BlockSize)
+	if err := a.File.ReadBlock(1, block); err != nil {
+		t.Fatal(err)
+	}
+
+	copy(block[two+2:], "TWO")
+
+	if err := a.File.WriteBlock(1, block); err != nil {
+		t.Fatal(err)
+	}
+
+	r.SeekTo(two)
+
+	if rec, err := r.Next(); err != nil || string(rec) != "TWO" {
+		t.Fatalf("after SeekTo to two: %q, %v", rec, err)
+	}
+
+	r.SeekTo(next)
+
+	if rec, err := r.Next(); err != nil || string(rec) != "three" {
+		t.Fatalf("after SeekTo past two: %q, %v", rec, err)
+	}
+
+	if _, err := r.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("at the end: %v, want io.EOF", err)
+	}
+}
+
+// TestSharedWriterRereadsLastBlock: a shared Writer's Put starts from
+// the file's last block as it is on the disk, so a record changed in
+// place there since its last Put is kept.
+func TestSharedWriterRereadsLastBlock(t *testing.T) {
+	fx := newSharedFixture(t, "one")
+	a := fx.access(t, volume.AccessMode{Write: true})
+
+	w, err := NewAppender(a.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w.SetShared(true)
+	put(t, w, "two")
+
+	block := make([]byte, ondisk.BlockSize)
+	if err := a.File.ReadBlock(1, block); err != nil {
+		t.Fatal(err)
+	}
+
+	copy(block[2:], "ONE")
+
+	if err := a.File.WriteBlock(1, block); err != nil {
+		t.Fatal(err)
+	}
+
+	put(t, w, "three")
+	wantAll(t, fx.all(t), "ONE", "two", "three")
+}

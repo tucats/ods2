@@ -75,6 +75,11 @@ func (s *blockStream) fill(n int) error {
 	return nil
 }
 
+// seek drops whatever s has buffered and starts it at byte offset off.
+func (s *blockStream) seek(off int64) {
+	s.buf, s.bufOff, s.fetched = nil, 0, off
+}
+
 // offset is the byte offset in the file of the next byte to be read.
 func (s *blockStream) offset() int64 {
 	return s.fetched - int64(len(s.buf)-s.bufOff)

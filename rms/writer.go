@@ -190,10 +190,11 @@ func (w *Writer) Put(record []byte) error {
 	}
 
 	if w.shared {
-		if end := FileByteLength(w.file.Header.RecordAttributes); end != w.offset() {
-			if err := w.seek(end); err != nil {
-				return err
-			}
+		// Another writer may have moved the end of file, or changed the
+		// bytes of the last, partial block in place, since this Writer
+		// last wrote: start again from the file as it is now.
+		if err := w.seek(FileByteLength(w.file.Header.RecordAttributes)); err != nil {
+			return err
 		}
 	}
 

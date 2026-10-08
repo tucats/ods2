@@ -53,6 +53,22 @@ func (r *Reader) RecordOffset() int64 {
 	return r.recordOffset
 }
 
+// Offset is the byte offset in the file at which the next record Next
+// reads starts.
+func (r *Reader) Offset() int64 {
+	return r.stream.offset()
+}
+
+// SeekTo moves the Reader so the next record Next reads starts at byte
+// offset off: a record's RecordOffset, to read it again, or one past
+// it. Whatever the Reader had read ahead is dropped, so Next reads the
+// file's blocks afresh (another writer may have changed them). It
+// doesn't check that a record starts at off (not io.Seeker's Seek, which
+// takes a whence and returns an error).
+func (r *Reader) SeekTo(off int64) {
+	r.stream.seek(off)
+}
+
 // NewReader creates a Reader over f's contents, starting at its first
 // record.
 func NewReader(f *volume.File) (*Reader, error) {
