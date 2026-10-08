@@ -57,7 +57,7 @@ func NewReader(f *volume.File) (*Reader, error) {
 	}
 
 	return &Reader{
-		stream:    newBlockStream(f, FileByteLength(attr)),
+		stream:    newBlockStream(f, func() int64 { return FileByteLength(f.Header.RecordAttributes) }),
 		format:    attr.Format,
 		fixedSize: int(attr.MaxRecordSize),
 	}, nil

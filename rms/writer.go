@@ -18,10 +18,10 @@ import (
 // reads them back.
 //
 // A Writer only ever appends: it has no notion of overwriting an existing
-// record, and it assumes it's writing a brand-new file (or replacing an
-// existing file's content from its very first byte) — the same assumption
-// volume.File.OpenForWrite's own maxWrittenVBN seeding documents for the
-// underlying block-level write path this builds on.
+// record. One from NewWriter starts at the file's first byte (writing a
+// brand-new file, or replacing an existing file's content from its very
+// first byte); one from NewAppender starts at the file's end of file.
+// SetShared makes it follow other writers' appends (see SetShared).
 type Writer struct {
 	file   *volume.File
 	format ondisk.RecordFormat
@@ -39,6 +39,12 @@ type Writer struct {
 	vbn uint32
 
 	closed bool
+
+	// shared is set by SetShared: the file has other writers or readers
+	// (volume.Access), so every Put goes at the file's end of file as it
+	// is then, and is on the disk, with the end of file moved past it,
+	// before Put returns.
+	shared bool
 }
 
 // NewWriter creates a Writer that appends records to f, starting at f's
@@ -67,6 +73,98 @@ func NewWriter(f *volume.File) (*Writer, error) {
 	}, nil
 }
 
+// NewAppender is NewWriter for adding records to the end of a file that
+// already has some: the Writer starts at f's end of file, with the
+// partly used last block's data read back in, so the first record goes
+// right after the last one (what RMS does for a stream connected with
+// RAB$V_EOF).
+func NewAppender(f *volume.File) (*Writer, error) {
+	w, err := NewWriter(f)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := w.seek(FileByteLength(f.Header.RecordAttributes)); err != nil {
+		return nil, err
+	}
+
+	return w, nil
+}
+
+// SetShared turns sharing on or off. A shared Writer puts each record at
+// the file's end of file as it is when Put is called, which another
+// Writer of the same (shared) file may have moved, and writes the record
+// through before returning: its block is on the disk and the file's end
+// of file is past it (volume.File.SetEndOfFile), so other readers and
+// writers see it at once. That is how RMS lets several processes append
+// to one sequential file without overwriting each other's records.
+func (w *Writer) SetShared(shared bool) {
+	w.shared = shared
+}
+
+// offset is the byte offset in the file at which the next record goes.
+func (w *Writer) offset() int64 {
+	return int64(w.vbn-1)*ondisk.BlockSize + int64(len(w.buf))
+}
+
+// seek moves the Writer to byte offset in the file, reading back the
+// data before it in that offset's block, so the block can be rewritten
+// whole.
+func (w *Writer) seek(offset int64) error {
+	w.vbn = uint32(offset/ondisk.BlockSize) + 1
+	w.buf = w.buf[:0]
+
+	if partial := offset % ondisk.BlockSize; partial > 0 {
+		block := make([]byte, ondisk.BlockSize)
+		if err := w.file.ReadBlock(w.vbn, block); err != nil {
+			return fmt.Errorf("rms: reading virtual block %d: %w", w.vbn, err)
+		}
+
+		w.buf = append(w.buf, block[:partial]...)
+	}
+
+	return nil
+}
+
+// Flush writes the partly filled last block, if there is one, and sets
+// the file's end of file (in memory: volume.File.SetEndOfFile) to just
+// past the last record, without closing the Writer. RMS's $FLUSH, and
+// what a shared Writer does after every Put; the file's header reaches
+// the disk with volume.File.WriteAttributes or the last deaccess.
+func (w *Writer) Flush() error {
+	if w.closed {
+		return fmt.Errorf("rms: Flush after Close")
+	}
+
+	// A shared Writer's records are on the disk already (Put wrote them
+	// through); if another writer has appended since, this one's buffered
+	// block is out of date, and writing it would undo that append.
+	if w.shared && FileByteLength(w.file.Header.RecordAttributes) != w.offset() {
+		return nil
+	}
+
+	return w.flush()
+}
+
+// flush is Flush's work: the partial block written, the end of file set
+// to the Writer's position.
+func (w *Writer) flush() error {
+
+	if len(w.buf) > 0 {
+		block := make([]byte, ondisk.BlockSize)
+		copy(block, w.buf)
+
+		if err := w.file.WriteBlock(w.vbn, block); err != nil {
+			return fmt.Errorf("rms: writing virtual block %d: %w", w.vbn, err)
+		}
+	}
+
+	offset := w.offset()
+	w.file.SetEndOfFile(uint32(offset/ondisk.BlockSize)+1, uint16(offset%ondisk.BlockSize))
+
+	return nil
+}
+
 // Put writes one record. Its framing (or lack of it) depends entirely on
 // the file's record format, exactly mirroring how Reader.Next() would read
 // the same bytes back: for RecordFormatVFC, record must include its
@@ -81,6 +179,27 @@ func (w *Writer) Put(record []byte) error {
 		return fmt.Errorf("rms: Put called on a Writer that has already been Closed")
 	}
 
+	if w.shared {
+		if end := FileByteLength(w.file.Header.RecordAttributes); end != w.offset() {
+			if err := w.seek(end); err != nil {
+				return err
+			}
+		}
+	}
+
+	if err := w.put(record); err != nil {
+		return err
+	}
+
+	if w.shared {
+		return w.flush()
+	}
+
+	return nil
+}
+
+// put frames and appends one record (Put's work, without sharing).
+func (w *Writer) put(record []byte) error {
 	switch w.format {
 	case ondisk.RecordFormatFixed, ondisk.RecordFormatUndefined:
 		return w.putFixed(record)
@@ -209,9 +328,20 @@ func (w *Writer) append(data []byte) error {
 //
 // Close is idempotent — calling it again after it has already run is a
 // no-op — so callers can defer Close unconditionally.
+//
+// A shared Writer's Close is its Flush: the file's end of file belongs to
+// all its writers, and its header is written by its last deaccess
+// (volume.Access.Deaccess), not by one Writer.
 func (w *Writer) Close() error {
 	if w.closed {
 		return nil
+	}
+
+	if w.shared {
+		err := w.Flush()
+		w.closed = true
+
+		return err
 	}
 
 	w.closed = true

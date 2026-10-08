@@ -196,7 +196,13 @@ func (f *File) CloseWithFinalByte(finalByte uint16) error {
 	}
 
 	f.Header = decoded
-	f.bm, f.ib = nil, nil
+
+	// A File other accessors are writing (access.go) stays armed for
+	// them.
+	if f.share.writers == 0 {
+		f.bm, f.ib = nil, nil
+	}
+
 	return nil
 }
 

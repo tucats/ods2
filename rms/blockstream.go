@@ -18,53 +18,51 @@ import (
 // optimization; reading everything as a plain stream is correct either
 // way.)
 //
-// It also knows the file's exact valid length in bytes — which is
-// generally NOT the same as its allocated size in whole blocks, since the
-// last allocated block is typically only partly used — so that reading
-// never returns trailing zero-padding left over in that last block as if
-// it were real data.
+// It also knows where the file's valid data ends, which is generally NOT
+// the end of its allocated blocks, since the last allocated block is
+// typically only partly used — so that reading never returns trailing
+// zero-padding left over in that last block as if it were real data. It
+// asks the file each time it reaches that end, rather than once: a file
+// shared with a writer (volume.Access) can grow while it's being read,
+// and the reader then sees what was appended, even within the block that
+// was its last.
 type blockStream struct {
 	file  *volume.File
-	limit int64 // total valid bytes in the file
+	limit func() int64 // the file's valid length in bytes, now
 
-	nextVBN uint32 // next virtual block to fetch from file, when buf runs low
 	buf     []byte // bytes fetched but not yet consumed
 	bufOff  int    // read position within buf
 	fetched int64  // total bytes fetched from file so far (consumed + still buffered)
 }
 
-// newBlockStream creates a blockStream over f, treating it as having
-// exactly limit valid bytes regardless of how many whole blocks it
-// occupies.
-func newBlockStream(f *volume.File, limit int64) *blockStream {
-	return &blockStream{file: f, limit: limit, nextVBN: 1}
+// newBlockStream creates a blockStream over f, whose valid length limit
+// reports, reading from its first byte.
+func newBlockStream(f *volume.File, limit func() int64) *blockStream {
+	return &blockStream{file: f, limit: limit}
 }
 
-// fill ensures at least n unread bytes are available in buf (or as many
-// as the file actually has left, if fewer than n remain), fetching
-// further blocks from the underlying file as needed. It returns io.EOF
-// once the file's exact byte limit has been reached, even if that leaves
-// fewer than n bytes available — callers distinguish "nothing at all
-// left" from "a truncated trailing record" by checking how much ended up
-// available after fill returns an error (see ReadFull).
+// fill makes sure at least n unconsumed bytes are buffered, fetching more
+// blocks from the file as needed (returning io.EOF if the file runs out
+// first). Each fetch reads the block holding the next unfetched byte and
+// takes from that byte on, so a block fetched while it was the file's
+// partly used last block is read again, from where the data ended, once
+// the file has grown.
 func (s *blockStream) fill(n int) error {
 	for len(s.buf)-s.bufOff < n {
-		remainingInFile := s.limit - s.fetched
+		remainingInFile := s.limit() - s.fetched
 		if remainingInFile <= 0 {
 			return io.EOF
 		}
 
 		block := make([]byte, ondisk.BlockSize)
-		if err := s.file.ReadBlock(s.nextVBN, block); err != nil {
+		vbn := uint32(s.fetched/ondisk.BlockSize) + 1
+
+		if err := s.file.ReadBlock(vbn, block); err != nil {
 			return err
 		}
 
-		s.nextVBN++
-
+		block = block[s.fetched%ondisk.BlockSize:]
 		if int64(len(block)) > remainingInFile {
-			// This is the file's last block, and only part of it holds
-			// real data — the rest is unused allocated space, not
-			// something a reader should ever see.
 			block = block[:remainingInFile]
 		}
 
@@ -77,8 +75,6 @@ func (s *blockStream) fill(n int) error {
 	return nil
 }
 
-// ReadByte reads and consumes the next single byte, returning io.EOF once
-// the file's exact byte limit has been reached.
 func (s *blockStream) ReadByte() (byte, error) {
 	if err := s.fill(1); err != nil {
 		return 0, err

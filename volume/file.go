@@ -42,6 +42,10 @@ type File struct {
 	// this File isn't writable at all) — see WriteBlock and Close's own doc
 	// comments (writefile.go) for how it's maintained and used.
 	maxWrittenVBN uint32
+
+	// share is the file's accessor counts, while it's accessed (see
+	// access.go): then this File is the one every accessor shares.
+	share sharing
 }
 
 // Blocks reports the file's length in virtual blocks (VBNs), as recorded

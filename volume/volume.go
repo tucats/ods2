@@ -44,6 +44,10 @@ type Device struct {
 	// possibly be dirty," not "opened but clean."
 	bitmap      *Bitmap
 	indexBitmap *IndexBitmap
+
+	// accessed is the files accessed now (Volume.Access, access.go), by
+	// file number: each one's shared File.
+	accessed map[uint32]*File
 }
 
 // Volume is a mounted ODS-2 volume, spanning one or more member Devices.
@@ -166,11 +170,18 @@ func (vol *Volume) deviceByRvn(rvn uint8) (*Device, error) {
 	return nil, fmt.Errorf("volume: no device with relative volume number %d is mounted", target)
 }
 
-// OpenFID opens the file identified by fid.
+// OpenFID opens the file identified by fid. While the file is accessed
+// (Volume.Access, access.go), this is the File its accessors share, so
+// what's read from it is current; otherwise it's a File of its own, read
+// from the disk.
 func (vol *Volume) OpenFID(fid ondisk.Fid) (*File, error) {
 	dev, err := vol.deviceByRvn(fid.Rvn)
 	if err != nil {
 		return nil, fmt.Errorf("volume: opening file %v: %w", fid, err)
+	}
+
+	if f, ok := dev.accessedFile(fid); ok {
+		return f, nil
 	}
 
 	header, err := readFileHeaderViaIndex(dev, dev.IndexFile.Extents, fid)

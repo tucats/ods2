@@ -138,7 +138,8 @@ var ErrDirectoryNotEmpty = errors.New("directory is not empty")
 // directory that still has entries (ErrDirectoryNotEmpty). A Fid that no
 // longer names a file (its slot is free, or holds a newer file) wraps
 // ErrNotFound. As with DeleteFile, bm and ib changes are in memory until
-// their Flush.
+// their Flush, and an accessed file is only marked for delete, freed at
+// its last Deaccess.
 func DeleteHeader(dev *Device, fid ondisk.Fid, bm *Bitmap, ib *IndexBitmap) error {
 	switch fid.Number() {
 	case ondisk.MasterFileDirectoryFid.Number(), ondisk.IndexFileFid.Number(), ondisk.BitmapFileFid.Number():
@@ -158,6 +159,10 @@ func DeleteHeader(dev *Device, fid ondisk.Fid, bm *Bitmap, ib *IndexBitmap) erro
 		if !empty {
 			return fmt.Errorf("volume: deleting file %v: %w", fid, ErrDirectoryNotEmpty)
 		}
+	}
+
+	if dev.markForDelete(fid) {
+		return nil
 	}
 
 	if err := freeFileStorage(dev, primary, bm, ib); err != nil {
@@ -273,6 +278,10 @@ func writeFreedSlot(dev *Device, container diskimage.WritableContainer, fileNumb
 // until their own Flush is called — Directory.Remove's own directory-block
 // rewrites, by contrast, are immediate, unbuffered writes, matching every
 // other directory mutation in this package.
+//
+// A file that's accessed (Volume.Access) loses its directory entry, but
+// step 5 waits for its last accessor's Deaccess: it's "marked for
+// delete" (see access.go).
 func DeleteFile(dir *Directory, name string, version uint16, bm *Bitmap, ib *IndexBitmap) error {
 	if version == 0 {
 		return fmt.Errorf("volume: deleting %s: a specific version is required (0 is not a valid version)", name)
@@ -326,6 +335,12 @@ func DeleteFile(dir *Directory, name string, version uint16, bm *Bitmap, ib *Ind
 
 	if err := dir.Remove(name, version, bm, ib); err != nil {
 		return fmt.Errorf("volume: deleting %s;%d: %w", name, version, err)
+	}
+
+	// An accessed file keeps its storage until its last accessor is done
+	// with it (access.go).
+	if dev.markForDelete(entry.Fid) {
+		return nil
 	}
 
 	if err := freeFileStorage(dev, primary, bm, ib); err != nil {

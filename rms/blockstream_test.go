@@ -12,7 +12,7 @@ import (
 func TestBlockStreamReadByte(t *testing.T) {
 	data := []byte("HELLO")
 	f := newTestFile(t, odstest.FileHeaderFixture{}, data)
-	s := newBlockStream(f, int64(len(data)))
+	s := newBlockStream(f, fixedLimit(int64(len(data))))
 
 	for i, want := range data {
 		got, err := s.ReadByte()
@@ -33,7 +33,7 @@ func TestBlockStreamReadByte(t *testing.T) {
 func TestBlockStreamReadFull(t *testing.T) {
 	data := []byte("HELLO WORLD")
 	f := newTestFile(t, odstest.FileHeaderFixture{}, data)
-	s := newBlockStream(f, int64(len(data)))
+	s := newBlockStream(f, fixedLimit(int64(len(data))))
 
 	got, err := s.ReadFull(5)
 	if err != nil {
@@ -64,7 +64,7 @@ func TestBlockStreamReadFullAcrossBlockBoundary(t *testing.T) {
 	}
 
 	f := newTestFile(t, odstest.FileHeaderFixture{}, data)
-	s := newBlockStream(f, int64(len(data)))
+	s := newBlockStream(f, fixedLimit(int64(len(data))))
 
 	if _, err := s.ReadFull(ondisk.BlockSize - 10); err != nil {
 		t.Fatalf("ReadFull(BlockSize-10): %v", err)
@@ -93,7 +93,7 @@ func TestBlockStreamStopsAtLimitNotBlockSize(t *testing.T) {
 	}
 
 	f := newTestFile(t, odstest.FileHeaderFixture{}, block)
-	s := newBlockStream(f, 5) // limit says only 5 bytes are valid
+	s := newBlockStream(f, fixedLimit(5)) // limit says only 5 bytes are valid
 
 	got, err := s.ReadFull(5)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestBlockStreamStopsAtLimitNotBlockSize(t *testing.T) {
 func TestBlockStreamReadFullCleanEOF(t *testing.T) {
 	data := []byte("ABC")
 	f := newTestFile(t, odstest.FileHeaderFixture{}, data)
-	s := newBlockStream(f, int64(len(data)))
+	s := newBlockStream(f, fixedLimit(int64(len(data))))
 
 	if _, err := s.ReadFull(3); err != nil {
 		t.Fatalf("ReadFull(3): %v", err)
@@ -127,11 +127,16 @@ func TestBlockStreamReadFullCleanEOF(t *testing.T) {
 func TestBlockStreamReadFullUnexpectedEOF(t *testing.T) {
 	data := []byte("ABC")
 	f := newTestFile(t, odstest.FileHeaderFixture{}, data)
-	s := newBlockStream(f, int64(len(data)))
+	s := newBlockStream(f, fixedLimit(int64(len(data))))
 
 	// Only 3 bytes exist; asking for 5 leaves a partial (1-4 byte) read
 	// dangling, which is a truncated/corrupt record, not a clean EOF.
 	if _, err := s.ReadFull(5); err != io.ErrUnexpectedEOF {
 		t.Fatalf("ReadFull(5) with only 3 bytes available: err = %v, want io.ErrUnexpectedEOF", err)
 	}
+}
+
+// fixedLimit is a blockStream limit that never changes.
+func fixedLimit(n int64) func() int64 {
+	return func() int64 { return n }
 }
