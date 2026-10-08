@@ -67,6 +67,17 @@ func (vol *Volume) Dismount() error {
 		}
 	}
 
+	// A file still accessed (see access.go) keeps its end of file and
+	// high-water mark in memory until its last deaccess; write its
+	// header now, so the volume is consistent without that deaccess.
+	for _, dev := range vol.Devices {
+		for _, f := range dev.accessed {
+			if f.bm != nil || f.share.attributesChanged {
+				note(f.WriteAttributes())
+			}
+		}
+	}
+
 	for _, dev := range vol.Devices {
 		if dev.bitmap != nil {
 			note(dev.bitmap.Flush())

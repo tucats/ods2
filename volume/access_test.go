@@ -3,7 +3,10 @@ package volume
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"testing"
+
+	"github.com/tucats/ods2/diskimage"
 
 	"github.com/tucats/ods2/ondisk"
 )
@@ -370,5 +373,81 @@ func assertCleanDisk(t *testing.T, dev *Device, bm *Bitmap) {
 
 	for _, d := range report.Discrepancies {
 		t.Error(d)
+	}
+}
+
+// TestDismountWithOpenFiles: OpenFiles counts accessed files, and a
+// dismount writes an open file's end of file, so a new mount reads it.
+func TestDismountWithOpenFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "OPEN.dsk")
+
+	c, err := diskimage.Create(path, 2000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Initialize(c, InitializeOptions{Label: "OPEN"}); err != nil {
+		t.Fatal(err)
+	}
+
+	vol, err := Mount(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dev := vol.Devices[0]
+	bm, _ := dev.Bitmap()
+	ib, _ := dev.IndexBitmap()
+
+	mfd, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := vol.CreateFile(mfd, "OPEN.DAT", ondisk.RecAttr{}, bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := vol.AccessFile(f, AccessMode{Write: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n := vol.OpenFiles(); n != 1 {
+		t.Fatalf("OpenFiles = %d, want 1", n)
+	}
+
+	for vbn := uint32(1); vbn <= 3; vbn++ {
+		if err := a.File.WriteBlock(vbn, blockOf('o')); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	a.File.SetEndOfFile(4, 0)
+
+	if err := vol.Dismount(); err != nil {
+		t.Fatal(err)
+	}
+
+	c2, err := diskimage.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = c2.Close() })
+
+	again, err := Mount(c2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := again.OpenFID(f.Header.Fid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if g.UsedBlocks() != 3 {
+		t.Errorf("after the dismount, %d blocks used, want 3", g.UsedBlocks())
 	}
 }

@@ -53,3 +53,7 @@ repository.
   byte offset where the record last read or written starts (govax Phase
   47, subtask 6: a sequential record's RFA, for record locks and
   RAB$W_RFA).
+- 2026-10-08: `Volume.OpenFiles` (how many files are accessed), and
+  `Volume.Dismount` writes each still-accessed file's header first, so a
+  forced dismount keeps an open file's end of file (govax Phase 47,
+  subtask 8).

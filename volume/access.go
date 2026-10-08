@@ -128,6 +128,17 @@ func (dev *Device) accessedFile(fid ondisk.Fid) (*File, bool) {
 	return f, true
 }
 
+// OpenFiles is how many of the volume's files are accessed now: what
+// keeps VMS's DISMOUNT from going ahead without /ABORT.
+func (vol *Volume) OpenFiles() int {
+	n := 0
+	for _, dev := range vol.Devices {
+		n += len(dev.accessed)
+	}
+
+	return n
+}
+
 // Accessed reports whether the file with ID fid is accessed now (open, by
 // Volume.Access).
 func (vol *Volume) Accessed(fid ondisk.Fid) bool {
