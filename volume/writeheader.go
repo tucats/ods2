@@ -89,7 +89,7 @@ type NewFileHeader struct {
 // coincidentally matching a new file that reused the same slot. A wrap to 0
 // is bumped to 1, since this project (matching IndexBitmap.FindFreeSlot's
 // own check) treats a stored Seq of 0 as meaning "this slot has never held a
-// file."
+// file".
 func CreateHeader(dev *Device, ib *IndexBitmap, opts NewFileHeader) (*File, error) {
 	container, ok := dev.Container.(diskimage.WritableContainer)
 	if !ok {
@@ -175,6 +175,7 @@ func CreateHeader(dev *Device, ib *IndexBitmap, opts NewFileHeader) (*File, erro
 func nextFileFid(dev *Device, fileNumber uint32) (ondisk.Fid, error) {
 	vbn := fileHeaderVBN(dev.Home, fileNumber)
 	buf := make([]byte, ondisk.BlockSize)
+
 	if err := dev.IndexFile.ReadBlock(vbn, buf); err != nil {
 		return ondisk.Fid{}, fmt.Errorf("reading previous contents of header slot for file %d: %w", fileNumber, err)
 	}
@@ -216,6 +217,7 @@ func writeHeader(dev *Device, container diskimage.WritableContainer, fileNumber 
 	if err != nil {
 		return ondisk.FileHeader{}, fmt.Errorf("encoding header for file %d: %w", fileNumber, err)
 	}
+
 	return writeHeaderBytes(dev, container, fileNumber, buf)
 }
 
@@ -224,10 +226,12 @@ func writeHeader(dev *Device, container diskimage.WritableContainer, fileNumber 
 // writeHeader and appendExtent both build on.
 func writeHeaderBytes(dev *Device, container diskimage.WritableContainer, fileNumber uint32, buf []byte) (ondisk.FileHeader, error) {
 	vbn := fileHeaderVBN(dev.Home, fileNumber)
+
 	lbn, err := resolveExtentLBN(dev.IndexFile.Extents, vbn)
 	if err != nil {
 		return ondisk.FileHeader{}, fmt.Errorf("locating header slot for file %d (VBN %d): %w", fileNumber, vbn, err)
 	}
+
 	if err := container.WriteBlock(lbn, buf); err != nil {
 		return ondisk.FileHeader{}, fmt.Errorf("writing header slot for file %d (LBN %d): %w", fileNumber, lbn, err)
 	}
@@ -249,6 +253,7 @@ func writeHeaderBytes(dev *Device, container diskimage.WritableContainer, fileNu
 		// validates against its own output.
 		return ondisk.FileHeader{}, fmt.Errorf("decoding just-written header for file %d: %w", fileNumber, err)
 	}
+
 	return decoded, nil
 }
 
@@ -288,10 +293,12 @@ func writeHeaderBytes(dev *Device, container diskimage.WritableContainer, fileNu
 // designed to detect and, with /REPAIR, reclaim.
 func Extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32) error {
 	dev := f.Device
+
 	container, ok := dev.Container.(diskimage.WritableContainer)
 	if !ok {
 		return fmt.Errorf("volume: extending file %v: device is not open for write", f.Header.Fid)
 	}
+
 	if additionalBlocks == 0 {
 		return fmt.Errorf("volume: extending file %v: additionalBlocks must be at least 1, got 0", f.Header.Fid)
 	}
@@ -307,6 +314,7 @@ func Extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32) error
 	}
 
 	var grown uint32
+
 	for _, e := range newExtents {
 		updated, fits, err := appendExtent(dev, container, tail, e)
 		if err != nil {
@@ -315,6 +323,7 @@ func Extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32) error
 
 		if !fits {
 			var relinkedTail ondisk.FileHeader
+
 			relinkedTail, updated, err = linkNewExtensionSegment(dev, container, ib, tail, e)
 			if err != nil {
 				return fmt.Errorf("volume: extending file %v: %w", f.Header.Fid, err)
@@ -345,14 +354,17 @@ func Extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32) error
 	// case the primary header's own map/ident content is unchanged, but
 	// its RecordAttributes still needs rewriting).
 	f.Header.RecordAttributes.HighestBlock += grown
+	
 	areas, err := existingAreas(f.Header)
 	if err != nil {
 		return fmt.Errorf("volume: extending file %v: %w", f.Header.Fid, err)
 	}
+
 	decoded, err := writeHeader(dev, container, f.Header.Fid.Number(), f.Header, areas)
 	if err != nil {
 		return fmt.Errorf("volume: extending file %v: recording new HighestBlock: %w", f.Header.Fid, err)
 	}
+
 	f.Header = decoded
 
 	return nil
@@ -368,6 +380,7 @@ func tailHeader(dev *Device, primary ondisk.FileHeader) (ondisk.FileHeader, erro
 	if err != nil {
 		return ondisk.FileHeader{}, err
 	}
+
 	return chain[len(chain)-1], nil
 }
 
@@ -397,6 +410,7 @@ func fileHeaderChain(dev *Device, primary ondisk.FileHeader) ([]ondisk.FileHeade
 		if err != nil {
 			return nil, fmt.Errorf("following header extension chain for file %v: %w", primary.Fid, err)
 		}
+
 		chain = append(chain, next)
 		header = next
 	}
@@ -414,10 +428,12 @@ func headerIdent(header ondisk.FileHeader) (*ondisk.Ident, error) {
 	if header.IdentOffset == header.MapOffset {
 		return nil, nil
 	}
+
 	id, err := header.Ident()
 	if err != nil {
 		return nil, fmt.Errorf("decoding existing IDENT area: %w", err)
 	}
+
 	return &id, nil
 }
 
@@ -435,14 +451,17 @@ func existingAreas(header ondisk.FileHeader) (ondisk.FileHeaderAreas, error) {
 	if err != nil {
 		return ondisk.FileHeaderAreas{}, err
 	}
+
 	extents, err := header.RetrievalPointers()
 	if err != nil {
 		return ondisk.FileHeaderAreas{}, fmt.Errorf("decoding existing retrieval pointers: %w", err)
 	}
+
 	mapBytes, err := ondisk.EncodeRetrievalPointers(extents)
 	if err != nil {
 		return ondisk.FileHeaderAreas{}, fmt.Errorf("re-encoding existing retrieval pointers: %w", err)
 	}
+
 	return ondisk.FileHeaderAreas{Ident: ident, MapBytes: mapBytes}, nil
 }
 
@@ -458,14 +477,17 @@ func appendExtent(dev *Device, container diskimage.WritableContainer, header ond
 	if err != nil {
 		return ondisk.FileHeader{}, false, err
 	}
+
 	extents, err := header.RetrievalPointers()
 	if err != nil {
 		return ondisk.FileHeader{}, false, fmt.Errorf("decoding existing retrieval pointers: %w", err)
 	}
+
 	mapBytes, err := ondisk.EncodeRetrievalPointers(append(extents, extent))
 	if err != nil {
 		return ondisk.FileHeader{}, false, fmt.Errorf("encoding retrieval pointers: %w", err)
 	}
+
 	areas.MapBytes = mapBytes
 
 	buf, err := ondisk.EncodeFileHeader(header, areas)
@@ -481,6 +503,7 @@ func appendExtent(dev *Device, container diskimage.WritableContainer, header ond
 	if err != nil {
 		return ondisk.FileHeader{}, false, err
 	}
+
 	return decoded, true, nil
 }
 
@@ -517,6 +540,7 @@ func linkNewExtensionSegment(dev *Device, container diskimage.WritableContainer,
 			return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("allocating extension header segment: %w", err)
 		}
 	}
+
 	segFid, err := nextFileFid(dev, segFileNumber)
 	if err != nil {
 		return ondisk.FileHeader{}, ondisk.FileHeader{}, err
@@ -530,8 +554,10 @@ func linkNewExtensionSegment(dev *Device, container diskimage.WritableContainer,
 	if err != nil {
 		return ondisk.FileHeader{}, ondisk.FileHeader{}, err
 	}
+
 	previousFid := tail.Fid
 	tail.ExtensionFid = segFid
+
 	relinkedTail, err = writeHeader(dev, container, tail.Fid.Number(), tail, tailAreas)
 	if err != nil {
 		return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("linking new extension segment onto file %v: %w", previousFid, err)
@@ -545,6 +571,7 @@ func linkNewExtensionSegment(dev *Device, container diskimage.WritableContainer,
 	if err != nil {
 		return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("encoding new extension segment's retrieval pointers: %w", err)
 	}
+
 	segHeader := ondisk.FileHeader{
 		SegmentNumber:  tail.SegmentNumber + 1,
 		StructureLevel: ondisk.FileHeaderStructureLevel,
@@ -553,10 +580,12 @@ func linkNewExtensionSegment(dev *Device, container diskimage.WritableContainer,
 		FileProtection: dev.Home.FileProtection,
 		Backlink:       previousFid,
 	}
+
 	newSegment, err = writeHeader(dev, container, segFileNumber, segHeader, ondisk.FileHeaderAreas{MapBytes: mapBytes})
 	if err != nil {
 		return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("writing new extension segment: %w", err)
 	}
+
 	return relinkedTail, newSegment, nil
 }
 
@@ -581,6 +610,7 @@ func allocateExtents(bm *Bitmap, blocks uint32) (extents []ondisk.Extent, err er
 	if blocks == 0 {
 		return nil, fmt.Errorf("volume: allocateExtents requires at least one block, got 0")
 	}
+
 	if bm.clusterSize == 0 {
 		return nil, fmt.Errorf("volume: bitmap has a zero cluster size")
 	}
@@ -607,6 +637,7 @@ func allocateExtents(bm *Bitmap, blocks uint32) (extents []ondisk.Extent, err er
 		if request == 0 {
 			return extents, fmt.Errorf("not enough free space: %d cluster(s) still needed, none available", remaining)
 		}
+
 		extent, findErr := bm.FindFree(request)
 		if findErr != nil {
 			// Unreachable: a run of request clusters was just found.
@@ -616,6 +647,7 @@ func allocateExtents(bm *Bitmap, blocks uint32) (extents []ondisk.Extent, err er
 		if err := bm.MarkAllocated(extent); err != nil {
 			return extents, fmt.Errorf("marking newly-found extent allocated: %w", err)
 		}
+
 		extents = append(extents, extent)
 		remaining -= extent.Count / bm.clusterSize
 	}
@@ -668,8 +700,8 @@ func ensureHeaderSlot(dev *Device, ib *IndexBitmap, fileNumber uint32) error {
 	}
 
 	mapped := mappedBlocks(idx)
-
 	zero := make([]byte, ondisk.BlockSize)
+
 	for v := have + 1; v <= mapped; v++ {
 		lbn, err := resolveExtentLBN(idx.Extents, v)
 		if err != nil {
@@ -707,6 +739,7 @@ func ensureHeaderSlot(dev *Device, ib *IndexBitmap, fileNumber uint32) error {
 // keep in step with its map.
 func mappedBlocks(f *File) uint32 {
 	var n uint32
+
 	for _, e := range f.Extents {
 		n += e.Count
 	}

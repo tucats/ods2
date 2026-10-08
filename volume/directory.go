@@ -26,6 +26,7 @@ func (f *File) Directory() (*Directory, error) {
 	if !f.Header.IsDirectory() {
 		return nil, fmt.Errorf("volume: file %v is not a directory", f.Header.Fid)
 	}
+
 	return &Directory{File: f}, nil
 }
 
@@ -36,6 +37,7 @@ func (vol *Volume) OpenDirectory(fid ondisk.Fid) (*Directory, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return f.Directory()
 }
 
@@ -45,6 +47,7 @@ func (vol *Volume) OpenDirectory(fid ondisk.Fid) (*Directory, error) {
 // it.
 func (d *Directory) List() ([]ondisk.DirEntry, error) {
 	var all []ondisk.DirEntry
+
 	buf := make([]byte, ondisk.BlockSize)
 
 	// Bound the walk by UsedBlocks, not Blocks(): a directory routinely
@@ -69,13 +72,16 @@ func (d *Directory) List() ([]ondisk.DirEntry, error) {
 			// trying to decode simulated-zero content as real records.
 			break
 		}
+
 		if err := d.ReadBlock(vbn, buf); err != nil {
 			return nil, fmt.Errorf("volume: reading directory block %d: %w", vbn, err)
 		}
+
 		entries, err := ondisk.DecodeDirectoryBlock(buf)
 		if err != nil {
 			return nil, fmt.Errorf("volume: decoding directory block %d: %w", vbn, err)
 		}
+
 		all = append(all, entries...)
 	}
 
@@ -117,17 +123,21 @@ func (d *Directory) Lookup(name string, version uint16) (ondisk.DirEntry, error)
 	}
 
 	var best *ondisk.DirEntry
+
 	for i := range entries {
 		e := &entries[i]
 		if !strings.EqualFold(e.Name, name) {
 			continue
 		}
+
 		if version != 0 {
 			if e.Version == version {
 				return *e, nil
 			}
+
 			continue
 		}
+
 		if best == nil || e.Version > best.Version {
 			best = e
 		}
@@ -136,9 +146,11 @@ func (d *Directory) Lookup(name string, version uint16) (ondisk.DirEntry, error)
 	if best != nil {
 		return *best, nil
 	}
+
 	if version != 0 {
 		return ondisk.DirEntry{}, fmt.Errorf("volume: %s;%d: %w", name, version, ErrNotFound)
 	}
+
 	return ondisk.DirEntry{}, fmt.Errorf("volume: %s: %w", name, ErrNotFound)
 }
 
@@ -159,6 +171,7 @@ func (d *Directory) NextVersion(name string) (uint16, error) {
 			highest = e.Version
 		}
 	}
+
 	return highest + 1, nil
 }
 
@@ -192,6 +205,8 @@ func (d *Directory) Insert(name string, version uint16, fid ondisk.Fid, bm *Bitm
 // explicitly rather than taken from the directory's default: an entry for
 // a new directory has no limit (see CreateDirectory).
 func (d *Directory) insert(name string, version uint16, fid ondisk.Fid, newNameLimit uint16, bm *Bitmap, ib *IndexBitmap) error {
+	_ = ib
+
 	container, ok := d.Device.Container.(diskimage.WritableContainer)
 	if !ok {
 		return fmt.Errorf("volume: inserting %s;%d: device is not open for write", name, version)
@@ -201,6 +216,7 @@ func (d *Directory) insert(name string, version uint16, fid ondisk.Fid, newNameL
 	if err != nil {
 		return fmt.Errorf("volume: inserting %s;%d: %w", name, version, err)
 	}
+
 	for _, e := range entries {
 		if e.Version == version && strings.EqualFold(e.Name, name) {
 			return fmt.Errorf("volume: inserting %s;%d: %w", name, version, ErrExists)
@@ -225,10 +241,12 @@ func (d *Directory) insert(name string, version uint16, fid ondisk.Fid, newNameL
 
 	for i, block := range blocks {
 		vbn := uint32(i + 1)
+
 		lbn, err := resolveExtentLBN(d.Extents, vbn)
 		if err != nil {
 			return fmt.Errorf("volume: inserting %s;%d: locating directory block %d: %w", name, version, vbn, err)
 		}
+
 		if err := container.WriteBlock(lbn, block); err != nil {
 			return fmt.Errorf("volume: inserting %s;%d: writing directory block %d: %w", name, version, vbn, err)
 		}
@@ -359,13 +377,17 @@ func (d *Directory) Remove(name string, version uint16, bm *Bitmap, ib *IndexBit
 
 	remaining := make([]ondisk.DirEntry, 0, len(entries))
 	found := false
+
 	for _, e := range entries {
 		if !found && strings.EqualFold(e.Name, name) && e.Version == version {
 			found = true
+
 			continue
 		}
+
 		remaining = append(remaining, e)
 	}
+
 	if !found {
 		return fmt.Errorf("volume: removing %s;%d: not found", name, version)
 	}
@@ -377,10 +399,12 @@ func (d *Directory) Remove(name string, version uint16, bm *Bitmap, ib *IndexBit
 
 	for i, block := range blocks {
 		vbn := uint32(i + 1)
+
 		lbn, err := resolveExtentLBN(d.Extents, vbn)
 		if err != nil {
 			return fmt.Errorf("volume: removing %s;%d: locating directory block %d: %w", name, version, vbn, err)
 		}
+
 		if err := container.WriteBlock(lbn, block); err != nil {
 			return fmt.Errorf("volume: removing %s;%d: writing directory block %d: %w", name, version, vbn, err)
 		}
@@ -435,11 +459,14 @@ func (d *Directory) recordUsedBlocks(container diskimage.WritableContainer, used
 	if err != nil {
 		return fmt.Errorf("reconstructing existing header content: %w", err)
 	}
+
 	decoded, err := writeHeader(d.Device, container, h.Fid.Number(), h, areas)
 	if err != nil {
 		return fmt.Errorf("recording directory's new logical size: %w", err)
 	}
+
 	d.Header = decoded
+
 	return nil
 }
 
@@ -460,29 +487,37 @@ func (d *Directory) recordUsedBlocks(container diskimage.WritableContainer, used
 func packDirectoryBlocks(entries []ondisk.DirEntry) ([][]byte, error) {
 	byName := make(map[string][]ondisk.DirEntry, len(entries))
 	names := make([]string, 0, len(entries))
+
 	for _, e := range entries {
 		if _, seen := byName[e.Name]; !seen {
 			names = append(names, e.Name)
 		}
+
 		byName[e.Name] = append(byName[e.Name], e)
 	}
+
 	sort.Strings(names)
 
-	var blocks [][]byte
-	var pending []ondisk.DirEntry
+	var (
+		blocks  [][]byte
+		pending []ondisk.DirEntry
+	)
 
 	flush := func() error {
 		if len(pending) == 0 {
 			return nil
 		}
+
 		block, err := ondisk.EncodeDirectoryBlock(pending)
 		if err != nil {
 			// Unreachable: every entry set assigned to pending below was
 			// already confirmed, at the point it was assigned, to fit.
 			return fmt.Errorf("internal error: previously-fitting directory block no longer encodes: %w", err)
 		}
+
 		blocks = append(blocks, block)
 		pending = nil
+
 		return nil
 	}
 
@@ -492,22 +527,28 @@ func packDirectoryBlocks(entries []ondisk.DirEntry) ([][]byte, error) {
 		candidate := make([]ondisk.DirEntry, 0, len(pending)+len(group))
 		candidate = append(candidate, pending...)
 		candidate = append(candidate, group...)
+
 		if _, err := ondisk.EncodeDirectoryBlock(candidate); err == nil {
 			pending = candidate
+
 			continue
 		}
 
 		if len(pending) == 0 {
 			return nil, fmt.Errorf("directory entries for %q don't fit in a single %d-byte block", name, ondisk.BlockSize)
 		}
+
 		if err := flush(); err != nil {
 			return nil, err
 		}
+
 		if _, err := ondisk.EncodeDirectoryBlock(group); err != nil {
 			return nil, fmt.Errorf("directory entries for %q don't fit in a single %d-byte block: %w", name, ondisk.BlockSize, err)
 		}
+
 		pending = group
 	}
+
 	if err := flush(); err != nil {
 		return nil, err
 	}
@@ -521,6 +562,7 @@ func packDirectoryBlocks(entries []ondisk.DirEntry) ([][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		blocks = [][]byte{block}
 	}
 

@@ -19,10 +19,12 @@ import (
 // back correctly.
 func TestInitializeProducesMountableVolume(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fresh.dsk")
+
 	c, err := diskimage.Create(path, 400)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	defer func() { _ = c.Close() }()
 
 	if err := Initialize(c, InitializeOptions{Label: "TESTVOL"}); err != nil {
@@ -33,10 +35,12 @@ func TestInitializeProducesMountableVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	dev := vol.Devices[0]
 	if got, want := dev.Home.VolumeName, "TESTVOL"; got != want {
 		t.Errorf("VolumeName = %q, want %q", got, want)
 	}
+
 	if got, want := dev.Home.ReservedFiles, uint16(ondisk.ReservedFileCount); got != want {
 		t.Errorf("ReservedFiles = %d, want %d", got, want)
 	}
@@ -45,10 +49,12 @@ func TestInitializeProducesMountableVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDirectory(MasterFileDirectoryFid): %v", err)
 	}
+
 	entries, err := dir.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != len(reservedFiles) {
 		t.Fatalf("master file directory has %d entries, want %d", len(entries), len(reservedFiles))
 	}
@@ -57,12 +63,15 @@ func TestInitializeProducesMountableVolume(t *testing.T) {
 	for _, e := range entries {
 		byName[e.Name] = e
 	}
+
 	for _, spec := range reservedFiles {
 		e, ok := byName[spec.name]
 		if !ok {
 			t.Errorf("master file directory is missing %s", spec.name)
+
 			continue
 		}
+
 		if e.Fid.Number() != spec.fid.Number() {
 			t.Errorf("%s has file number %d, want %d", spec.name, e.Fid.Number(), spec.fid.Number())
 		}
@@ -70,8 +79,10 @@ func TestInitializeProducesMountableVolume(t *testing.T) {
 		f, err := vol.OpenFID(e.Fid)
 		if err != nil {
 			t.Errorf("OpenFID(%s): %v", spec.name, err)
+
 			continue
 		}
+
 		if f.Header.Backlink.Number() != ondisk.MasterFileDirectoryFid.Number() {
 			t.Errorf("%s Backlink = %v, want the master file directory", spec.name, f.Header.Backlink)
 		}
@@ -84,18 +95,22 @@ func TestInitializeProducesMountableVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
 	}
+
 	f, err := vol.CreateFile(dir, "HELLO.TXT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
 	if err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
+
 	content := bytes.Repeat([]byte{0x42}, ondisk.BlockSize)
 	if err := f.WriteBlock(1, content); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -113,28 +128,34 @@ func TestInitializeProducesMountableVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("diskimage.Open (reopened): %v", err)
 	}
+
 	defer func() { _ = reopened.Close() }()
 
 	vol2, err := Mount(reopened)
 	if err != nil {
 		t.Fatalf("Mount (reopened): %v", err)
 	}
+
 	dir2, err := vol2.OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory (reopened): %v", err)
 	}
+
 	entry, err := dir2.Lookup("HELLO.TXT", 0)
 	if err != nil {
 		t.Fatalf("Lookup(HELLO.TXT) (reopened): %v", err)
 	}
+
 	f2, err := vol2.OpenFID(entry.Fid)
 	if err != nil {
 		t.Fatalf("OpenFID(HELLO.TXT) (reopened): %v", err)
 	}
+
 	buf := make([]byte, ondisk.BlockSize)
 	if err := f2.ReadBlock(1, buf); err != nil {
 		t.Fatalf("ReadBlock(1) (reopened): %v", err)
 	}
+
 	if !bytes.Equal(buf, content) {
 		t.Error("HELLO.TXT's content doesn't round-trip through Initialize+CreateFile+Dismount+Mount")
 	}
@@ -147,6 +168,7 @@ func TestInitializeAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	defer func() { _ = c.Close() }()
 
 	if err := Initialize(c, InitializeOptions{}); err != nil {
@@ -157,24 +179,30 @@ func TestInitializeAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	home := vol.Devices[0].Home
 
 	if home.VolumeName != "NONAME" {
 		t.Errorf("VolumeName = %q, want %q", home.VolumeName, "NONAME")
 	}
+
 	if home.VolumeOwner != (ondisk.Uic{Group: 1, Member: 4}) {
 		t.Errorf("VolumeOwner = %v, want [1,4]", home.VolumeOwner)
 	}
+
 	if home.FileProtection != defaultFileProtection {
 		t.Errorf("FileProtection = %#x, want %#x", home.FileProtection, uint16(defaultFileProtection))
 	}
+
 	if home.ClusterSize != 1 {
 		t.Errorf("ClusterSize = %d, want 1", home.ClusterSize)
 	}
+
 	// INIT's default: blocks / ((cluster+1) * 2).
 	if home.MaxFiles != 300/4 {
 		t.Errorf("MaxFiles = %d, want %d", home.MaxFiles, 300/4)
 	}
+
 	if home.ReservedFiles != ondisk.ReservedFileCount {
 		t.Errorf("ReservedFiles = %d, want %d", home.ReservedFiles, ondisk.ReservedFileCount)
 	}
@@ -188,6 +216,7 @@ func TestInitializeHonorsOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	defer func() { _ = c.Close() }()
 
 	opts := InitializeOptions{
@@ -197,6 +226,7 @@ func TestInitializeHonorsOptions(t *testing.T) {
 		ClusterSize:    2,
 		MaxFiles:       64,
 	}
+
 	if err := Initialize(c, opts); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -205,20 +235,25 @@ func TestInitializeHonorsOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	home := vol.Devices[0].Home
 
 	if home.VolumeName != opts.Label {
 		t.Errorf("VolumeName = %q, want %q", home.VolumeName, opts.Label)
 	}
+
 	if home.VolumeOwner != opts.Owner {
 		t.Errorf("VolumeOwner = %v, want %v", home.VolumeOwner, opts.Owner)
 	}
+
 	if home.FileProtection != opts.FileProtection {
 		t.Errorf("FileProtection = %#x, want %#x", home.FileProtection, opts.FileProtection)
 	}
+
 	if home.ClusterSize != opts.ClusterSize {
 		t.Errorf("ClusterSize = %d, want %d", home.ClusterSize, opts.ClusterSize)
 	}
+
 	if home.MaxFiles != opts.MaxFiles {
 		t.Errorf("MaxFiles = %d, want %d", home.MaxFiles, opts.MaxFiles)
 	}
@@ -232,6 +267,7 @@ func TestInitializeRejectsUndersizedVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	defer func() { _ = c.Close() }()
 
 	if err := Initialize(c, InitializeOptions{}); err == nil {
@@ -247,6 +283,7 @@ func TestInitializeRejectsMaxFilesBelowReservedCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	defer func() { _ = c.Close() }()
 
 	if err := Initialize(c, InitializeOptions{MaxFiles: 3}); err == nil {
@@ -265,6 +302,7 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	defer func() { _ = c.Close() }()
 
 	opts := InitializeOptions{ClusterSize: 1, MaxFiles: 32}
@@ -276,6 +314,7 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveInitParams: %v", err)
 	}
+
 	a, err := allocateStructures(p)
 	if err != nil {
 		t.Fatalf("allocateStructures: %v", err)
@@ -285,6 +324,7 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	dev := vol.Devices[0]
 
 	bm, err := OpenBitmap(dev)
@@ -293,12 +333,15 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 	}
 
 	used := map[uint32]bool{}
+
 	for e := range allocCount {
 		if !a.placed[e] {
 			continue
 		}
+
 		for cl := a.lbn[e] / p.cluster; cl < (a.lbn[e]+a.count[e])/p.cluster && cl < p.volumeSize/p.cluster; cl++ {
 			used[cl] = true
+
 			if ondisk.BitmapTest(bm.bits, cl) {
 				t.Errorf("cluster %d (allocation table entry %d) reads as free, want allocated", cl, e)
 			}
@@ -308,14 +351,17 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 	// Everything else is free: on this small a volume, the space after
 	// the fixed structures is what new files get.
 	free := 0
+
 	for cl := uint32(0); cl < p.volumeSize/p.cluster; cl++ {
 		if !used[cl] {
 			if !ondisk.BitmapTest(bm.bits, cl) {
 				t.Errorf("cluster %d reads as allocated, but no fixed structure uses it", cl)
 			}
+			
 			free++
 		}
 	}
+
 	if free == 0 {
 		t.Error("no free clusters on the volume")
 	}
@@ -324,11 +370,13 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	for slot := uint32(0); slot < ondisk.ReservedFileCount; slot++ {
 		if !ondisk.BitmapTest(ib.bits, slot) {
 			t.Errorf("header slot %d (file number %d, reserved) reads as free, want in-use", slot, slot+1)
 		}
 	}
+
 	if ondisk.BitmapTest(ib.bits, ondisk.ReservedFileCount) {
 		t.Errorf("header slot %d (file number %d, the first non-reserved one) reads as in-use, want free",
 			ondisk.ReservedFileCount, ondisk.ReservedFileCount+1)
@@ -342,10 +390,12 @@ func TestInitializeMarksReservedSpaceAllocated(t *testing.T) {
 // still be there after an independent re-mount.
 func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "grow.dsk")
+
 	c, err := diskimage.Create(path, 2000)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	defer func() { _ = c.Close() }()
 
 	headers := uint32(ondisk.ReservedFileCount + 2)
@@ -357,6 +407,7 @@ func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	dev := vol.Devices[0]
 	before := mappedBlocks(dev.IndexFile)
 
@@ -370,25 +421,31 @@ func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	bm, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
 	}
 
 	const files = 40
+
 	for i := range files {
 		name := fmt.Sprintf("F%02d.DAT", i)
+
 		f, err := vol.CreateFile(dir, name, ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
 		if err != nil {
 			t.Fatalf("CreateFile(%s): %v", name, err)
 		}
+
 		if err := f.WriteBlock(1, bytes.Repeat([]byte{byte(i)}, ondisk.BlockSize)); err != nil {
 			t.Fatalf("WriteBlock(%s): %v", name, err)
 		}
+
 		if err := f.Close(); err != nil {
 			t.Fatalf("Close(%s): %v", name, err)
 		}
@@ -398,9 +455,11 @@ func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 	if after <= before {
 		t.Errorf("INDEXF.SYS is still %d blocks after creating %d files", after, files)
 	}
+
 	if got := dev.IndexFile.Blocks(); got != after {
 		t.Errorf("INDEXF.SYS records %d blocks, but maps %d", got, after)
 	}
+
 	if hw, eof := dev.IndexFile.Header.HighWaterMark, dev.IndexFile.Header.RecordAttributes.EndOfFileBlock; hw != after+1 || eof != hw {
 		t.Errorf("INDEXF.SYS high-water mark %d and end of file %d, want both %d", hw, eof, after+1)
 	}
@@ -409,6 +468,7 @@ func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 	if err := c.ReadBlock(altIndexLBN, alt); err != nil {
 		t.Fatalf("ReadBlock(alternate index header): %v", err)
 	}
+
 	if !bytes.Equal(alt, dev.IndexFile.Header.Raw()) {
 		t.Error("the alternate index file header doesn't match INDEXF.SYS's primary header after the index file grew")
 	}
@@ -421,28 +481,34 @@ func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("diskimage.Open: %v", err)
 	}
+
 	defer func() { _ = reopened.Close() }()
 
 	vol2, err := Mount(reopened)
 	if err != nil {
 		t.Fatalf("Mount (reopened): %v", err)
 	}
+
 	dir2, err := vol2.OpenDirectory(ondisk.MasterFileDirectoryFid)
 	if err != nil {
 		t.Fatalf("OpenDirectory (reopened): %v", err)
 	}
 
 	buf := make([]byte, ondisk.BlockSize)
+
 	for i := range files {
 		name := fmt.Sprintf("F%02d.DAT", i)
+
 		e, err := dir2.Lookup(name, 0)
 		if err != nil {
 			t.Fatalf("Lookup(%s): %v", name, err)
 		}
+
 		f, err := vol2.OpenFID(e.Fid)
 		if err != nil {
 			t.Fatalf("OpenFID(%s): %v", name, err)
 		}
+
 		if err := f.ReadBlock(1, buf); err != nil || buf[0] != byte(i) || buf[ondisk.BlockSize-1] != byte(i) {
 			t.Errorf("%s reads back %#x...%#x, %v; want %#x", name, buf[0], buf[ondisk.BlockSize-1], err, i)
 		}

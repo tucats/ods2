@@ -13,10 +13,12 @@ import (
 // written a file to.
 func TestStatsOnFreshlyInitializedVolume(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stats.dsk")
+
 	c, err := diskimage.Create(path, 400)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	defer func() { _ = c.Close() }()
 
 	if err := Initialize(c, InitializeOptions{Label: "STATS"}); err != nil {
@@ -36,15 +38,19 @@ func TestStatsOnFreshlyInitializedVolume(t *testing.T) {
 	if stats.FileCount != 0 {
 		t.Errorf("FileCount on a freshly initialized volume = %d, want 0", stats.FileCount)
 	}
+	
 	if stats.TotalBlocks == 0 {
 		t.Error("TotalBlocks = 0, want the volume's real size")
 	}
+
 	if stats.FreeBlocks == 0 || stats.FreeBlocks > stats.TotalBlocks {
 		t.Errorf("FreeBlocks = %d, want a nonzero value no greater than TotalBlocks (%d)", stats.FreeBlocks, stats.TotalBlocks)
 	}
+
 	if stats.ClusterSize == 0 {
 		t.Error("ClusterSize = 0, want the volume's real cluster size")
 	}
+
 	if stats.MaxFiles == 0 {
 		t.Error("MaxFiles = 0, want the volume's real header-slot count")
 	}
@@ -66,6 +72,7 @@ func TestStatsReflectsCreatedFile(t *testing.T) {
 	if empty.FileCount != 1 {
 		t.Errorf("FileCount after creating one file = %d, want 1", empty.FileCount)
 	}
+
 	if empty.FreeBlocks >= empty.TotalBlocks {
 		t.Errorf("FreeBlocks (%d) >= TotalBlocks (%d), want the created file's block(s) reflected as no longer free", empty.FreeBlocks, empty.TotalBlocks)
 	}
@@ -83,6 +90,7 @@ func TestStatsWorksReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("diskimage.Open: %v", err)
 	}
+
 	defer func() { _ = ro.Close() }()
 
 	roVol, err := Mount(ro)

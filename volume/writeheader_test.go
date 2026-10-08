@@ -46,14 +46,17 @@ func newWritableHeaderTestVolume(t *testing.T) (*Device, diskimage.WritableConta
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "test.dsk")
+
 	container, err := diskimage.Create(path, whVolumeSize+100)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	t.Cleanup(func() { _ = container.Close() })
 
 	mustWrite := func(lbn uint32, b []byte) {
 		t.Helper()
+
 		if err := container.WriteBlock(lbn, b); err != nil {
 			t.Fatalf("WriteBlock(%d): %v", lbn, err)
 		}
@@ -82,6 +85,7 @@ func newWritableHeaderTestVolume(t *testing.T) (*Device, diskimage.WritableConta
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	return vol.Devices[0], container
 }
 
@@ -98,9 +102,11 @@ func installWideTestBitmap(t *testing.T, container diskimage.WritableContainer) 
 		ClusterSize: whClusterSize,
 		VolumeSize:  whVolumeSize,
 	})
+
 	if err != nil {
 		t.Fatalf("EncodeStorageControlBlock: %v", err)
 	}
+
 	if err := container.WriteBlock(whBitmapSCBLBN, scb); err != nil {
 		t.Fatalf("WriteBlock(SCB): %v", err)
 	}
@@ -109,6 +115,7 @@ func installWideTestBitmap(t *testing.T, container diskimage.WritableContainer) 
 	for c := uint32(whFreeClustersStart); c < whFreeClustersEnd; c++ {
 		ondisk.BitmapSet(bits, c)
 	}
+
 	if err := container.WriteBlock(whBitmapBitsLBN, bits); err != nil {
 		t.Fatalf("WriteBlock(bitmap bits): %v", err)
 	}
@@ -118,6 +125,7 @@ func installWideTestBitmap(t *testing.T, container diskimage.WritableContainer) 
 		MapOffsetWords: 55,
 		MapBytes:       odstest.EncodeExtentFormat2(2, whBitmapSCBLBN),
 	})
+
 	if err := container.WriteBlock(fileHeaderLBN(ondisk.BitmapFileFid.Num), header); err != nil {
 		t.Fatalf("WriteBlock(bitmap header): %v", err)
 	}
@@ -133,6 +141,7 @@ func TestCreateHeaderAllocatesFreeSlotAndSetsFields(t *testing.T) {
 	}
 
 	dirFid := ondisk.Fid{Num: 4, Seq: 4}
+
 	f, err := CreateHeader(dev, ib, NewFileHeader{
 		Name:            "TEST.DAT",
 		Directory:       dirFid,
@@ -149,21 +158,27 @@ func TestCreateHeaderAllocatesFreeSlotAndSetsFields(t *testing.T) {
 	if got, want := f.Header.Fid.Number(), uint32(testIdxReservedFiles+1); got != want {
 		t.Errorf("new file's number = %d, want %d", got, want)
 	}
+
 	if f.Header.Fid.Seq != 1 {
 		t.Errorf("new file's Seq = %d, want 1 (never-used slot)", f.Header.Fid.Seq)
 	}
+
 	if f.Header.Backlink != dirFid {
 		t.Errorf("Backlink = %v, want %v", f.Header.Backlink, dirFid)
 	}
+
 	if f.Header.Owner != (ondisk.Uic{Group: 0o10, Member: 4}) {
 		t.Errorf("Owner = %v, want the home block's VolumeOwner", f.Header.Owner)
 	}
+
 	if f.Header.FileProtection != 0xFF00 {
 		t.Errorf("FileProtection = %#04x, want 0xff00 (the home block's FileProtection)", f.Header.FileProtection)
 	}
+
 	if f.Blocks() != 0 {
 		t.Errorf("Blocks() = %d, want 0 (a freshly created file has no data yet)", f.Blocks())
 	}
+
 	if len(f.Extents) != 0 {
 		t.Errorf("Extents = %+v, want none", f.Extents)
 	}
@@ -172,6 +187,7 @@ func TestCreateHeaderAllocatesFreeSlotAndSetsFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ident: %v", err)
 	}
+
 	if ident.Filename != "TEST.DAT" {
 		t.Errorf("Ident.Filename = %q, want %q", ident.Filename, "TEST.DAT")
 	}
@@ -183,6 +199,7 @@ func TestCreateHeaderAllocatesFreeSlotAndSetsFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindFreeSlot after CreateHeader: %v", err)
 	}
+
 	if next != testIdxReservedFiles+2 {
 		t.Errorf("FindFreeSlot after CreateHeader = %d, want %d (the slot after the one just allocated)", next, testIdxReservedFiles+2)
 	}
@@ -206,6 +223,7 @@ func TestCreateHeaderRoundTripsThroughOpenFID(t *testing.T) {
 	}
 
 	vol := &Volume{Devices: []*Device{dev}}
+
 	opened, err := vol.OpenFID(created.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenFID(%v): %v", created.Header.Fid, err)
@@ -214,13 +232,16 @@ func TestCreateHeaderRoundTripsThroughOpenFID(t *testing.T) {
 	if opened.Header.Fid != created.Header.Fid {
 		t.Errorf("OpenFID Fid = %v, want %v", opened.Header.Fid, created.Header.Fid)
 	}
+
 	if opened.Header.Backlink != created.Header.Backlink {
 		t.Errorf("OpenFID Backlink = %v, want %v", opened.Header.Backlink, created.Header.Backlink)
 	}
+
 	gotIdent, err := opened.Header.Ident()
 	if err != nil {
 		t.Fatalf("Ident: %v", err)
 	}
+
 	if gotIdent.Filename != "ROUND.TRP" {
 		t.Errorf("OpenFID Ident.Filename = %q, want %q", gotIdent.Filename, "ROUND.TRP")
 	}
@@ -241,6 +262,7 @@ func TestCreateHeaderIncrementsSequenceFromPreviousOccupant(t *testing.T) {
 	targetFileNumber := uint32(testIdxReservedFiles + 1)
 	raw := make([]byte, ondisk.BlockSize)
 	copy(raw[8:14], ondisk.EncodeFid(ondisk.Fid{Num: 0, Seq: 41})) // fhOffFid = 8 (ondisk/fileheader.go)
+
 	if err := container.WriteBlock(fileHeaderLBN(uint16(targetFileNumber)), raw); err != nil {
 		t.Fatalf("WriteBlock(previous occupant): %v", err)
 	}
@@ -258,6 +280,7 @@ func TestCreateHeaderIncrementsSequenceFromPreviousOccupant(t *testing.T) {
 	if f.Header.Fid.Number() != targetFileNumber {
 		t.Fatalf("new file's number = %d, want %d", f.Header.Fid.Number(), targetFileNumber)
 	}
+
 	if f.Header.Fid.Seq != 42 {
 		t.Errorf("new file's Seq = %d, want 42 (previous occupant's 41, plus one)", f.Header.Fid.Seq)
 	}
@@ -272,6 +295,7 @@ func TestExtendGrowsFileAndZeroFillsUnwrittenSpace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -289,9 +313,11 @@ func TestExtendGrowsFileAndZeroFillsUnwrittenSpace(t *testing.T) {
 	if f.Blocks() != 3 {
 		t.Errorf("Blocks() after Extend(3) = %d, want 3", f.Blocks())
 	}
+
 	if len(f.Extents) != 1 {
 		t.Fatalf("Extents after Extend(3) = %+v, want exactly one extent", f.Extents)
 	}
+
 	if f.Extents[0].Count != 3 {
 		t.Errorf("Extents[0].Count = %d, want 3", f.Extents[0].Count)
 	}
@@ -303,6 +329,7 @@ func TestExtendGrowsFileAndZeroFillsUnwrittenSpace(t *testing.T) {
 	if err := f.ReadBlock(1, got); err != nil {
 		t.Fatalf("ReadBlock(1): %v", err)
 	}
+
 	if !bytes.Equal(got, make([]byte, ondisk.BlockSize)) {
 		t.Error("ReadBlock(1) on freshly-extended, unwritten space returned non-zero data")
 	}
@@ -310,10 +337,12 @@ func TestExtendGrowsFileAndZeroFillsUnwrittenSpace(t *testing.T) {
 	// The extent must round-trip through a completely fresh OpenFID too --
 	// not just through the in-memory f this test already mutated.
 	vol := &Volume{Devices: []*Device{dev}}
+
 	reopened, err := vol.OpenFID(f.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	if reopened.Blocks() != 3 || len(reopened.Extents) != 1 || reopened.Extents[0] != f.Extents[0] {
 		t.Errorf("reopened file = Blocks %d, Extents %+v; want Blocks 3, Extents %+v", reopened.Blocks(), reopened.Extents, f.Extents)
 	}
@@ -328,6 +357,7 @@ func TestExtendAccumulatesAcrossMultipleCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -341,6 +371,7 @@ func TestExtendAccumulatesAcrossMultipleCalls(t *testing.T) {
 	if err := Extend(f, bm, ib, 2); err != nil {
 		t.Fatalf("Extend(2): %v", err)
 	}
+	
 	if err := Extend(f, bm, ib, 5); err != nil {
 		t.Fatalf("Extend(5): %v", err)
 	}
@@ -350,17 +381,22 @@ func TestExtendAccumulatesAcrossMultipleCalls(t *testing.T) {
 	}
 
 	vol := &Volume{Devices: []*Device{dev}}
+
 	reopened, err := vol.OpenFID(f.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	if reopened.Blocks() != 7 {
 		t.Errorf("reopened Blocks() = %d, want 7", reopened.Blocks())
 	}
+
 	var total uint32
+
 	for _, e := range reopened.Extents {
 		total += e.Count
 	}
+
 	if total != 7 {
 		t.Errorf("reopened Extents total %d blocks, want 7 (Extents: %+v)", total, reopened.Extents)
 	}
@@ -375,10 +411,12 @@ func TestExtendRejectsZeroBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
 	}
+
 	f, err := CreateHeader(dev, ib, NewFileHeader{Name: "ZERO.DAT", Directory: ondisk.Fid{Num: 4, Seq: 4}})
 	if err != nil {
 		t.Fatalf("CreateHeader: %v", err)
@@ -398,10 +436,12 @@ func TestExtendFailsCleanlyWhenVolumeIsFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
 	}
+
 	f, err := CreateHeader(dev, ib, NewFileHeader{Name: "FULL.DAT", Directory: ondisk.Fid{Num: 4, Seq: 4}})
 	if err != nil {
 		t.Fatalf("CreateHeader: %v", err)
@@ -435,6 +475,7 @@ func TestExtendAllocatesExtensionHeaderSegmentWhenMapIsFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -454,6 +495,7 @@ func TestExtendAllocatesExtensionHeaderSegmentWhenMapIsFull(t *testing.T) {
 	// comfortably forces the fallback at least once regardless of exactly
 	// how much room CreateHeader's own IDENT area left.
 	const calls = 150
+
 	for i := 0; i < calls; i++ {
 		if err := Extend(f, bm, ib, 1); err != nil {
 			t.Fatalf("Extend #%d: %v", i, err)
@@ -463,6 +505,7 @@ func TestExtendAllocatesExtensionHeaderSegmentWhenMapIsFull(t *testing.T) {
 	if f.Blocks() != calls {
 		t.Fatalf("Blocks() after %d 1-block Extend calls = %d, want %d", calls, f.Blocks(), calls)
 	}
+
 	if f.Header.ExtensionFid.IsZero() {
 		t.Fatal("primary header's ExtensionFid is still zero after enough Extend calls to fill its map area")
 	}
@@ -471,17 +514,22 @@ func TestExtendAllocatesExtensionHeaderSegmentWhenMapIsFull(t *testing.T) {
 	// must still describe exactly `calls` blocks, and must round-trip
 	// through a completely independent OpenFID.
 	vol := &Volume{Devices: []*Device{dev}}
+
 	reopened, err := vol.OpenFID(f.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	if reopened.Header.ExtensionFid.IsZero() {
 		t.Fatal("reopened primary header's ExtensionFid is zero -- the on-disk link was lost")
 	}
+
 	var total uint32
+
 	for _, e := range reopened.Extents {
 		total += e.Count
 	}
+
 	if total != calls {
 		t.Errorf("reopened file's extents total %d blocks, want %d", total, calls)
 	}
@@ -494,9 +542,11 @@ func TestExtendAllocatesExtensionHeaderSegmentWhenMapIsFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading extension segment header: %v", err)
 	}
+
 	if segHeader.Backlink != reopened.Header.Fid {
 		t.Errorf("extension segment Backlink = %v, want the primary header's Fid %v", segHeader.Backlink, reopened.Header.Fid)
 	}
+
 	if segHeader.SegmentNumber != reopened.Header.SegmentNumber+1 {
 		t.Errorf("extension segment SegmentNumber = %d, want %d", segHeader.SegmentNumber, reopened.Header.SegmentNumber+1)
 	}

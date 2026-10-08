@@ -20,14 +20,17 @@ func newWritableDismountTestVolume(t *testing.T) (path string, container diskima
 	t.Helper()
 
 	path = filepath.Join(t.TempDir(), "dismount.dsk")
+
 	container, err := diskimage.Create(path, 300)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	t.Cleanup(func() { _ = container.Close() })
 
 	mustWrite := func(lbn uint32, b []byte) {
 		t.Helper()
+
 		if err := container.WriteBlock(lbn, b); err != nil {
 			t.Fatalf("WriteBlock(%d): %v", lbn, err)
 		}
@@ -65,16 +68,19 @@ func TestDeviceBitmapCachesAcrossCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+	
 	dev := vol.Devices[0]
 
 	first, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	second, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap (second): %v", err)
 	}
+
 	if first != second {
 		t.Error("Device.Bitmap returned a different instance on the second call, want the same cached one")
 	}
@@ -89,16 +95,19 @@ func TestDeviceIndexBitmapCachesAcrossCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	dev := vol.Devices[0]
 
 	first, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
 	}
+
 	second, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap (second): %v", err)
 	}
+
 	if first != second {
 		t.Error("Device.IndexBitmap returned a different instance on the second call, want the same cached one")
 	}
@@ -131,16 +140,19 @@ func TestDismountFlushesUnflushedBitmap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	dev := vol.Devices[0]
 
 	bm, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	extent, err := bm.FindFree(1)
 	if err != nil {
 		t.Fatalf("FindFree: %v", err)
 	}
+
 	if err := bm.MarkAllocated(extent); err != nil {
 		t.Fatalf("MarkAllocated: %v", err)
 	}
@@ -157,12 +169,14 @@ func TestDismountFlushesUnflushedBitmap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenWritable: %v", err)
 	}
+
 	defer func() { _ = reopened.Close() }()
 
 	vol2, err := Mount(reopened)
 	if err != nil {
 		t.Fatalf("Mount (reopened): %v", err)
 	}
+
 	bm2, err := OpenBitmap(vol2.Devices[0])
 	if err != nil {
 		t.Fatalf("OpenBitmap (reopened): %v", err)
@@ -172,6 +186,7 @@ func TestDismountFlushesUnflushedBitmap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clusterRange: %v", err)
 	}
+
 	for c := start; c < start+count; c++ {
 		if ondisk.BitmapTest(bm2.bits, c) {
 			t.Errorf("cluster %d still reads as free on disk after Dismount, want allocated", c)

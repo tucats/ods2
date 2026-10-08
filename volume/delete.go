@@ -91,6 +91,7 @@ func freeFileStorage(dev *Device, primary ondisk.FileHeader, bm *Bitmap, ib *Ind
 		if err != nil {
 			return fmt.Errorf("volume: freeing file %v: decoding retrieval pointers for segment %v: %w", primary.Fid, segment.Fid, err)
 		}
+
 		for _, e := range extents {
 			if err := bm.MarkFree(e); err != nil {
 				return fmt.Errorf("volume: freeing file %v: freeing extent of segment %v: %w", primary.Fid, segment.Fid, err)
@@ -156,6 +157,7 @@ func DeleteHeader(dev *Device, fid ondisk.Fid, bm *Bitmap, ib *IndexBitmap) erro
 		if err != nil {
 			return fmt.Errorf("volume: deleting file %v: %w", fid, err)
 		}
+
 		if !empty {
 			return fmt.Errorf("volume: deleting file %v: %w", fid, ErrDirectoryNotEmpty)
 		}
@@ -178,13 +180,16 @@ func DeleteHeader(dev *Device, fid ondisk.Fid, bm *Bitmap, ib *IndexBitmap) erro
 // header.
 func writeFreedSlot(dev *Device, container diskimage.WritableContainer, fileNumber uint32, buf []byte) error {
 	vbn := fileHeaderVBN(dev.Home, fileNumber)
+
 	lbn, err := resolveExtentLBN(dev.IndexFile.Extents, vbn)
 	if err != nil {
 		return fmt.Errorf("locating header slot for file %d (VBN %d): %w", fileNumber, vbn, err)
 	}
+
 	if err := container.WriteBlock(lbn, buf); err != nil {
 		return fmt.Errorf("writing header slot for file %d (LBN %d): %w", fileNumber, lbn, err)
 	}
+
 	return nil
 }
 
@@ -318,6 +323,7 @@ func DeleteFile(dir *Directory, name string, version uint16, bm *Bitmap, ib *Ind
 	}
 
 	dev := dir.Device
+
 	primary, err := readFileHeaderViaIndex(dev, dev.IndexFile.Extents, entry.Fid)
 	if err != nil {
 		return fmt.Errorf("volume: deleting %s;%d: %w", name, version, err)
@@ -328,6 +334,7 @@ func DeleteFile(dir *Directory, name string, version uint16, bm *Bitmap, ib *Ind
 		if err != nil {
 			return fmt.Errorf("volume: deleting %s;%d: %w", name, version, err)
 		}
+		
 		if !empty {
 			return fmt.Errorf("volume: deleting %s;%d: %w", name, version, ErrDirectoryNotEmpty)
 		}
@@ -379,12 +386,14 @@ func SetVersionLimit(f *File, limit uint16) error {
 	if err != nil {
 		return fmt.Errorf("volume: setting version limit for file %v: %w", f.Header.Fid, err)
 	}
+
 	decoded, err := writeHeader(f.Device, container, h.Fid.Number(), h, areas)
 	if err != nil {
 		return fmt.Errorf("volume: setting version limit for file %v: %w", f.Header.Fid, err)
 	}
 
 	f.Header = decoded
+
 	return nil
 }
 
@@ -418,6 +427,7 @@ func PurgeVersions(dir *Directory, name string, keep uint16, bm *Bitmap, ib *Ind
 			return fmt.Errorf("volume: purging %s: %w", name, err)
 		}
 	}
+
 	return nil
 }
 
@@ -446,5 +456,6 @@ func isEmptyDirectory(dev *Device, primary ondisk.FileHeader) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("listing directory %v's entries: %w", primary.Fid, err)
 	}
+
 	return len(entries) == 0, nil
 }

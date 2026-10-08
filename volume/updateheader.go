@@ -30,7 +30,7 @@ import (
 // map or its position in the index file: the header's Fid, its
 // ExtensionFid, SegmentNumber, and StructureLevel, and
 // RecordAttributes.HighestBlock (how many blocks the map allocates). Any
-// change change makes to those is quietly put back before writing — so a
+// change the function makes to those is quietly put back before writing — so a
 // caller can, for instance, write back a whole 32-byte record attribute
 // area a program supplied without first having to patch the allocation
 // into it.
@@ -56,6 +56,7 @@ func UpdateHeader(f *File, change func(h *ondisk.FileHeader, id *ondisk.Ident)) 
 	// The copies change edits. ident is a copy too, so a header without an
 	// IDENT area can be handed a throwaway one.
 	h := old
+	
 	ident := ondisk.Ident{}
 	if areas.Ident != nil {
 		ident = *areas.Ident

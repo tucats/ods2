@@ -81,6 +81,7 @@ func OpenBitmap(dev *Device) (*Bitmap, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	bm.container = container
 
 	return bm, nil
@@ -110,6 +111,7 @@ func loadBitmap(dev *Device) (*Bitmap, error) {
 	if err := file.ReadBlock(1, scbBuf); err != nil {
 		return nil, fmt.Errorf("volume: reading storage control block: %w", err)
 	}
+
 	scb, err := ondisk.DecodeStorageControlBlock(scbBuf)
 	if err != nil {
 		return nil, fmt.Errorf("volume: decoding storage control block: %w", err)
@@ -119,6 +121,7 @@ func loadBitmap(dev *Device) (*Bitmap, error) {
 	if clusterSize == 0 {
 		return nil, fmt.Errorf("volume: home block cluster size is zero")
 	}
+
 	if uint32(scb.ClusterSize) != clusterSize {
 		return nil, fmt.Errorf(
 			"volume: storage control block cluster size (%d) does not match home block's (%d)",
@@ -136,11 +139,13 @@ func loadBitmap(dev *Device) (*Bitmap, error) {
 
 	bits := make([]byte, bitmapBlocks*ondisk.BlockSize)
 	buf := make([]byte, ondisk.BlockSize)
+
 	for i := uint32(0); i < bitmapBlocks; i++ {
 		vbn := 2 + i // VBN 1 is the SCB; the bitmap bits start at VBN 2.
 		if err := file.ReadBlock(vbn, buf); err != nil {
 			return nil, fmt.Errorf("volume: reading storage bitmap block (VBN %d): %w", vbn, err)
 		}
+
 		copy(bits[i*ondisk.BlockSize:], buf)
 	}
 
@@ -173,11 +178,13 @@ func (bm *Bitmap) FindFree(clusters uint32) (ondisk.Extent, error) {
 	}
 
 	var run uint32
+
 	for c := uint32(0); c < bm.totalClusters; c++ {
 		if ondisk.BitmapTest(bm.bits, c) {
 			run++
 			if run == clusters {
 				start := c + 1 - clusters
+
 				return ondisk.Extent{
 					Count:    clusters * bm.clusterSize,
 					StartLBN: start * bm.clusterSize,
@@ -195,11 +202,13 @@ func (bm *Bitmap) FindFree(clusters uint32) (ondisk.Extent, error) {
 // allocations not yet flushed).
 func (bm *Bitmap) FreeClusters() uint32 {
 	var free uint32
+
 	for c := uint32(0); c < bm.totalClusters; c++ {
 		if ondisk.BitmapTest(bm.bits, c) {
 			free++
 		}
 	}
+
 	return free
 }
 
@@ -208,6 +217,7 @@ func (bm *Bitmap) FreeClusters() uint32 {
 // request FindFree can satisfy.
 func (bm *Bitmap) LargestFreeRun() uint32 {
 	var run, longest uint32
+
 	for c := uint32(0); c < bm.totalClusters; c++ {
 		if ondisk.BitmapTest(bm.bits, c) {
 			run++
@@ -216,6 +226,7 @@ func (bm *Bitmap) LargestFreeRun() uint32 {
 			run = 0
 		}
 	}
+
 	return longest
 }
 
@@ -229,18 +240,22 @@ func (bm *Bitmap) clusterRange(e ondisk.Extent) (start, count uint32, err error)
 	if e.Count == 0 {
 		return 0, 0, fmt.Errorf("extent has a zero block count")
 	}
+
 	if e.StartLBN%bm.clusterSize != 0 {
 		return 0, 0, fmt.Errorf("extent start LBN %d is not aligned to the volume's cluster size (%d)", e.StartLBN, bm.clusterSize)
 	}
+
 	if e.Count%bm.clusterSize != 0 {
 		return 0, 0, fmt.Errorf("extent block count %d is not a whole number of clusters (cluster size %d)", e.Count, bm.clusterSize)
 	}
 
 	start = e.StartLBN / bm.clusterSize
 	count = e.Count / bm.clusterSize
+
 	if start+count > bm.totalClusters {
 		return 0, 0, fmt.Errorf("extent covers clusters %d-%d, beyond the volume's %d cluster(s)", start, start+count-1, bm.totalClusters)
 	}
+
 	return start, count, nil
 }
 
@@ -255,7 +270,9 @@ func (bm *Bitmap) MarkAllocated(e ondisk.Extent) error {
 	for c := start; c < start+count; c++ {
 		ondisk.BitmapClear(bm.bits, c)
 	}
+
 	bm.dirty = true
+
 	return nil
 }
 
@@ -270,7 +287,9 @@ func (bm *Bitmap) MarkFree(e ondisk.Extent) error {
 	for c := start; c < start+count; c++ {
 		ondisk.BitmapSet(bm.bits, c)
 	}
+
 	bm.dirty = true
+
 	return nil
 }
 
@@ -291,19 +310,23 @@ func (bm *Bitmap) Flush() error {
 
 	blocks := uint32(len(bm.bits)) / ondisk.BlockSize
 	buf := make([]byte, ondisk.BlockSize)
+
 	for i := uint32(0); i < blocks; i++ {
 		vbn := 2 + i // VBN 1 is the SCB; the bitmap bits start at VBN 2.
+
 		lbn, err := resolveExtentLBN(bm.file.Extents, vbn)
 		if err != nil {
 			return fmt.Errorf("volume: flushing storage bitmap: locating VBN %d: %w", vbn, err)
 		}
 
 		copy(buf, bm.bits[i*ondisk.BlockSize:(i+1)*ondisk.BlockSize])
+
 		if err := bm.container.WriteBlock(lbn, buf); err != nil {
 			return fmt.Errorf("volume: flushing storage bitmap: writing LBN %d: %w", lbn, err)
 		}
 	}
 
 	bm.dirty = false
+
 	return nil
 }

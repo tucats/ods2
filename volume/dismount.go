@@ -23,8 +23,10 @@ func (dev *Device) Bitmap() (*Bitmap, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		dev.bitmap = bm
 	}
+
 	return dev.bitmap, nil
 }
 
@@ -37,8 +39,10 @@ func (dev *Device) IndexBitmap() (*IndexBitmap, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		dev.indexBitmap = ib
 	}
+
 	return dev.indexBitmap, nil
 }
 
@@ -61,6 +65,7 @@ func (dev *Device) IndexBitmap() (*IndexBitmap, error) {
 // first error encountered is returned.
 func (vol *Volume) Dismount() error {
 	var firstErr error
+
 	note := func(err error) {
 		if err != nil && firstErr == nil {
 			firstErr = err
@@ -82,6 +87,7 @@ func (vol *Volume) Dismount() error {
 		if dev.bitmap != nil {
 			note(dev.bitmap.Flush())
 		}
+
 		if dev.indexBitmap != nil {
 			note(dev.indexBitmap.Flush())
 		}
@@ -94,5 +100,6 @@ func (vol *Volume) Dismount() error {
 	if firstErr != nil {
 		return fmt.Errorf("volume: dismount: %w", firstErr)
 	}
+	
 	return nil
 }

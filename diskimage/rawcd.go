@@ -103,6 +103,7 @@ func (r *rawCDImage) ReadBlock(lbn uint32, buf []byte) error {
 
 	_, err := r.f.ReadAt(buf[:BlockSize], offset)
 
+	
 	return err
 }
 

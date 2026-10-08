@@ -22,6 +22,7 @@ func TestDirectoryRejectsNonDirectoryFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	if _, err := f.Directory(); err == nil {
 		t.Fatal("Directory() on a non-directory file: want error, got nil")
 	}
@@ -58,6 +59,7 @@ func TestDirectoryListAndLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	want := []ondisk.DirEntry{
 		{Name: "README.TXT", Version: 1, Fid: readmeFid1},
 		{Name: "README.TXT", Version: 2, Fid: readmeFid2},
@@ -72,6 +74,7 @@ func TestDirectoryListAndLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Lookup: %v", err)
 		}
+
 		if got.Fid != readmeFid1 {
 			t.Errorf("Fid = %v, want %v", got.Fid, readmeFid1)
 		}
@@ -82,6 +85,7 @@ func TestDirectoryListAndLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Lookup: %v", err)
 		}
+
 		if got.Fid != readmeFid2 {
 			t.Errorf("Fid = %v, want %v (the higher version)", got.Fid, readmeFid2)
 		}
@@ -92,6 +96,7 @@ func TestDirectoryListAndLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Lookup: %v", err)
 		}
+		
 		if got.Fid != dataFid {
 			t.Errorf("Fid = %v, want %v", got.Fid, dataFid)
 		}
@@ -139,6 +144,7 @@ func TestDirectoryListSkipsUnwrittenTrailingBlocks(t *testing.T) {
 	for i := range garbage {
 		garbage[i] = 0xAA
 	}
+
 	c.PutBlock(261, garbage)
 	c.PutBlock(262, garbage)
 
@@ -164,9 +170,11 @@ func TestDirectoryListSkipsUnwrittenTrailingBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	want := []ondisk.DirEntry{
 		{Name: "README.TXT", Version: 1, Fid: readmeFid},
 	}
+
 	if !reflect.DeepEqual(entries, want) {
 		t.Errorf("List() = %+v, want %+v", entries, want)
 	}
@@ -189,13 +197,16 @@ func newWritableTestDirectory(t *testing.T, dev *Device, ib *IndexBitmap, name s
 		Directory:       ondisk.Fid{Num: 4, Seq: 4},
 		Characteristics: ondisk.FchDirectory,
 	})
+
 	if err != nil {
 		t.Fatalf("CreateHeader(%s): %v", name, err)
 	}
+
 	dir, err := f.Directory()
 	if err != nil {
 		t.Fatalf("Directory(): %v", err)
 	}
+
 	return dir
 }
 
@@ -208,6 +219,7 @@ func TestDirectoryInsertIntoEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -228,10 +240,12 @@ func TestDirectoryInsertIntoEmptyDirectory(t *testing.T) {
 	}
 
 	want := []ondisk.DirEntry{{Name: "README.TXT", Version: 1, Fid: fid, VersionLimit: ondisk.NoVersionLimit}}
+
 	entries, err := dir.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if !reflect.DeepEqual(entries, want) {
 		t.Errorf("List() = %+v, want %+v", entries, want)
 	}
@@ -239,14 +253,17 @@ func TestDirectoryInsertIntoEmptyDirectory(t *testing.T) {
 	// Confirm this round-trips through a completely independent reopen, not
 	// just the in-memory dir this test already mutated.
 	vol := &Volume{Devices: []*Device{dev}}
+
 	reopened, err := vol.OpenDirectory(dir.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	reentries, err := reopened.List()
 	if err != nil {
 		t.Fatalf("List (reopened): %v", err)
 	}
+
 	if !reflect.DeepEqual(reentries, want) {
 		t.Errorf("List() after reopen = %+v, want %+v", reentries, want)
 	}
@@ -261,6 +278,7 @@ func TestDirectoryInsertSecondVersionAndNextVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -273,6 +291,7 @@ func TestDirectoryInsertSecondVersionAndNextVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NextVersion (no existing entries): %v", err)
 	}
+
 	if firstVersion != 1 {
 		t.Errorf("NextVersion(DATA.DAT) with nothing inserted yet = %d, want 1", firstVersion)
 	}
@@ -286,6 +305,7 @@ func TestDirectoryInsertSecondVersionAndNextVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NextVersion: %v", err)
 	}
+
 	if secondVersion != 2 {
 		t.Errorf("NextVersion(DATA.DAT) after inserting v1 = %d, want 2", secondVersion)
 	}
@@ -302,10 +322,12 @@ func TestDirectoryInsertSecondVersionAndNextVersion(t *testing.T) {
 		{Name: "DATA.DAT", Version: 2, Fid: fid2, VersionLimit: ondisk.NoVersionLimit},
 		{Name: "DATA.DAT", Version: 1, Fid: fid1, VersionLimit: ondisk.NoVersionLimit},
 	}
+
 	entries, err := dir.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if !reflect.DeepEqual(entries, want) {
 		t.Errorf("List() = %+v, want %+v", entries, want)
 	}
@@ -330,6 +352,7 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -346,20 +369,25 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 	// as creating each file would allocate its data, so the space right
 	// after the directory is taken whenever it needs to grow.
 	const count = 60
+
 	want := make([]ondisk.DirEntry, 0, count)
 	freeBefore, blocksBefore := bm.FreeClusters(), dir.Blocks()
+
 	for i := 0; i < count; i++ {
 		name := fmt.Sprintf("FILE%04d.TXT", i)
 		fid := ondisk.Fid{Num: uint16(100 + i), Seq: 1}
+
 		if err := dir.Insert(name, 1, fid, bm, ib); err != nil {
 			t.Fatalf("Insert(%s) (#%d): %v", name, i, err)
 		}
+
 		want = append(want, ondisk.DirEntry{Name: name, Version: 1, Fid: fid, VersionLimit: ondisk.NoVersionLimit})
 
 		other, err := bm.FindFree(1)
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		if err := bm.MarkAllocated(other); err != nil {
 			t.Fatal(err)
 		}
@@ -374,6 +402,7 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 	if len(dir.Extents) != 1 || dir.Header.FileCharacteristics&ondisk.FchContig == 0 {
 		t.Errorf("directory extents %+v, characteristics %#x: want one contiguous extent", dir.Extents, dir.Header.FileCharacteristics)
 	}
+
 	if used, want := freeBefore-bm.FreeClusters(), uint32(count)+dir.Blocks()-blocksBefore; used != want/bm.clusterSize {
 		t.Errorf("%d clusters newly in use, want %d (the other allocations and the directory's growth)", used, want/bm.clusterSize)
 	}
@@ -381,6 +410,7 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 	byName := func(entries []ondisk.DirEntry) []ondisk.DirEntry {
 		sorted := append([]ondisk.DirEntry(nil), entries...)
 		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+
 		return sorted
 	}
 
@@ -388,6 +418,7 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if got, want := byName(entries), byName(want); !reflect.DeepEqual(got, want) {
 		t.Errorf("List() after %d inserts = %+v, want %+v", count, got, want)
 	}
@@ -395,14 +426,17 @@ func TestDirectoryInsertForcesDirectoryExtension(t *testing.T) {
 	// Independent reopen must see exactly the same entries, across every
 	// block the directory ended up using.
 	vol := &Volume{Devices: []*Device{dev}}
+
 	reopened, err := vol.OpenDirectory(dir.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	reentries, err := reopened.List()
 	if err != nil {
 		t.Fatalf("List (reopened): %v", err)
 	}
+
 	if got, want := byName(reentries), byName(want); !reflect.DeepEqual(got, want) {
 		t.Errorf("List() after reopen = %+v, want %+v", got, want)
 	}
@@ -422,6 +456,7 @@ func TestDirectoryInsertKeepsBlockSentinels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -430,6 +465,7 @@ func TestDirectoryInsertKeepsBlockSentinels(t *testing.T) {
 	dir := newWritableTestDirectory(t, dev, ib, "FULL.DIR")
 
 	const count = 40
+
 	for i := 0; i < count; i++ {
 		name := fmt.Sprintf("FILE%010d.TXT", i) // 18 characters
 		if err := dir.Insert(name, 1, ondisk.Fid{Num: uint16(100 + i), Seq: 1}, bm, ib); err != nil {
@@ -472,6 +508,7 @@ func TestDirectoryRemoveOnlyEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -492,6 +529,7 @@ func TestDirectoryRemoveOnlyEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 0 {
 		t.Errorf("List() after removing the only entry = %+v, want empty", entries)
 	}
@@ -502,14 +540,17 @@ func TestDirectoryRemoveOnlyEntry(t *testing.T) {
 	// rather than something List merely tolerates via the same in-memory
 	// Header this test already mutated).
 	vol := &Volume{Devices: []*Device{dev}}
+
 	reopened, err := vol.OpenDirectory(dir.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	reentries, err := reopened.List()
 	if err != nil {
 		t.Fatalf("List (reopened): %v", err)
 	}
+
 	if len(reentries) != 0 {
 		t.Errorf("List() after reopen = %+v, want empty", reentries)
 	}
@@ -527,6 +568,7 @@ func TestDirectoryRemoveOneOfSeveralVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -538,15 +580,19 @@ func TestDirectoryRemoveOneOfSeveralVersions(t *testing.T) {
 	fid2 := ondisk.Fid{Num: 51, Seq: 1}
 	fid3 := ondisk.Fid{Num: 52, Seq: 1}
 	otherFid := ondisk.Fid{Num: 60, Seq: 1}
+
 	if err := dir.Insert("DATA.DAT", 1, fid1, bm, ib); err != nil {
 		t.Fatalf("Insert v1: %v", err)
 	}
+
 	if err := dir.Insert("DATA.DAT", 2, fid2, bm, ib); err != nil {
 		t.Fatalf("Insert v2: %v", err)
 	}
+
 	if err := dir.Insert("DATA.DAT", 3, fid3, bm, ib); err != nil {
 		t.Fatalf("Insert v3: %v", err)
 	}
+
 	if err := dir.Insert("OTHER.TXT", 1, otherFid, bm, ib); err != nil {
 		t.Fatalf("Insert OTHER.TXT: %v", err)
 	}
@@ -560,10 +606,12 @@ func TestDirectoryRemoveOneOfSeveralVersions(t *testing.T) {
 		{Name: "DATA.DAT", Version: 1, Fid: fid1, VersionLimit: ondisk.NoVersionLimit},
 		{Name: "OTHER.TXT", Version: 1, Fid: otherFid, VersionLimit: ondisk.NoVersionLimit},
 	}
+
 	entries, err := dir.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if !reflect.DeepEqual(entries, want) {
 		t.Errorf("List() after removing DATA.DAT;2 = %+v, want %+v", entries, want)
 	}
@@ -584,6 +632,7 @@ func TestDirectoryRemoveShrinksUsedBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -599,10 +648,12 @@ func TestDirectoryRemoveShrinksUsedBlocks(t *testing.T) {
 	for i := 0; i < count; i++ {
 		name := fmt.Sprintf("FILE%04d.TXT", i)
 		fid := ondisk.Fid{Num: uint16(100 + i), Seq: 1}
+
 		if err := dir.Insert(name, 1, fid, bm, ib); err != nil {
 			t.Fatalf("Insert(%s) (#%d): %v", name, i, err)
 		}
 	}
+
 	lastFid := ondisk.Fid{Num: 200, Seq: 1}
 	if err := dir.Insert("LAST.TXT", 1, lastFid, bm, ib); err != nil {
 		t.Fatalf("Insert(LAST.TXT): %v", err)
@@ -630,10 +681,12 @@ func TestDirectoryRemoveShrinksUsedBlocks(t *testing.T) {
 	}
 
 	want := []ondisk.DirEntry{{Name: "LAST.TXT", Version: 1, Fid: lastFid, VersionLimit: ondisk.NoVersionLimit}}
+	
 	entries, err := dir.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if !reflect.DeepEqual(entries, want) {
 		t.Errorf("List() after shrinking = %+v, want %+v", entries, want)
 	}
@@ -642,14 +695,17 @@ func TestDirectoryRemoveShrinksUsedBlocks(t *testing.T) {
 	// the new, smaller end of file was actually written to disk, not
 	// just held in the in-memory Header this test already mutated.
 	vol := &Volume{Devices: []*Device{dev}}
+
 	reopened, err := vol.OpenDirectory(dir.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenDirectory: %v", err)
 	}
+
 	reentries, err := reopened.List()
 	if err != nil {
 		t.Fatalf("List (reopened): %v", err)
 	}
+
 	if !reflect.DeepEqual(reentries, want) {
 		t.Errorf("List() after reopen = %+v, want %+v", reentries, want)
 	}
@@ -668,6 +724,7 @@ func TestDirectoryRemoveNonexistentEntryErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -707,6 +764,7 @@ func TestDirectoryRemoveNonexistentEntryErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List (after): %v", err)
 	}
+
 	if !reflect.DeepEqual(before, after) {
 		t.Errorf("List() after failed Remove calls = %+v, want unchanged %+v", after, before)
 	}

@@ -23,6 +23,7 @@ func updateHeaderFixture(t *testing.T) (*Volume, *File) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -35,9 +36,11 @@ func updateHeaderFixture(t *testing.T) (*Volume, *File) {
 	if err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
+
 	if err := f.WriteBlock(1, blockOf(0x41)); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -73,6 +76,7 @@ func TestUpdateHeaderRewritesFieldsAndIdent(t *testing.T) {
 	if h.FileProtection != 0xFA00 || h.Owner != (ondisk.Uic{Group: 0o100, Member: 0o7}) {
 		t.Errorf("protection %#x, owner %v: the fixed fields weren't written", h.FileProtection, h.Owner)
 	}
+
 	if h.RecordAttributes.EndOfFileBlock != 1 || h.RecordAttributes.FirstFreeByte != 100 {
 		t.Errorf("end of file %d/%d, want 1/100", h.RecordAttributes.EndOfFileBlock, h.RecordAttributes.FirstFreeByte)
 	}
@@ -81,6 +85,7 @@ func TestUpdateHeaderRewritesFieldsAndIdent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ident: %v", err)
 	}
+
 	if id.ExpirationDate != expires || id.Filename == "" {
 		t.Errorf("ident %+v: the expiration date wasn't written, or the name was lost", id)
 	}
@@ -89,6 +94,7 @@ func TestUpdateHeaderRewritesFieldsAndIdent(t *testing.T) {
 	if err := again.ReadBlock(1, buf); err != nil {
 		t.Fatalf("ReadBlock: %v", err)
 	}
+
 	if !bytes.Equal(buf, blockOf(0x41)) {
 		t.Error("the file's data changed")
 	}
@@ -143,6 +149,7 @@ func TestFileHeaderRawIsTheDiskBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeFileHeader(Raw()): %v", err)
 	}
+	
 	if decoded.Fid != f.Header.Fid {
 		t.Errorf("Raw decodes to FID %v, want %v", decoded.Fid, f.Header.Fid)
 	}

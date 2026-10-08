@@ -27,14 +27,17 @@ func newWritableIndexBitmapTestVolume(t *testing.T) (*Device, diskimage.Writable
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "test.dsk")
+
 	container, err := diskimage.Create(path, 300)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	t.Cleanup(func() { _ = container.Close() })
 
 	mustWrite := func(lbn uint32, b []byte) {
 		t.Helper()
+
 		if err := container.WriteBlock(lbn, b); err != nil {
 			t.Fatalf("WriteBlock(%d): %v", lbn, err)
 		}
@@ -60,6 +63,7 @@ func newWritableIndexBitmapTestVolume(t *testing.T) (*Device, diskimage.Writable
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	return vol.Devices[0], container
 }
 
@@ -75,6 +79,7 @@ func setIndexBitmapBits(t *testing.T, container diskimage.WritableContainer, use
 	for _, n := range usedFileNumbers {
 		ondisk.BitmapSet(bits, n-1)
 	}
+
 	for i := 0; i < testIndexBitmapSize; i++ {
 		lbn := uint32(testIndexBitmapLBN + i)
 		if err := container.WriteBlock(lbn, bits[i*ondisk.BlockSize:(i+1)*ondisk.BlockSize]); err != nil {
@@ -91,6 +96,7 @@ func setIndexBitmapBits(t *testing.T, container diskimage.WritableContainer, use
 func writeTestHeaderSlot(t *testing.T, container diskimage.WritableContainer, fid ondisk.Fid) {
 	t.Helper()
 	header := odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{Fid: fid})
+
 	if err := container.WriteBlock(fileHeaderLBN(fid.Num), header); err != nil {
 		t.Fatalf("WriteBlock(header %d): %v", fid.Num, err)
 	}
@@ -133,6 +139,7 @@ func TestIndexBitmapFindFreeSlotSkipsReservedAndInUseSlots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindFreeSlot: %v", err)
 	}
+
 	if got != 5 {
 		t.Errorf("FindFreeSlot = %d, want 5", got)
 	}
@@ -175,6 +182,7 @@ func TestIndexBitmapMarkAllocatedRemovesSlotFromFutureSearches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindFreeSlot after MarkAllocated(4): %v", err)
 	}
+
 	if got != 5 {
 		t.Errorf("FindFreeSlot after MarkAllocated(4) = %d, want 5", got)
 	}
@@ -197,6 +205,7 @@ func TestIndexBitmapMarkFreeAddsSlotToFutureSearches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindFreeSlot after MarkFree(4): %v", err)
 	}
+
 	if got != 4 {
 		t.Errorf("FindFreeSlot after MarkFree(4) = %d, want 4", got)
 	}
@@ -238,6 +247,7 @@ func TestIndexBitmapFlushIsDeferredUntilCalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	if err := ib.MarkAllocated(4); err != nil {
 		t.Fatalf("MarkAllocated(4): %v", err)
 	}
@@ -248,10 +258,12 @@ func TestIndexBitmapFlushIsDeferredUntilCalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap (second): %v", err)
 	}
+
 	got, err := other.FindFreeSlot()
 	if err != nil {
 		t.Fatalf("FindFreeSlot on unflushed disk state: %v", err)
 	}
+
 	if got != 4 {
 		t.Errorf("unflushed mutation leaked to disk: FindFreeSlot = %d, want 4", got)
 	}
@@ -266,10 +278,12 @@ func TestIndexBitmapFlushIsDeferredUntilCalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap (after flush): %v", err)
 	}
+
 	got, err = reread.FindFreeSlot()
 	if err != nil {
 		t.Fatalf("FindFreeSlot after Flush: %v", err)
 	}
+	
 	if got != 5 {
 		t.Errorf("FindFreeSlot after Flush = %d, want 5", got)
 	}

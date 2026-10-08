@@ -102,6 +102,7 @@ func OpenIndexBitmap(dev *Device) (*IndexBitmap, error) {
 
 	size := uint32(dev.Home.IndexBitmapSize)
 	bitCapacity := size * ondisk.BlockSize * 8
+	
 	if dev.Home.MaxFiles > bitCapacity {
 		return nil, fmt.Errorf(
 			"volume: opening index-file bitmap: MaxFiles (%d) exceeds the index bitmap region's capacity (%d bits)",
@@ -110,11 +111,13 @@ func OpenIndexBitmap(dev *Device) (*IndexBitmap, error) {
 
 	bits := make([]byte, size*ondisk.BlockSize)
 	buf := make([]byte, ondisk.BlockSize)
+
 	for i := uint32(0); i < size; i++ {
 		vbn := uint32(dev.Home.IndexBitmapVBN) + i
 		if err := dev.IndexFile.ReadBlock(vbn, buf); err != nil {
 			return nil, fmt.Errorf("volume: reading index-file bitmap block (VBN %d): %w", vbn, err)
 		}
+
 		copy(bits[i*ondisk.BlockSize:], buf)
 	}
 
@@ -151,6 +154,7 @@ func (ib *IndexBitmap) headerVBN(fileNumber uint32) uint32 {
 // silently allocating over what might be live data.
 func (ib *IndexBitmap) FindFreeSlot() (uint32, error) {
 	buf := make([]byte, ondisk.BlockSize)
+
 	for slot := ib.reservedSlots; slot < ib.totalSlots; slot++ {
 		if ondisk.BitmapTest(ib.bits, slot) {
 			continue // set bit: slot is in use -- see the type doc comment on polarity
@@ -158,6 +162,7 @@ func (ib *IndexBitmap) FindFreeSlot() (uint32, error) {
 
 		fileNumber := slot + 1
 		vbn := ib.headerVBN(fileNumber)
+
 		if err := ib.dev.IndexFile.ReadBlock(vbn, buf); err != nil {
 			return 0, fmt.Errorf("volume: FindFreeSlot: reading header slot for file %d (VBN %d): %w", fileNumber, vbn, err)
 		}
@@ -183,10 +188,12 @@ func (ib *IndexBitmap) slotRange(fileNumber uint32) (uint32, error) {
 	if fileNumber == 0 {
 		return 0, fmt.Errorf("file numbers are 1-based; 0 is not a valid file number")
 	}
+
 	slot := fileNumber - 1
 	if slot >= ib.totalSlots {
 		return 0, fmt.Errorf("file number %d is beyond the volume's %d header slot(s)", fileNumber, ib.totalSlots)
 	}
+
 	return slot, nil
 }
 
@@ -200,6 +207,7 @@ func (ib *IndexBitmap) MarkAllocated(fileNumber uint32) error {
 
 	ondisk.BitmapSet(ib.bits, slot) // set bit: in use -- see the type doc comment on polarity
 	ib.dirty = true
+
 	return nil
 }
 
@@ -213,6 +221,7 @@ func (ib *IndexBitmap) MarkFree(fileNumber uint32) error {
 
 	ondisk.BitmapClear(ib.bits, slot) // clear bit: free -- see the type doc comment on polarity
 	ib.dirty = true
+
 	return nil
 }
 
@@ -227,19 +236,23 @@ func (ib *IndexBitmap) Flush() error {
 
 	blocks := uint32(len(ib.bits)) / ondisk.BlockSize
 	buf := make([]byte, ondisk.BlockSize)
+
 	for i := uint32(0); i < blocks; i++ {
 		vbn := uint32(ib.dev.Home.IndexBitmapVBN) + i
+
 		lbn, err := resolveExtentLBN(ib.dev.IndexFile.Extents, vbn)
 		if err != nil {
 			return fmt.Errorf("volume: flushing index-file bitmap: locating VBN %d: %w", vbn, err)
 		}
 
 		copy(buf, ib.bits[i*ondisk.BlockSize:(i+1)*ondisk.BlockSize])
+
 		if err := ib.container.WriteBlock(lbn, buf); err != nil {
 			return fmt.Errorf("volume: flushing index-file bitmap: writing LBN %d: %w", lbn, err)
 		}
 	}
 
 	ib.dirty = false
+
 	return nil
 }

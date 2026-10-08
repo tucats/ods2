@@ -18,12 +18,15 @@ func TestMountSingleDevice(t *testing.T) {
 	if len(vol.Devices) != 1 {
 		t.Fatalf("len(Devices) = %d, want 1", len(vol.Devices))
 	}
+
 	if vol.Devices[0].Rvn != 1 {
 		t.Errorf("Devices[0].Rvn = %d, want 1", vol.Devices[0].Rvn)
 	}
+
 	if vol.Devices[0].Home.ClusterSize != 4 {
 		t.Errorf("Devices[0].Home.ClusterSize = %d, want 4", vol.Devices[0].Home.ClusterSize)
 	}
+
 	if vol.Devices[0].IndexFile == nil {
 		t.Error("Devices[0].IndexFile is nil, want a bootstrapped index file")
 	}
@@ -41,6 +44,7 @@ func TestMountHomeBlockNotAtFirstBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	if vol.Devices[0].Home.HomeLBN != 5 {
 		t.Errorf("Home.HomeLBN = %d, want 5", vol.Devices[0].Home.HomeLBN)
 	}
@@ -83,9 +87,11 @@ func TestMountVolumeSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	if len(vol.Devices) != 2 {
 		t.Fatalf("len(Devices) = %d, want 2", len(vol.Devices))
 	}
+	
 	if vol.Devices[0].Rvn != 1 || vol.Devices[1].Rvn != 2 {
 		t.Errorf("Devices Rvns = [%d, %d], want [1, 2]", vol.Devices[0].Rvn, vol.Devices[1].Rvn)
 	}

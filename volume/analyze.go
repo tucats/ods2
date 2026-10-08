@@ -49,6 +49,7 @@ func (d BitmapDiscrepancy) String() string {
 			"cluster %d (LBN %d-%d) is marked free but is used by file %d",
 			d.Cluster, d.StartLBN, d.StartLBN+d.Blocks-1, d.ClaimedByFile)
 	}
+
 	return fmt.Sprintf(
 		"cluster %d (LBN %d-%d) is marked allocated but is not used by any file",
 		d.Cluster, d.StartLBN, d.StartLBN+d.Blocks-1)
@@ -116,6 +117,7 @@ func AnalyzeDisk(dev *Device) (*DiskReport, error) {
 	markReserved(computed, bm.clusterSize, bm.totalClusters, 0, dev.Home.HomeLBN, 0, claimedBy)
 
 	buf := make([]byte, ondisk.BlockSize)
+
 	for fileNumber := uint32(1); fileNumber <= dev.Home.MaxFiles; fileNumber++ {
 		vbn := fileHeaderVBN(dev.Home, fileNumber)
 		if err := dev.IndexFile.ReadBlock(vbn, buf); err != nil {
@@ -138,17 +140,21 @@ func AnalyzeDisk(dev *Device) (*DiskReport, error) {
 		if err != nil {
 			return nil, fmt.Errorf("volume: ANALYZE/DISK: decoding retrieval pointers for file %d: %w", fileNumber, err)
 		}
+
 		for _, e := range extents {
 			if e.Count == 0 {
 				continue
 			}
+
 			markReserved(computed, bm.clusterSize, bm.totalClusters, e.StartLBN, e.StartLBN+e.Count-1, fileNumber, claimedBy)
 		}
 	}
 
 	report := &DiskReport{TotalClusters: bm.totalClusters}
+
 	for cluster := uint32(0); cluster < bm.totalClusters; cluster++ {
 		shouldBeAllocated := computed[cluster]
+
 		isAllocated := !ondisk.BitmapTest(bm.bits, cluster) // BitmapTest: set bit means FREE
 		if shouldBeAllocated == isAllocated {
 			continue
@@ -178,6 +184,7 @@ func markReserved(computed []bool, clusterSize, totalClusters, startLBN, endLBN,
 
 	for c := startCluster; c <= endCluster && c < totalClusters; c++ {
 		computed[c] = true
+		
 		if claimedBy[c] == 0 {
 			claimedBy[c] = fileNumber
 		}
@@ -201,6 +208,7 @@ func RepairDisk(dev *Device) (*DiskReport, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if report.Clean() {
 		return report, nil
 	}
@@ -217,6 +225,7 @@ func RepairDisk(dev *Device) (*DiskReport, error) {
 		} else {
 			err = bm.MarkFree(e)
 		}
+
 		if err != nil {
 			return nil, fmt.Errorf("volume: ANALYZE/DISK /REPAIR: correcting cluster %d: %w", d.Cluster, err)
 		}

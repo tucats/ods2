@@ -41,6 +41,7 @@ func (p *plainImage) ReadBlock(lbn uint32, buf []byte) error {
 	// reads race over a shared file-position cursor.
 	_, err := p.f.ReadAt(buf[:BlockSize], int64(lbn)*BlockSize)
 
+
 	return err
 }
 

@@ -34,10 +34,12 @@ func newAnalyzeTestVolume(t *testing.T) analyzeTestVolume {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "analyze.dsk")
+
 	c, err := diskimage.Create(path, 400)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	t.Cleanup(func() { _ = c.Close() })
 
 	if err := Initialize(c, InitializeOptions{Label: "ANALYZE"}); err != nil {
@@ -48,6 +50,7 @@ func newAnalyzeTestVolume(t *testing.T) analyzeTestVolume {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	dev := vol.Devices[0]
 
 	dir, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
@@ -59,6 +62,7 @@ func newAnalyzeTestVolume(t *testing.T) analyzeTestVolume {
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
 	}
+
 	ib, err := dev.IndexBitmap()
 	if err != nil {
 		t.Fatalf("IndexBitmap: %v", err)
@@ -68,9 +72,11 @@ func newAnalyzeTestVolume(t *testing.T) analyzeTestVolume {
 	if err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
+
 	if err := f.WriteBlock(1, bytes.Repeat([]byte{0x42}, ondisk.BlockSize)); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -88,6 +94,7 @@ func newAnalyzeTestVolume(t *testing.T) analyzeTestVolume {
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
@@ -105,9 +112,11 @@ func TestAnalyzeDiskCleanOnFreshlyInitializedVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalyzeDisk: %v", err)
 	}
+
 	if !report.Clean() {
 		t.Errorf("AnalyzeDisk found %d discrepancies on a freshly initialized volume, want 0: %v", len(report.Discrepancies), report.Discrepancies)
 	}
+
 	if report.TotalClusters == 0 {
 		t.Error("TotalClusters = 0, want the volume's actual cluster count")
 	}
@@ -146,6 +155,7 @@ func (tv analyzeTestVolume) corrupt(t *testing.T) (usedCluster, freeCluster uint
 	if err != nil {
 		t.Fatalf("FindFree: %v", err)
 	}
+
 	if err := bm.MarkAllocated(freeExtent); err != nil {
 		t.Fatalf("MarkAllocated(free extent): %v", err)
 	}
@@ -176,6 +186,7 @@ func TestAnalyzeDiskDetectsCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalyzeDisk: %v", err)
 	}
+
 	if len(report.Discrepancies) != 2 {
 		t.Fatalf("AnalyzeDisk found %d discrepancies, want 2: %v", len(report.Discrepancies), report.Discrepancies)
 	}
@@ -189,9 +200,11 @@ func TestAnalyzeDiskDetectsCorruption(t *testing.T) {
 	if !ok {
 		t.Fatalf("no discrepancy reported for the used cluster %d", usedCluster)
 	}
+
 	if !used.ShouldBeAllocated {
 		t.Errorf("used cluster %d: ShouldBeAllocated = false, want true", usedCluster)
 	}
+
 	if used.ClaimedByFile != fileNumber {
 		t.Errorf("used cluster %d: ClaimedByFile = %d, want %d", usedCluster, used.ClaimedByFile, fileNumber)
 	}
@@ -200,6 +213,7 @@ func TestAnalyzeDiskDetectsCorruption(t *testing.T) {
 	if !ok {
 		t.Fatalf("no discrepancy reported for the free cluster %d", freeCluster)
 	}
+
 	if free.ShouldBeAllocated {
 		t.Errorf("free cluster %d: ShouldBeAllocated = true, want false", freeCluster)
 	}
@@ -216,6 +230,7 @@ func TestRepairDiskFixesDiscrepancies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RepairDisk: %v", err)
 	}
+
 	if len(repaired.Discrepancies) != 2 {
 		t.Fatalf("RepairDisk's own report found %d discrepancies, want 2", len(repaired.Discrepancies))
 	}
@@ -224,6 +239,7 @@ func TestRepairDiskFixesDiscrepancies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalyzeDisk (follow-up): %v", err)
 	}
+
 	if !followUp.Clean() {
 		t.Errorf("AnalyzeDisk after RepairDisk found %d discrepancies, want 0: %v", len(followUp.Discrepancies), followUp.Discrepancies)
 	}
@@ -239,6 +255,7 @@ func TestRepairDiskOnCleanVolumeIsNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RepairDisk: %v", err)
 	}
+	
 	if !report.Clean() {
 		t.Errorf("RepairDisk on an already-clean volume found %d discrepancies, want 0", len(report.Discrepancies))
 	}
@@ -258,6 +275,7 @@ func TestRepairDiskRequiresWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("diskimage.Open: %v", err)
 	}
+
 	defer func() { _ = ro.Close() }()
 
 	roVol, err := Mount(ro)

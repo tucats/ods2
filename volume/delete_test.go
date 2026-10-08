@@ -32,6 +32,7 @@ func TestFreeFileStorageReclaimsSingleSegmentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -41,17 +42,21 @@ func TestFreeFileStorageReclaimsSingleSegmentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateHeader: %v", err)
 	}
+
 	if err := Extend(f, bm, ib, 5); err != nil {
 		t.Fatalf("Extend(5): %v", err)
 	}
+
 	fileNumber := f.Header.Fid.Number()
 
 	if err := freeFileStorage(dev, f.Header, bm, ib); err != nil {
 		t.Fatalf("freeFileStorage: %v", err)
 	}
+
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
@@ -63,10 +68,12 @@ func TestFreeFileStorageReclaimsSingleSegmentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap (fresh): %v", err)
 	}
+
 	bm2, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap (fresh): %v", err)
 	}
+
 	if _, err := bm2.FindFree(wideFreeClusters); err != nil {
 		t.Errorf("FindFree(%d) after freeing: %v (extents were not fully reclaimed)", wideFreeClusters, err)
 	}
@@ -78,6 +85,7 @@ func TestFreeFileStorageReclaimsSingleSegmentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindFreeSlot after freeing: %v", err)
 	}
+
 	if got != fileNumber {
 		t.Errorf("FindFreeSlot after freeing = %d, want the file's own former slot %d", got, fileNumber)
 	}
@@ -94,6 +102,7 @@ func TestFreeFileStorageReclaimsMultiSegmentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -110,11 +119,13 @@ func TestFreeFileStorageReclaimsMultiSegmentFile(t *testing.T) {
 	// allocated -- freeFileStorage needs a real multi-segment file to prove
 	// it walks the WHOLE chain, not just the primary.
 	const calls = 150
+
 	for i := 0; i < calls; i++ {
 		if err := Extend(f, bm, ib, 1); err != nil {
 			t.Fatalf("Extend #%d: %v", i, err)
 		}
 	}
+
 	if f.Header.ExtensionFid.IsZero() {
 		t.Fatal("test setup: primary header has no extension segment after enough Extend calls to fill its map area")
 	}
@@ -125,9 +136,11 @@ func TestFreeFileStorageReclaimsMultiSegmentFile(t *testing.T) {
 	if err := freeFileStorage(dev, f.Header, bm, ib); err != nil {
 		t.Fatalf("freeFileStorage: %v", err)
 	}
+
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
@@ -136,6 +149,7 @@ func TestFreeFileStorageReclaimsMultiSegmentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBitmap (fresh): %v", err)
 	}
+
 	if _, err := bm2.FindFree(wideFreeClusters); err != nil {
 		t.Errorf("FindFree(%d) after freeing: %v (extents across both segments were not fully reclaimed)", wideFreeClusters, err)
 	}
@@ -151,17 +165,21 @@ func TestFreeFileStorageReclaimsMultiSegmentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap (fresh): %v", err)
 	}
+
 	first, err := ib2.FindFreeSlot()
 	if err != nil {
 		t.Fatalf("FindFreeSlot (1st): %v", err)
 	}
+
 	if err := ib2.MarkAllocated(first); err != nil {
 		t.Fatalf("MarkAllocated(%d): %v", first, err)
 	}
+
 	second, err := ib2.FindFreeSlot()
 	if err != nil {
 		t.Fatalf("FindFreeSlot (2nd): %v", err)
 	}
+
 	gotSlots := map[uint32]bool{first: true, second: true}
 	if !gotSlots[primaryFileNumber] || !gotSlots[extensionFid.Number()] {
 		t.Errorf("free slots after freeing = {%d, %d}, want both %d (primary) and %d (extension)",
@@ -208,6 +226,7 @@ func TestDeleteFileEndToEndSingleSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -220,12 +239,15 @@ func TestDeleteFileEndToEndSingleSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
+
 	if err := f.WriteBlock(1, blockOf(0x5A)); err != nil {
 		t.Fatalf("WriteBlock(1): %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+
 	fileNumber := f.Header.Fid.Number()
 
 	if err := DeleteFile(dir, "GONE.DAT", 1, bm, ib); err != nil {
@@ -236,6 +258,7 @@ func TestDeleteFileEndToEndSingleSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 0 {
 		t.Errorf("directory List() after DeleteFile = %+v, want empty", entries)
 	}
@@ -243,6 +266,7 @@ func TestDeleteFileEndToEndSingleSegment(t *testing.T) {
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
@@ -251,13 +275,16 @@ func TestDeleteFileEndToEndSingleSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap (fresh): %v", err)
 	}
+
 	got, err := ib2.FindFreeSlot()
 	if err != nil {
 		t.Fatalf("FindFreeSlot after DeleteFile: %v", err)
 	}
+
 	if got != fileNumber {
 		t.Errorf("FindFreeSlot after DeleteFile = %d, want the file's own former slot %d", got, fileNumber)
 	}
+
 	assertHeaderSlotIsZeroed(t, container, uint16(fileNumber))
 
 	bm2, err := OpenBitmap(dev)
@@ -293,6 +320,7 @@ func TestDeleteFileEndToEndMultiSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -307,17 +335,21 @@ func TestDeleteFileEndToEndMultiSegment(t *testing.T) {
 	}
 
 	const calls = 150
+
 	for i := 0; i < calls; i++ {
 		if err := f.WriteBlock(uint32(i+1), blockOf(byte(i))); err != nil {
 			t.Fatalf("WriteBlock #%d: %v", i, err)
 		}
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+
 	if f.Header.ExtensionFid.IsZero() {
 		t.Fatal("test setup: primary header has no extension segment after enough writes to fill its map area")
 	}
+
 	primaryFileNumber := f.Header.Fid.Number()
 	extensionFileNumber := f.Header.ExtensionFid.Number()
 
@@ -328,6 +360,7 @@ func TestDeleteFileEndToEndMultiSegment(t *testing.T) {
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
@@ -339,17 +372,21 @@ func TestDeleteFileEndToEndMultiSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap (fresh): %v", err)
 	}
+
 	first, err := ib2.FindFreeSlot()
 	if err != nil {
 		t.Fatalf("FindFreeSlot (1st): %v", err)
 	}
+
 	if err := ib2.MarkAllocated(first); err != nil {
 		t.Fatalf("MarkAllocated(%d): %v", first, err)
 	}
+
 	second, err := ib2.FindFreeSlot()
 	if err != nil {
 		t.Fatalf("FindFreeSlot (2nd): %v", err)
 	}
+
 	gotSlots := map[uint32]bool{first: true, second: true}
 	if !gotSlots[primaryFileNumber] || !gotSlots[extensionFileNumber] {
 		t.Errorf("free slots after DeleteFile = {%d, %d}, want both %d (primary) and %d (extension)",
@@ -383,6 +420,7 @@ func TestDeleteFileLeavesOtherVersionsIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -395,9 +433,11 @@ func TestDeleteFileLeavesOtherVersionsIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFile (version 1): %v", err)
 	}
+
 	if err := first.WriteBlock(1, blockOf(0x11)); err != nil {
 		t.Fatalf("WriteBlock(1) on version 1: %v", err)
 	}
+
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close (version 1): %v", err)
 	}
@@ -406,12 +446,15 @@ func TestDeleteFileLeavesOtherVersionsIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFile (version 2): %v", err)
 	}
+
 	if err := second.WriteBlock(1, blockOf(0x22)); err != nil {
 		t.Fatalf("WriteBlock(1) on version 2: %v", err)
 	}
+
 	if err := second.Close(); err != nil {
 		t.Fatalf("Close (version 2): %v", err)
 	}
+
 	secondFid := second.Header.Fid
 
 	if err := DeleteFile(dir, "MULTI.DAT", 1, bm, ib); err != nil {
@@ -422,6 +465,7 @@ func TestDeleteFileLeavesOtherVersionsIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 1 || entries[0].Version != 2 {
 		t.Fatalf("List() after deleting version 1 = %+v, want exactly version 2", entries)
 	}
@@ -430,10 +474,12 @@ func TestDeleteFileLeavesOtherVersionsIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFID(version 2) after deleting version 1: %v", err)
 	}
+
 	buf := make([]byte, ondisk.BlockSize)
 	if err := reopened.ReadBlock(1, buf); err != nil {
 		t.Fatalf("ReadBlock(1) on surviving version 2: %v", err)
 	}
+
 	if !bytes.Equal(buf, blockOf(0x22)) {
 		t.Error("surviving version 2's content changed after deleting version 1")
 	}
@@ -452,6 +498,7 @@ func TestDeleteFileNonexistentEntryErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -464,6 +511,7 @@ func TestDeleteFileNonexistentEntryErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -476,6 +524,7 @@ func TestDeleteFileNonexistentEntryErrors(t *testing.T) {
 	if err := DeleteFile(dir, "MISSING.DAT", 1, bm, ib); err == nil {
 		t.Error("DeleteFile of a nonexistent name: want error, got nil")
 	}
+
 	if err := DeleteFile(dir, "REAL.DAT", 7, bm, ib); err == nil {
 		t.Error("DeleteFile of a nonexistent version: want error, got nil")
 	}
@@ -484,6 +533,7 @@ func TestDeleteFileNonexistentEntryErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List (after): %v", err)
 	}
+
 	if !reflect.DeepEqual(before, after) {
 		t.Errorf("directory content changed after failed DeleteFile calls: before %+v, after %+v", before, after)
 	}
@@ -505,6 +555,7 @@ func TestDeleteFileRejectsNonEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -520,6 +571,7 @@ func TestDeleteFileRejectsNonEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateHeader(SUB.DIR): %v", err)
 	}
+
 	if err := parent.Insert("SUB.DIR", 1, subFile.Header.Fid, bm, ib); err != nil {
 		t.Fatalf("Insert(SUB.DIR): %v", err)
 	}
@@ -528,6 +580,7 @@ func TestDeleteFileRejectsNonEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Directory(): %v", err)
 	}
+
 	childFid := ondisk.Fid{Num: 60, Seq: 1}
 	if err := subDir.Insert("CHILD.TXT", 1, childFid, bm, ib); err != nil {
 		t.Fatalf("Insert(CHILD.TXT) into subdirectory: %v", err)
@@ -546,6 +599,7 @@ func TestDeleteFileRejectsNonEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List (parent, after): %v", err)
 	}
+
 	if !reflect.DeepEqual(beforeParent, afterParent) {
 		t.Errorf("parent directory content changed after rejected DeleteFile: before %+v, after %+v", beforeParent, afterParent)
 	}
@@ -554,6 +608,7 @@ func TestDeleteFileRejectsNonEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List (subdirectory, after): %v", err)
 	}
+
 	if len(childEntries) != 1 || childEntries[0].Name != "CHILD.TXT" {
 		t.Errorf("subdirectory content changed after rejected DeleteFile: %+v", childEntries)
 	}
@@ -572,6 +627,7 @@ func TestDeleteFileAllowsEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -587,9 +643,11 @@ func TestDeleteFileAllowsEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateHeader(EMPTY.DIR): %v", err)
 	}
+
 	if err := parent.Insert("EMPTY.DIR", 1, subFile.Header.Fid, bm, ib); err != nil {
 		t.Fatalf("Insert(EMPTY.DIR): %v", err)
 	}
+
 	subFileNumber := subFile.Header.Fid.Number()
 
 	if err := DeleteFile(parent, "EMPTY.DIR", 1, bm, ib); err != nil {
@@ -600,6 +658,7 @@ func TestDeleteFileAllowsEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List (parent, after): %v", err)
 	}
+
 	if len(entries) != 0 {
 		t.Errorf("parent directory List() after deleting EMPTY.DIR = %+v, want empty", entries)
 	}
@@ -607,9 +666,11 @@ func TestDeleteFileAllowsEmptyDirectory(t *testing.T) {
 	if err := bm.Flush(); err != nil {
 		t.Fatalf("Bitmap.Flush: %v", err)
 	}
+
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
+
 	assertHeaderSlotIsZeroed(t, container, uint16(subFileNumber))
 }
 
@@ -621,6 +682,7 @@ func TestDeleteFileAllowsEmptyDirectory(t *testing.T) {
 // enough to try reading it).
 func TestDeleteFileRejectsMasterFileDirectory(t *testing.T) {
 	dev, container := newWritableHeaderTestVolume(t)
+
 	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
 	installWideTestBitmap(t, container)
 
@@ -628,6 +690,7 @@ func TestDeleteFileRejectsMasterFileDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -646,6 +709,7 @@ func TestDeleteFileRejectsMasterFileDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 1 {
 		t.Errorf("directory content changed after rejected DeleteFile: %+v", entries)
 	}
@@ -678,6 +742,7 @@ func TestDeleteFileRejectsReservedBookkeepingFiles(t *testing.T) {
 			if err != nil {
 				t.Fatalf("OpenIndexBitmap: %v", err)
 			}
+
 			bm, err := OpenBitmap(dev)
 			if err != nil {
 				t.Fatalf("OpenBitmap: %v", err)
@@ -696,6 +761,7 @@ func TestDeleteFileRejectsReservedBookkeepingFiles(t *testing.T) {
 			if err != nil {
 				t.Fatalf("List: %v", err)
 			}
+
 			if len(entries) != 1 {
 				t.Errorf("directory content changed after rejected DeleteFile: %+v", entries)
 			}
@@ -715,6 +781,7 @@ func TestSetVersionLimitRoundTripsOnPlainFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -727,6 +794,7 @@ func TestSetVersionLimitRoundTripsOnPlainFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -734,6 +802,7 @@ func TestSetVersionLimitRoundTripsOnPlainFile(t *testing.T) {
 	if err := SetVersionLimit(f, 6); err != nil {
 		t.Fatalf("SetVersionLimit: %v", err)
 	}
+
 	if got := f.Header.RecordAttributes.VersionLimit; got != 6 {
 		t.Errorf("f.Header.RecordAttributes.VersionLimit after SetVersionLimit = %d, want 6", got)
 	}
@@ -742,6 +811,7 @@ func TestSetVersionLimitRoundTripsOnPlainFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	if got := reopened.Header.RecordAttributes.VersionLimit; got != 6 {
 		t.Errorf("reopened VersionLimit = %d, want 6", got)
 	}
@@ -750,10 +820,12 @@ func TestSetVersionLimitRoundTripsOnPlainFile(t *testing.T) {
 	if err := SetVersionLimit(f, 0); err != nil {
 		t.Fatalf("SetVersionLimit(0): %v", err)
 	}
+
 	reopenedAgain, err := vol.OpenFID(f.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenFID (after reset): %v", err)
 	}
+
 	if got := reopenedAgain.Header.RecordAttributes.VersionLimit; got != 0 {
 		t.Errorf("reopened VersionLimit after resetting to 0 = %d, want 0", got)
 	}
@@ -775,6 +847,7 @@ func TestSetVersionLimitOnDirectoryAffectsFutureInheritance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -788,18 +861,22 @@ func TestSetVersionLimitOnDirectoryAffectsFutureInheritance(t *testing.T) {
 	if err := SetVersionLimit(dir.File, 8); err != nil {
 		t.Fatalf("SetVersionLimit(directory): %v", err)
 	}
+
 	if got := dir.Header.RecordAttributes.VersionLimit; got != 8 {
 		t.Errorf("directory's own VersionLimit after SetVersionLimit = %d, want 8", got)
 	}
 
 	vol := &Volume{Devices: []*Device{dev}}
+
 	f, err := vol.CreateFile(dir, "CHILD.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
 	if err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+
 	if got := f.Header.RecordAttributes.VersionLimit; got != 8 {
 		t.Errorf("new file's inherited VersionLimit = %d, want 8 (the directory's newly-set default)", got)
 	}
@@ -821,10 +898,12 @@ func newPurgeTestDirectory(t *testing.T, dev *Device, ib *IndexBitmap, bm *Bitma
 		if err != nil {
 			t.Fatalf("CreateFile #%d: %v", i, err)
 		}
+
 		if err := f.Close(); err != nil {
 			t.Fatalf("Close #%d: %v", i, err)
 		}
 	}
+
 	return vol, dir
 }
 
@@ -839,6 +918,7 @@ func TestPurgeVersionsTrimsToKeepHighest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -854,13 +934,16 @@ func TestPurgeVersionsTrimsToKeepHighest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 2 {
 		t.Fatalf("entry count after PurgeVersions = %d, want 2", len(entries))
 	}
+
 	got := map[uint16]bool{}
 	for _, e := range entries {
 		got[e.Version] = true
 	}
+
 	if !got[4] || !got[5] {
 		t.Errorf("surviving versions = %+v, want exactly {4, 5}", entries)
 	}
@@ -879,6 +962,7 @@ func TestPurgeVersionsLeavesUnderLimitNameUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -894,6 +978,7 @@ func TestPurgeVersionsLeavesUnderLimitNameUntouched(t *testing.T) {
 	if err := PurgeVersions(dir, "SAFE.DAT", 5, bm, ib); err != nil {
 		t.Fatalf("PurgeVersions (fewer than keep): %v", err)
 	}
+
 	if err := PurgeVersions(dir, "SAFE.DAT", 2, bm, ib); err != nil {
 		t.Fatalf("PurgeVersions (exactly keep): %v", err)
 	}
@@ -902,6 +987,7 @@ func TestPurgeVersionsLeavesUnderLimitNameUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List (after): %v", err)
 	}
+
 	if !reflect.DeepEqual(before, after) {
 		t.Errorf("directory content changed despite every version being at or under the keep limit: before %+v, after %+v", before, after)
 	}
@@ -919,6 +1005,7 @@ func TestPurgeVersionsRejectsZeroKeep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -945,6 +1032,7 @@ func TestPurgeVersionsIndependentNamesEachTrimmedSeparately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -959,17 +1047,20 @@ func TestPurgeVersionsIndependentNamesEachTrimmedSeparately(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateFile(%s) #%d: %v", name, i, err)
 			}
+
 			if err := f.Close(); err != nil {
 				t.Fatalf("Close(%s) #%d: %v", name, i, err)
 			}
 		}
 	}
+
 	createN("MANY.DAT", 3)
 	createN("ONE.DAT", 1)
 
 	if err := PurgeVersions(dir, "MANY.DAT", 1, bm, ib); err != nil {
 		t.Fatalf("PurgeVersions(MANY.DAT): %v", err)
 	}
+
 	if err := PurgeVersions(dir, "ONE.DAT", 1, bm, ib); err != nil {
 		t.Fatalf("PurgeVersions(ONE.DAT) (already at limit): %v", err)
 	}
@@ -978,7 +1069,9 @@ func TestPurgeVersionsIndependentNamesEachTrimmedSeparately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	var manyVersions, oneVersions []uint16
+
 	for _, e := range entries {
 		switch e.Name {
 		case "MANY.DAT":
@@ -987,9 +1080,11 @@ func TestPurgeVersionsIndependentNamesEachTrimmedSeparately(t *testing.T) {
 			oneVersions = append(oneVersions, e.Version)
 		}
 	}
+
 	if len(manyVersions) != 1 || manyVersions[0] != 3 {
 		t.Errorf("MANY.DAT surviving versions = %v, want exactly [3]", manyVersions)
 	}
+
 	if len(oneVersions) != 1 || oneVersions[0] != 1 {
 		t.Errorf("ONE.DAT surviving versions = %v, want exactly [1] (untouched)", oneVersions)
 	}
@@ -1011,9 +1106,11 @@ func assertHeaderSlotIsZeroed(t *testing.T, container interface {
 	if err := container.ReadBlock(fileHeaderLBN(fileNum), buf); err != nil {
 		t.Fatalf("ReadBlock(header slot for file %d): %v", fileNum, err)
 	}
+
 	if binary.LittleEndian.Uint16(buf[fidSeqOffset:]) == 0 {
 		t.Errorf("header slot for file %d lost its sequence number", fileNum)
 	}
+
 	buf[fidSeqOffset], buf[fidSeqOffset+1] = 0, 0
 	if !bytes.Equal(buf, make([]byte, ondisk.BlockSize)) {
 		t.Errorf("header slot for file %d is not zero (but for its sequence number) after freeing", fileNum)
@@ -1033,6 +1130,7 @@ func TestDeleteFileSlotReuseGetsNewFid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatal(err)
@@ -1045,6 +1143,7 @@ func TestDeleteFileSlotReuseGetsNewFid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	old := first.Header.Fid
 
 	if err := DeleteFile(dir, "ONE.DAT", 1, bm, ib); err != nil {
@@ -1055,11 +1154,13 @@ func TestDeleteFileSlotReuseGetsNewFid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	fid := second.Header.Fid
 
 	if fid.Number() != old.Number() || fid.Seq != old.Seq+1 {
 		t.Fatalf("new file %v in the old slot %v: want the same number, sequence one more", fid, old)
 	}
+
 	if _, err := vol.OpenFID(old); err == nil {
 		t.Error("the deleted file's Fid still opens")
 	}
@@ -1077,6 +1178,7 @@ func TestDeleteHeaderByFid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatal(err)
@@ -1089,25 +1191,31 @@ func TestDeleteHeaderByFid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := f.WriteBlock(1, blockOf(0x33)); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	fid := f.Header.Fid
 
 	if err := dir.Remove("BYFID.DAT", 1, bm, ib); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := DeleteHeader(dev, fid, bm, ib); err != nil {
 		t.Fatalf("DeleteHeader: %v", err)
 	}
 
 	assertHeaderSlotIsZeroed(t, container, uint16(fid.Number()))
+	
 	if _, err := vol.OpenFID(fid); err == nil {
 		t.Error("the deleted Fid still opens")
 	}
+
 	if err := DeleteHeader(dev, fid, bm, ib); !errors.Is(err, ErrNotFound) {
 		t.Errorf("deleting it again: %v, want ErrNotFound", err)
 	}
@@ -1124,6 +1232,7 @@ func TestDeleteHeaderRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatal(err)
@@ -1139,6 +1248,7 @@ func TestDeleteHeaderRefusals(t *testing.T) {
 	if err := dir.Insert("X.DAT", 1, ondisk.Fid{Num: 99, Seq: 1}, bm, ib); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := DeleteHeader(dev, dir.Header.Fid, bm, ib); !errors.Is(err, ErrDirectoryNotEmpty) {
 		t.Errorf("a directory with an entry: %v, want ErrDirectoryNotEmpty", err)
 	}

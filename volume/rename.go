@@ -289,7 +289,7 @@ func purgeForRename(dir *Directory, name string, version, limit uint16, bm *Bitm
 	sort.Slice(others, func(i, j int) bool { return others[i] < others[j] })
 	excess := others[:len(others)+1-int(limit)]
 
-	var purged []uint16
+	purged := make([]uint16, 0, len(excess))
 
 	for _, v := range excess {
 		if err := DeleteFile(dir, name, v, bm, ib); err != nil {

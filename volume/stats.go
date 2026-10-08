@@ -60,6 +60,7 @@ func Stats(dev *Device) (VolumeStats, error) {
 	}
 
 	var freeClusters uint32
+
 	for c := uint32(0); c < bm.totalClusters; c++ {
 		if ondisk.BitmapTest(bm.bits, c) {
 			freeClusters++
@@ -92,6 +93,7 @@ func countFiles(dev *Device) (uint32, error) {
 	var count uint32
 
 	buf := make([]byte, ondisk.BlockSize)
+	
 	for fileNumber := uint32(dev.Home.ReservedFiles) + 1; fileNumber <= dev.Home.MaxFiles; fileNumber++ {
 		vbn := fileHeaderVBN(dev.Home, fileNumber)
 		if err := dev.IndexFile.ReadBlock(vbn, buf); err != nil {

@@ -20,6 +20,7 @@ func createVersionFixture(t *testing.T) (*Volume, *Directory, *Bitmap, *IndexBit
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -39,6 +40,7 @@ func TestCreateFileVersionExplicitAndNext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFileVersion(;5): %v", err)
 	}
+
 	if err := five.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +53,7 @@ func TestCreateFileVersionExplicitAndNext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFileVersion(next): %v", err)
 	}
+
 	if e, err := dir.Lookup("V.DAT", 6); err != nil || e.Fid != six.Header.Fid {
 		t.Errorf("the next version isn't ;6: %+v, %v", e, err)
 	}
@@ -75,6 +78,7 @@ func TestCreateFileVersionInheritsHighestVersionLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := SetVersionLimit(f, 7); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +87,7 @@ func TestCreateFileVersionInheritsHighestVersionLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	
 	if got := low.Header.RecordAttributes.VersionLimit; got != 7 {
 		t.Errorf("L.DAT;3's version limit %d, want ;9's 7", got)
 	}
@@ -97,9 +102,11 @@ func TestDirectoryInsertRefusesDuplicate(t *testing.T) {
 	if err := dir.Insert("D.DAT", 1, fid, bm, ib); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := dir.Insert("d.dat", 1, fid, bm, ib); !errors.Is(err, ErrExists) {
 		t.Errorf("duplicate Insert: %v, want ErrExists", err)
 	}
+
 	if err := dir.Insert("D.DAT", 2, fid, bm, ib); err != nil {
 		t.Errorf("another version: %v", err)
 	}

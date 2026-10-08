@@ -34,14 +34,17 @@ func newWritableTestVolume(t *testing.T) (*Device, diskimage.WritableContainer) 
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "test.dsk")
+	
 	container, err := diskimage.Create(path, 300)
 	if err != nil {
 		t.Fatalf("diskimage.Create: %v", err)
 	}
+
 	t.Cleanup(func() { _ = container.Close() })
 
 	mustWrite := func(lbn uint32, b []byte) {
 		t.Helper()
+
 		if err := container.WriteBlock(lbn, b); err != nil {
 			t.Fatalf("WriteBlock(%d): %v", lbn, err)
 		}
@@ -66,6 +69,7 @@ func newWritableTestVolume(t *testing.T) (*Device, diskimage.WritableContainer) 
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	return vol.Devices[0], container
 }
 
@@ -83,6 +87,7 @@ func installTestBitmap(t *testing.T, container diskimage.WritableContainer, free
 	if err != nil {
 		t.Fatalf("EncodeStorageControlBlock: %v", err)
 	}
+
 	if err := container.WriteBlock(testBitmapSCBLBN, scb); err != nil {
 		t.Fatalf("WriteBlock(SCB): %v", err)
 	}
@@ -91,6 +96,7 @@ func installTestBitmap(t *testing.T, container diskimage.WritableContainer, free
 	for _, c := range freeClusters {
 		ondisk.BitmapSet(bits, c)
 	}
+
 	if err := container.WriteBlock(testBitmapBitsLBN, bits); err != nil {
 		t.Fatalf("WriteBlock(bitmap bits): %v", err)
 	}
@@ -100,6 +106,7 @@ func installTestBitmap(t *testing.T, container diskimage.WritableContainer, free
 		MapOffsetWords: 55,
 		MapBytes:       odstest.EncodeExtentFormat2(2, testBitmapSCBLBN),
 	})
+
 	if err := container.WriteBlock(fileHeaderLBN(ondisk.BitmapFileFid.Num), header); err != nil {
 		t.Fatalf("WriteBlock(bitmap header): %v", err)
 	}
@@ -130,14 +137,17 @@ func TestOpenBitmapRejectsClusterSizeMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeStorageControlBlock: %v", err)
 	}
+
 	if err := container.WriteBlock(testBitmapSCBLBN, scb); err != nil {
 		t.Fatalf("WriteBlock(SCB): %v", err)
 	}
+
 	header := odstest.BuildFileHeaderBytes(t, odstest.FileHeaderFixture{
 		Fid:            ondisk.BitmapFileFid,
 		MapOffsetWords: 55,
 		MapBytes:       odstest.EncodeExtentFormat2(2, testBitmapSCBLBN),
 	})
+
 	if err := container.WriteBlock(fileHeaderLBN(ondisk.BitmapFileFid.Num), header); err != nil {
 		t.Fatalf("WriteBlock(bitmap header): %v", err)
 	}
@@ -161,6 +171,7 @@ func TestBitmapFindFreePicksFirstFitRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindFree(3): %v", err)
 	}
+
 	want := ondisk.Extent{Count: 3 * testClusterSize, StartLBN: 2 * testClusterSize}
 	if got != want {
 		t.Errorf("FindFree(3) = %+v, want %+v", got, want)
@@ -173,6 +184,7 @@ func TestBitmapFindFreePicksFirstFitRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindFree(2): %v", err)
 	}
+
 	want = ondisk.Extent{Count: 2 * testClusterSize, StartLBN: 2 * testClusterSize}
 	if got != want {
 		t.Errorf("FindFree(2) = %+v, want %+v", got, want)
@@ -225,6 +237,7 @@ func TestBitmapMarkAllocatedRemovesRunFromFutureSearches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindFree(2) after MarkAllocated: %v", err)
 	}
+
 	want := ondisk.Extent{Count: 2 * testClusterSize, StartLBN: 6 * testClusterSize}
 	if got != want {
 		t.Errorf("FindFree(2) after consuming clusters 2-4 = %+v, want %+v (clusters 6-9)", got, want)
@@ -249,6 +262,7 @@ func TestBitmapMarkFreeAddsRunToFutureSearches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindFree(2) after MarkFree: %v", err)
 	}
+
 	want := ondisk.Extent{Count: 2 * testClusterSize, StartLBN: 0}
 	if got != want {
 		t.Errorf("FindFree(2) after freeing clusters 0-1 = %+v, want %+v", got, want)
@@ -292,6 +306,7 @@ func TestBitmapFlushIsDeferredUntilCalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
 	}
+
 	if err := bm.MarkAllocated(ondisk.Extent{Count: 3 * testClusterSize, StartLBN: 2 * testClusterSize}); err != nil {
 		t.Fatalf("MarkAllocated: %v", err)
 	}
@@ -302,10 +317,12 @@ func TestBitmapFlushIsDeferredUntilCalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBitmap (second): %v", err)
 	}
+
 	got, err := other.FindFree(3)
 	if err != nil {
 		t.Fatalf("FindFree(3) on unflushed disk state: %v", err)
 	}
+
 	want := ondisk.Extent{Count: 3 * testClusterSize, StartLBN: 2 * testClusterSize}
 	if got != want {
 		t.Errorf("unflushed mutation leaked to disk: FindFree(3) = %+v, want %+v", got, want)
@@ -322,13 +339,16 @@ func TestBitmapFlushIsDeferredUntilCalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBitmap (after flush): %v", err)
 	}
+
 	if _, err := reread.FindFree(5); err == nil {
 		t.Fatal("FindFree(5) after Flush: want error (only 4 free clusters remain), got a match")
 	}
+
 	got, err = reread.FindFree(4)
 	if err != nil {
 		t.Fatalf("FindFree(4) after Flush: %v", err)
 	}
+
 	want = ondisk.Extent{Count: 4 * testClusterSize, StartLBN: 6 * testClusterSize}
 	if got != want {
 		t.Errorf("FindFree(4) after Flush = %+v, want %+v (clusters 6-9 should be the only free run left)", got, want)
@@ -346,6 +366,7 @@ func TestBitmapFreeClustersAndLargestRun(t *testing.T) {
 	if got := bm.FreeClusters(); got != 8 {
 		t.Errorf("FreeClusters = %d, want 8", got)
 	}
+
 	if got := bm.LargestFreeRun(); got != 5 {
 		t.Errorf("LargestFreeRun = %d, want 5", got)
 	}

@@ -20,6 +20,7 @@ func blockOf(fill byte) []byte {
 	for i := range b {
 		b[i] = fill
 	}
+
 	return b
 }
 
@@ -62,6 +63,7 @@ func TestFileWriteBlockRejectsWrongSizedData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -71,6 +73,7 @@ func TestFileWriteBlockRejectsWrongSizedData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateHeader: %v", err)
 	}
+
 	if err := f.OpenForWrite(bm, ib); err != nil {
 		t.Fatalf("OpenForWrite: %v", err)
 	}
@@ -78,6 +81,7 @@ func TestFileWriteBlockRejectsWrongSizedData(t *testing.T) {
 	if err := f.WriteBlock(1, make([]byte, ondisk.BlockSize-1)); err == nil {
 		t.Fatal("WriteBlock with undersized data: want error, got nil")
 	}
+
 	if err := f.WriteBlock(0, blockOf(0xAA)); err == nil {
 		t.Fatal("WriteBlock(vbn=0): want error, got nil")
 	}
@@ -98,6 +102,7 @@ func TestFileWriteBlockAutoExtendsAndReadsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -107,6 +112,7 @@ func TestFileWriteBlockAutoExtendsAndReadsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateHeader: %v", err)
 	}
+
 	if err := f.OpenForWrite(bm, ib); err != nil {
 		t.Fatalf("OpenForWrite: %v", err)
 	}
@@ -117,21 +123,26 @@ func TestFileWriteBlockAutoExtendsAndReadsBack(t *testing.T) {
 	if err := f.WriteBlock(1, blockOf(0x11)); err != nil {
 		t.Fatalf("WriteBlock(1): %v", err)
 	}
+
 	if err := f.WriteBlock(4, blockOf(0x44)); err != nil {
 		t.Fatalf("WriteBlock(4): %v", err)
 	}
+
 	if f.Blocks() != 4 {
 		t.Fatalf("Blocks() after writing VBN 4 = %d, want 4 (auto-extend)", f.Blocks())
 	}
+
 	// Before VBN 3 is ever written, it must read back as zero -- the same
 	// guarantee Extend's own allocated-but-unwritten space always gets.
 	got := make([]byte, ondisk.BlockSize)
 	if err := f.ReadBlock(3, got); err != nil {
 		t.Fatalf("ReadBlock(3) pre-write: %v", err)
 	}
+
 	if !bytes.Equal(got, make([]byte, ondisk.BlockSize)) {
 		t.Error("ReadBlock(3) before it was ever written returned non-zero data")
 	}
+
 	if err := f.WriteBlock(2, blockOf(0x22)); err != nil {
 		t.Fatalf("WriteBlock(2): %v", err)
 	}
@@ -143,10 +154,12 @@ func TestFileWriteBlockAutoExtendsAndReadsBack(t *testing.T) {
 	// Re-read everything through a completely independent OpenFID, not just
 	// the in-memory f this test already mutated.
 	vol := &Volume{Devices: []*Device{dev}}
+	
 	reopened, err := vol.OpenFID(f.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	if reopened.Blocks() != 4 {
 		t.Errorf("reopened Blocks() = %d, want 4", reopened.Blocks())
 	}
@@ -157,6 +170,7 @@ func TestFileWriteBlockAutoExtendsAndReadsBack(t *testing.T) {
 		if err := reopened.ReadBlock(vbn, buf); err != nil {
 			t.Fatalf("ReadBlock(%d): %v", vbn, err)
 		}
+
 		if !bytes.Equal(buf, blockOf(fill)) {
 			t.Errorf("ReadBlock(%d) = %x..., want a block filled with %#02x", vbn, buf[:4], fill)
 		}
@@ -168,6 +182,7 @@ func TestFileWriteBlockAutoExtendsAndReadsBack(t *testing.T) {
 	if err := reopened.ReadBlock(3, buf3); err != nil {
 		t.Fatalf("ReadBlock(3): %v", err)
 	}
+
 	if !bytes.Equal(buf3, make([]byte, ondisk.BlockSize)) {
 		t.Error("ReadBlock(3) after Close returned non-zero data, but VBN 3 was never written")
 	}
@@ -186,6 +201,7 @@ func TestFileOpenForWriteOverwritesExistingBlockInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -195,14 +211,17 @@ func TestFileOpenForWriteOverwritesExistingBlockInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateHeader: %v", err)
 	}
+
 	if err := created.OpenForWrite(bm, ib); err != nil {
 		t.Fatalf("OpenForWrite: %v", err)
 	}
+
 	for vbn, fill := range map[uint32]byte{1: 0x01, 2: 0x02, 3: 0x03} {
 		if err := created.WriteBlock(vbn, blockOf(fill)); err != nil {
 			t.Fatalf("WriteBlock(%d): %v", vbn, err)
 		}
 	}
+
 	if err := created.Close(); err != nil {
 		t.Fatalf("Close (initial write): %v", err)
 	}
@@ -210,19 +229,24 @@ func TestFileOpenForWriteOverwritesExistingBlockInPlace(t *testing.T) {
 	// Reopen as a completely independent File, via the ordinary read path,
 	// then arm it for write and overwrite just VBN 2.
 	vol := &Volume{Devices: []*Device{dev}}
+
 	reopened, err := vol.OpenFID(created.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	if err := reopened.OpenForWrite(bm, ib); err != nil {
 		t.Fatalf("OpenForWrite (reopen): %v", err)
 	}
+
 	if err := reopened.WriteBlock(2, blockOf(0xFF)); err != nil {
 		t.Fatalf("WriteBlock(2) (overwrite): %v", err)
 	}
+
 	if err := reopened.Close(); err != nil {
 		t.Fatalf("Close (after overwrite): %v", err)
 	}
+
 	if reopened.Blocks() != 3 {
 		t.Errorf("Blocks() after overwriting an existing block = %d, want 3 (unchanged)", reopened.Blocks())
 	}
@@ -231,16 +255,20 @@ func TestFileOpenForWriteOverwritesExistingBlockInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFID (final): %v", err)
 	}
+
 	want := map[uint32]byte{1: 0x01, 2: 0xFF, 3: 0x03}
 	for vbn, fill := range want {
 		buf := make([]byte, ondisk.BlockSize)
+
 		if err := final.ReadBlock(vbn, buf); err != nil {
 			t.Fatalf("ReadBlock(%d): %v", vbn, err)
 		}
+
 		if !bytes.Equal(buf, blockOf(fill)) {
 			t.Errorf("ReadBlock(%d) = %x..., want a block filled with %#02x", vbn, buf[:4], fill)
 		}
 	}
+
 	if final.Blocks() != 3 {
 		t.Errorf("final Blocks() = %d, want 3", final.Blocks())
 	}
@@ -258,6 +286,7 @@ func TestVolumeCreateFileEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -270,9 +299,11 @@ func TestVolumeCreateFileEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
+
 	if err := f.WriteBlock(1, blockOf(0x5A)); err != nil {
 		t.Fatalf("WriteBlock(1): %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -281,9 +312,11 @@ func TestVolumeCreateFileEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup(NEW.DAT): %v", err)
 	}
+
 	if entry.Version != 1 {
 		t.Errorf("first CreateFile's directory entry version = %d, want 1", entry.Version)
 	}
+	
 	if entry.Fid != f.Header.Fid {
 		t.Errorf("directory entry Fid = %v, want %v", entry.Fid, f.Header.Fid)
 	}
@@ -292,13 +325,16 @@ func TestVolumeCreateFileEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFID(%v): %v", entry.Fid, err)
 	}
+
 	if reopened.Blocks() != 1 {
 		t.Errorf("reopened Blocks() = %d, want 1", reopened.Blocks())
 	}
+
 	buf := make([]byte, ondisk.BlockSize)
 	if err := reopened.ReadBlock(1, buf); err != nil {
 		t.Fatalf("ReadBlock(1): %v", err)
 	}
+
 	if !bytes.Equal(buf, blockOf(0x5A)) {
 		t.Error("reopened file's VBN 1 content doesn't match what was written")
 	}
@@ -309,16 +345,20 @@ func TestVolumeCreateFileEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFile (second version): %v", err)
 	}
+
 	if err := second.Close(); err != nil {
 		t.Fatalf("Close (second version): %v", err)
 	}
+
 	secondEntry, err := dir.Lookup("NEW.DAT", 0)
 	if err != nil {
 		t.Fatalf("Lookup(NEW.DAT) after second CreateFile: %v", err)
 	}
+
 	if secondEntry.Version != 2 {
 		t.Errorf("second CreateFile's directory entry version = %d, want 2", secondEntry.Version)
 	}
+
 	if secondEntry.Fid == entry.Fid {
 		t.Error("second CreateFile's Fid collides with the first version's")
 	}
@@ -338,6 +378,7 @@ func TestFileCloseWithFinalByteRecordsPartialBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -347,12 +388,15 @@ func TestFileCloseWithFinalByteRecordsPartialBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateHeader: %v", err)
 	}
+
 	if err := f.OpenForWrite(bm, ib); err != nil {
 		t.Fatalf("OpenForWrite: %v", err)
 	}
+
 	if err := f.WriteBlock(1, blockOf(0x11)); err != nil {
 		t.Fatalf("WriteBlock(1): %v", err)
 	}
+
 	if err := f.WriteBlock(2, blockOf(0x22)); err != nil {
 		t.Fatalf("WriteBlock(2): %v", err)
 	}
@@ -363,12 +407,15 @@ func TestFileCloseWithFinalByteRecordsPartialBlock(t *testing.T) {
 	if err := f.CloseWithFinalByte(100); err != nil {
 		t.Fatalf("CloseWithFinalByte: %v", err)
 	}
+
 	if got, want := f.Header.RecordAttributes.EndOfFileBlock, uint32(2); got != want {
 		t.Errorf("EndOfFileBlock = %d, want %d", got, want)
 	}
+
 	if got, want := f.Header.RecordAttributes.FirstFreeByte, uint16(100); got != want {
 		t.Errorf("FirstFreeByte = %d, want %d", got, want)
 	}
+
 	if got, want := f.UsedBlocks(), uint32(2); got != want {
 		t.Errorf("UsedBlocks() = %d, want %d", got, want)
 	}
@@ -376,13 +423,16 @@ func TestFileCloseWithFinalByteRecordsPartialBlock(t *testing.T) {
 	// Independent re-open confirms this actually reached disk, not just
 	// f's own in-memory copy.
 	vol := &Volume{Devices: []*Device{dev}}
+
 	reopened, err := vol.OpenFID(f.Header.Fid)
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	if got, want := reopened.Header.RecordAttributes.FirstFreeByte, uint16(100); got != want {
 		t.Errorf("reopened FirstFreeByte = %d, want %d", got, want)
 	}
+
 	if got, want := reopened.Header.RecordAttributes.EndOfFileBlock, uint32(2); got != want {
 		t.Errorf("reopened EndOfFileBlock = %d, want %d", got, want)
 	}
@@ -402,6 +452,7 @@ func TestFileCloseIsCloseWithFinalByteZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -411,18 +462,23 @@ func TestFileCloseIsCloseWithFinalByteZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateHeader: %v", err)
 	}
+
 	if err := f.OpenForWrite(bm, ib); err != nil {
 		t.Fatalf("OpenForWrite: %v", err)
 	}
+
 	if err := f.WriteBlock(1, blockOf(0x33)); err != nil {
 		t.Fatalf("WriteBlock(1): %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+
 	if got, want := f.Header.RecordAttributes.EndOfFileBlock, uint32(2); got != want {
 		t.Errorf("EndOfFileBlock = %d, want %d", got, want)
 	}
+
 	if got, want := f.Header.RecordAttributes.FirstFreeByte, uint16(0); got != want {
 		t.Errorf("FirstFreeByte = %d, want %d", got, want)
 	}
@@ -437,6 +493,7 @@ func TestFileCloseWithFinalByteRejectsOutOfRangeOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -446,6 +503,7 @@ func TestFileCloseWithFinalByteRejectsOutOfRangeOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateHeader: %v", err)
 	}
+
 	if err := f.OpenForWrite(bm, ib); err != nil {
 		t.Fatalf("OpenForWrite: %v", err)
 	}
@@ -464,6 +522,7 @@ func TestFileCloseIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -473,18 +532,23 @@ func TestFileCloseIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateHeader: %v", err)
 	}
+
 	if err := f.OpenForWrite(bm, ib); err != nil {
 		t.Fatalf("OpenForWrite: %v", err)
 	}
+
 	if err := f.WriteBlock(1, blockOf(0x77)); err != nil {
 		t.Fatalf("WriteBlock(1): %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("first Close: %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
+
 	// Close disarms the File -- a WriteBlock after Close must fail cleanly
 	// rather than silently writing through a stale bm/ib.
 	if err := f.WriteBlock(2, blockOf(0x88)); err == nil {
@@ -507,6 +571,7 @@ func TestVolumeCreateDirectoryEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -523,9 +588,11 @@ func TestVolumeCreateDirectoryEndToEnd(t *testing.T) {
 	if !sub.Header.IsDirectory() {
 		t.Error("CreateDirectory's result doesn't have the directory characteristic set")
 	}
+
 	if got := sub.Header.RecordAttributes.VersionLimit; got != 5 {
 		t.Errorf("VersionLimit = %d, want 5", got)
 	}
+
 	if entries, err := sub.List(); err != nil || len(entries) != 0 {
 		t.Errorf("brand-new directory's List() = %v, %v, want empty, nil", entries, err)
 	}
@@ -534,9 +601,11 @@ func TestVolumeCreateDirectoryEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup(SUB.DIR) in parent: %v", err)
 	}
+
 	if entry.Version != 1 {
 		t.Errorf("first CreateDirectory's directory entry version = %d, want 1", entry.Version)
 	}
+
 	if entry.Fid != sub.Header.Fid {
 		t.Errorf("parent's directory entry Fid = %v, want %v", entry.Fid, sub.Header.Fid)
 	}
@@ -547,10 +616,12 @@ func TestVolumeCreateDirectoryEndToEnd(t *testing.T) {
 	if err := sub.Insert("CHILD.TXT", 1, childFid, bm, ib); err != nil {
 		t.Fatalf("Insert into brand-new directory: %v", err)
 	}
+
 	childEntries, err := sub.List()
 	if err != nil {
 		t.Fatalf("List after Insert: %v", err)
 	}
+
 	if len(childEntries) != 1 || childEntries[0].Name != "CHILD.TXT" {
 		t.Errorf("List after Insert = %+v, want a single CHILD.TXT entry", childEntries)
 	}
@@ -561,10 +632,12 @@ func TestVolumeCreateDirectoryEndToEnd(t *testing.T) {
 	if !errors.Is(err, ErrExists) {
 		t.Fatalf("CreateDirectory (same name again): err = %v, want ErrExists", err)
 	}
+
 	entries, err := parent.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 1 {
 		t.Errorf("parent entries after refused second CreateDirectory = %+v, want just SUB.DIR;1", entries)
 	}
@@ -584,6 +657,7 @@ func TestCreateDirectoryRejectsNameWithoutDirType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -600,6 +674,7 @@ func TestCreateDirectoryRejectsNameWithoutDirType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 0 {
 		t.Errorf("parent directory content changed after rejected CreateDirectory: %+v", entries)
 	}
@@ -620,13 +695,16 @@ func newWritableTestDirectoryWithVersionLimit(t *testing.T, dev *Device, ib *Ind
 		Characteristics:  ondisk.FchDirectory,
 		RecordAttributes: ondisk.RecAttr{VersionLimit: versionLimit},
 	})
+
 	if err != nil {
 		t.Fatalf("CreateHeader(%s): %v", name, err)
 	}
+
 	dir, err := f.Directory()
 	if err != nil {
 		t.Fatalf("Directory(): %v", err)
 	}
+
 	return dir
 }
 
@@ -643,6 +721,7 @@ func TestCreateFileFirstVersionInheritsDirectoryDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -655,6 +734,7 @@ func TestCreateFileFirstVersionInheritsDirectoryDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFile: %v", err)
 	}
+
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -678,6 +758,7 @@ func TestCreateFileLaterVersionCarriesForwardPreviousVersionLimit(t *testing.T) 
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -690,6 +771,7 @@ func TestCreateFileLaterVersionCarriesForwardPreviousVersionLimit(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CreateFile (version 1): %v", err)
 	}
+
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close (version 1): %v", err)
 	}
@@ -705,6 +787,7 @@ func TestCreateFileLaterVersionCarriesForwardPreviousVersionLimit(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CreateFile (version 2): %v", err)
 	}
+
 	if err := second.Close(); err != nil {
 		t.Fatalf("Close (version 2): %v", err)
 	}
@@ -728,6 +811,7 @@ func TestCreateFileVersionLimitZeroNeverDeletesAnything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -741,6 +825,7 @@ func TestCreateFileVersionLimitZeroNeverDeletesAnything(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateFile #%d: %v", i, err)
 		}
+
 		if err := f.Close(); err != nil {
 			t.Fatalf("Close #%d: %v", i, err)
 		}
@@ -750,6 +835,7 @@ func TestCreateFileVersionLimitZeroNeverDeletesAnything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+
 	if len(entries) != 5 {
 		t.Errorf("directory entries for MANY.DAT = %d, want 5 (no auto-deletion under an unlimited version limit)", len(entries))
 	}
@@ -768,6 +854,7 @@ func TestCreateFileAutoDeletesOldestExcessVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -781,6 +868,7 @@ func TestCreateFileAutoDeletesOldestExcessVersions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateFile #%d: %v", i, err)
 		}
+
 		if err := f.Close(); err != nil {
 			t.Fatalf("Close #%d: %v", i, err)
 		}
@@ -789,10 +877,12 @@ func TestCreateFileAutoDeletesOldestExcessVersions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("List after CreateFile #%d: %v", i, err)
 		}
+
 		wantCount := i + 1
 		if wantCount > 2 {
 			wantCount = 2
 		}
+
 		if len(entries) != wantCount {
 			t.Fatalf("after creating version %d, directory has %d entries, want %d (limit 2)", i+1, len(entries), wantCount)
 		}
@@ -802,6 +892,7 @@ func TestCreateFileAutoDeletesOldestExcessVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List (final): %v", err)
 	}
+
 	if len(entries) != 2 {
 		t.Fatalf("final directory entry count = %d, want exactly 2", len(entries))
 	}
@@ -811,6 +902,7 @@ func TestCreateFileAutoDeletesOldestExcessVersions(t *testing.T) {
 	for _, e := range entries {
 		got[e.Version] = true
 	}
+
 	if !got[3] || !got[4] {
 		t.Errorf("surviving versions = %v, want exactly {3, 4}", entries)
 	}
@@ -831,6 +923,7 @@ func TestCreateFileDirectoryDefaultChangeProducesDifferentLimitsForDifferentName
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -843,6 +936,7 @@ func TestCreateFileDirectoryDefaultChangeProducesDifferentLimitsForDifferentName
 	if err != nil {
 		t.Fatalf("CreateFile(ALPHA.DAT): %v", err)
 	}
+
 	if err := alpha.Close(); err != nil {
 		t.Fatalf("Close(ALPHA.DAT): %v", err)
 	}
@@ -855,6 +949,7 @@ func TestCreateFileDirectoryDefaultChangeProducesDifferentLimitsForDifferentName
 	if err != nil {
 		t.Fatalf("CreateFile(BETA.DAT): %v", err)
 	}
+
 	if err := beta.Close(); err != nil {
 		t.Fatalf("Close(BETA.DAT): %v", err)
 	}
@@ -862,6 +957,7 @@ func TestCreateFileDirectoryDefaultChangeProducesDifferentLimitsForDifferentName
 	if got := alpha.Header.RecordAttributes.VersionLimit; got != 4 {
 		t.Errorf("ALPHA.DAT's VersionLimit = %d, want 4 (dir's default when it was created)", got)
 	}
+
 	if got := beta.Header.RecordAttributes.VersionLimit; got != 7 {
 		t.Errorf("BETA.DAT's VersionLimit = %d, want 7 (dir's default when IT was created)", got)
 	}
@@ -881,6 +977,7 @@ func TestCreateDirectoryZeroVersionLimitMeansUnlimited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenIndexBitmap: %v", err)
 	}
+
 	bm, err := OpenBitmap(dev)
 	if err != nil {
 		t.Fatalf("OpenBitmap: %v", err)
@@ -893,6 +990,7 @@ func TestCreateDirectoryZeroVersionLimitMeansUnlimited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDirectory: %v", err)
 	}
+
 	if got := sub.Header.RecordAttributes.VersionLimit; got != 0 {
 		t.Errorf("VersionLimit = %d, want 0", got)
 	}
@@ -909,10 +1007,12 @@ func TestFileWriteBlockReadsBackBeforeClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	ib, err := f.Device.IndexBitmap()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := f.OpenForWrite(bm, ib); err != nil {
 		t.Fatal(err)
 	}
@@ -925,6 +1025,7 @@ func TestFileWriteBlockReadsBackBeforeClose(t *testing.T) {
 	if err := f.ReadBlock(2, buf); err != nil {
 		t.Fatal(err)
 	}
+
 	if !bytes.Equal(buf, blockOf(0x42)) {
 		t.Errorf("block 2 read back as % x..., want the block written", buf[:4])
 	}

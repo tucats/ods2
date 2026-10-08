@@ -33,6 +33,7 @@ const (
 // INDEXF.SYS maps directly to LBN testIndexBitmapLBN + (N - 1).
 func fileHeaderLBN(fileNum uint16) uint32 {
 	idxblk := uint32(fileNum) - 1 + testIndexBitmapVBN + testIndexBitmapSize
+
 	return testIndexBitmapLBN + (idxblk - 1)
 }
 
@@ -61,6 +62,7 @@ func newTestVolume(t *testing.T) (*Volume, *odstest.MemContainer) {
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
+
 	return vol, c
 }
 
@@ -81,6 +83,7 @@ func TestOpenFIDReadsFileData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+	
 	if !f.Header.Fid.Equal(fid) {
 		t.Errorf("Header.Fid = %v, want %v", f.Header.Fid, fid)
 	}
@@ -89,6 +92,7 @@ func TestOpenFIDReadsFileData(t *testing.T) {
 	if err := f.ReadBlock(1, got); err != nil {
 		t.Fatalf("ReadBlock(1): %v", err)
 	}
+
 	if !bytes.Equal(got, wantData) {
 		t.Error("ReadBlock(1) did not return the expected data")
 	}
@@ -134,6 +138,7 @@ func TestFileReadBlockZeroFillsBeyondHighWaterMark(t *testing.T) {
 	if err := f.ReadBlock(3, got); err != nil {
 		t.Fatalf("ReadBlock(3): %v", err)
 	}
+
 	if !bytes.Equal(got, make([]byte, ondisk.BlockSize)) {
 		t.Error("ReadBlock at/beyond the high-water mark returned non-zero data")
 	}
@@ -166,6 +171,7 @@ func TestFileReadBlockIgnoresHighWaterMarkWhenAbsent(t *testing.T) {
 	if err := f.ReadBlock(1, got); err != nil {
 		t.Fatalf("ReadBlock(1): %v", err)
 	}
+
 	if !bytes.Equal(got, wantData) {
 		t.Error("ReadBlock incorrectly zero-filled a block when no high-water mark is present")
 	}
@@ -196,6 +202,7 @@ func TestOpenFIDFollowsExtensionHeaderChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFID: %v", err)
 	}
+
 	if len(f.Extents) != 1 || f.Extents[0].StartLBN != 220 {
 		t.Fatalf("Extents = %+v, want a single extent starting at LBN 220 (from the extension segment)", f.Extents)
 	}
@@ -204,6 +211,7 @@ func TestOpenFIDFollowsExtensionHeaderChain(t *testing.T) {
 	if err := f.ReadBlock(1, got); err != nil {
 		t.Fatalf("ReadBlock(1): %v", err)
 	}
+
 	if !bytes.Equal(got, wantData) {
 		t.Error("ReadBlock(1) did not return the extension segment's data")
 	}
