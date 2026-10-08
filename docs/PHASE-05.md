@@ -47,4 +47,9 @@ repository.
 
 ## Progress log
 
-- 2026-10-08: All of the above (govax Phase 47, subtasks 3 and 4).
+- 2026-10-08: All of the above (govax Phase 47, subtasks 3 and 4);
+  tagged v0.1.16.
+- 2026-10-08: `rms`: `Reader.RecordOffset` and `Writer.RecordOffset`, the
+  byte offset where the record last read or written starts (govax Phase
+  47, subtask 6: a sequential record's RFA, for record locks and
+  RAB$W_RFA).
