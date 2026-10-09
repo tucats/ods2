@@ -221,6 +221,13 @@ const (
 // not including) the next delimiter. Unlike Variable/VFC, there is no
 // length prefix at all — a stream file is just ordinary delimited text,
 // the same shape as a Unix or Windows text file.
+//
+// STREAM (CR LF) follows the OpenVMS RMS Reference Manual (FAB$C_STM,
+// and $GET's "Input from Stream Format Files"): a record ends at CR LF,
+// LF, VT, or FF, and null bytes before a record are ignored. CR LF isn't
+// part of the record; any of the others is, as the record's last byte
+// (VMS 7.3 returns a lone LF as a one-byte record). A CR not followed by
+// LF is data.
 func (r *Reader) nextStream(kind streamDelim) ([]byte, error) {
 	var record []byte
 
@@ -250,13 +257,22 @@ func (r *Reader) nextStream(kind streamDelim) ([]byte, error) {
 				return record, nil
 			}
 		case streamDelimCRLF:
-			if b == '\r' {
+			switch b {
+			case 0:
+				if len(record) == 0 {
+					continue // a leading null
+				}
+			case '\r':
 				next, err := r.stream.ReadByte()
-				if err != nil || next != '\n' {
-					return nil, fmt.Errorf("%w: '\\r' not followed by '\\n' in a STREAM file", ErrCorruptRecord)
+				if err == nil && next == '\n' {
+					return record, nil
 				}
 
-				return record, nil
+				if err == nil {
+					r.stream.seek(r.stream.offset() - 1) // data: look at it again
+				}
+			case '\n', '\v', '\f':
+				return append(record, b), nil
 			}
 		}
 

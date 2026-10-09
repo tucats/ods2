@@ -289,8 +289,13 @@ func TestReaderStreamCRLF(t *testing.T) {
 	}
 }
 
-func TestReaderStreamCRLFDanglingCRIsCorrupt(t *testing.T) {
-	data := []byte("one\r") // '\r' with no following '\n', and nothing else
+// TestReaderStreamCRLFTerminators: a STREAM record ends at CR LF, LF,
+// VT, or FF, the last three kept as the record's last byte; null bytes
+// before a record are skipped; a CR not followed by LF is data (the
+// OpenVMS RMS Reference Manual, FAB$C_STM and $GET; VMS 7.3 returns a
+// lone LF as a record of its own).
+func TestReaderStreamCRLFTerminators(t *testing.T) {
+	data := []byte("A\r\n\nB\vC\f\x00\x00D\rE\r\nlast\r")
 	f := newTestFile(t, odstest.FileHeaderFixture{
 		Format:         ondisk.RecordFormatStreamCRLF,
 		EndOfFileBlock: 1,
@@ -302,8 +307,15 @@ func TestReaderStreamCRLFDanglingCRIsCorrupt(t *testing.T) {
 		t.Fatalf("NewReader: %v", err)
 	}
 
-	if _, err := r.Next(); !errors.Is(err, ErrCorruptRecord) {
-		t.Fatalf("Next() with a dangling '\\r': err = %v, want ErrCorruptRecord", err)
+	for _, want := range []string{"A", "\n", "B\v", "C\f", "D\rE", "last\r"} {
+		rec, err := r.Next()
+		if err != nil || string(rec) != want {
+			t.Fatalf("Next() = %q, %v; want %q", rec, err, want)
+		}
+	}
+
+	if _, err := r.Next(); !errors.Is(err, io.EOF) {
+		t.Errorf("after the last record: %v, want io.EOF", err)
 	}
 }
 
