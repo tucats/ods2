@@ -161,10 +161,7 @@ func (w *Writer) Flush() error {
 func (w *Writer) flush() error {
 
 	if len(w.buf) > 0 {
-		block := make([]byte, ondisk.BlockSize)
-		copy(block, w.buf)
-
-		if err := w.file.WriteBlock(w.vbn, block); err != nil {
+		if err := w.file.WriteBlock(w.vbn, w.finalBlock()); err != nil {
 			return fmt.Errorf("rms: writing virtual block %d: %w", w.vbn, err)
 		}
 	}
@@ -230,6 +227,31 @@ func (w *Writer) put(record []byte) error {
 		// Unreachable: NewWriter already rejected any other format.
 		return fmt.Errorf("rms: unsupported record format %v", w.format)
 	}
+}
+
+// endOfRecords is the record length VMS's RMS writes after a block's last
+// variable-length record when the block has room for it: 0xFFFF, which
+// no record can have (RMS's longest is 32767 bytes), says there are no
+// more records in this block. Reader.nextVariable skips to the next
+// block when it reads one.
+const endOfRecords = 0xFFFF
+
+// finalBlock is the partly filled block buf holds, padded with zeros to
+// a whole block. For a Variable or VFC file, the two bytes after the
+// last record, if the block has them, are endOfRecords, as VMS's RMS
+// leaves them (VMS 7.3's DUMP/BLOCK of a file DCL's OPEN/WRITE made). The
+// file's end of file stays before them, so a reader stops there anyway,
+// and the next record appended goes over them.
+func (w *Writer) finalBlock() []byte {
+	block := make([]byte, ondisk.BlockSize)
+	copy(block, w.buf)
+
+	variable := w.format == ondisk.RecordFormatVariable || w.format == ondisk.RecordFormatVFC
+	if variable && len(w.buf) <= ondisk.BlockSize-2 {
+		binary.LittleEndian.PutUint16(block[len(w.buf):], endOfRecords)
+	}
+
+	return block
 }
 
 // putFixed writes one Fixed/Undefined-format record: exactly fixedSize
@@ -363,10 +385,7 @@ func (w *Writer) Close() error {
 
 	finalByte := len(w.buf)
 	if finalByte > 0 {
-		block := make([]byte, ondisk.BlockSize)
-		copy(block, w.buf)
-
-		if err := w.file.WriteBlock(w.vbn, block); err != nil {
+		if err := w.file.WriteBlock(w.vbn, w.finalBlock()); err != nil {
 			return fmt.Errorf("rms: writing final virtual block %d: %w", w.vbn, err)
 		}
 	}

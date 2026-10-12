@@ -2,11 +2,13 @@ package rms
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"path/filepath"
 	"testing"
 
 	"github.com/tucats/ods2/diskimage"
+	"github.com/tucats/ods2/internal/odstest"
 	"github.com/tucats/ods2/ondisk"
 	"github.com/tucats/ods2/volume"
 )
@@ -539,5 +541,118 @@ func TestNewWriterRejectsUnsupportedFormat(t *testing.T) {
 
 	if _, err := NewWriter(f); err == nil {
 		t.Fatal("NewWriter with an unsupported format: want error, got nil")
+	}
+}
+
+// TestWriterVariableEndOfRecords: a Variable or VFC file's last, partly
+// filled block has FFFF after its last record, as VMS's RMS leaves it
+// (VMS 7.3's DUMP/BLOCK of a file DCL's OPEN/WRITE made: "abc", "",
+// "defgh" in a VFC file, then FFFF), and an appender writes over it.
+func TestWriterVariableEndOfRecords(t *testing.T) {
+	vol := newWritableTestVolume(t)
+	f := newWritableTestFile(t, vol, "VFC.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatVFC, VfcSize: 2})
+
+	w, err := NewWriter(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rec := range []string{"\x01\x8Dabc", "\x01\x8D", "\x01\x8Ddefgh"} {
+		if err := w.Put([]byte(rec)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	block := make([]byte, ondisk.BlockSize)
+	if err := f.ReadBlock(1, block); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []byte{5, 0, 1, 0x8D, 'a', 'b', 'c', 0, 2, 0, 1, 0x8D, 7, 0, 1, 0x8D, 'd', 'e', 'f', 'g', 'h', 0, 0xFF, 0xFF, 0}
+	if !bytes.Equal(block[:len(want)], want) {
+		t.Errorf("block 1 = % X, want % X", block[:len(want)], want)
+	}
+
+	if ffb := f.Header.RecordAttributes.FirstFreeByte; ffb != 22 {
+		t.Errorf("FirstFreeByte = %d, want 22, before the FFFF", ffb)
+	}
+
+	// An appender's first record goes over the FFFF, and the block
+	// ends with one again.
+	reopened := reopenTestFile(t, vol, f.Header.Fid)
+	bm, _ := reopened.Device.Bitmap()
+	ib, _ := reopened.Device.IndexBitmap()
+
+	if err := reopened.OpenForWrite(bm, ib); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := NewAppender(reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.Put([]byte("\x01\x8Dxy")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := reopened.ReadBlock(1, block); err != nil {
+		t.Fatal(err)
+	}
+
+	want = append(want[:22:22], 4, 0, 1, 0x8D, 'x', 'y', 0xFF, 0xFF)
+	if !bytes.Equal(block[:len(want)], want) {
+		t.Errorf("block 1 after the append = % X, want % X", block[:len(want)], want)
+	}
+
+	r, err := NewReader(reopenTestFile(t, vol, f.Header.Fid))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readAllRecords(t, r); len(got) != 4 || string(got[3]) != "\x01\x8Dxy" {
+		t.Errorf("records = %q", got)
+	}
+}
+
+// TestReaderSkipsEndOfRecords: an FFFF record length within the file says
+// its block has no more records, as in a file whose records don't span
+// blocks; the next record is at the next block, with its own offset.
+func TestReaderSkipsEndOfRecords(t *testing.T) {
+	data := make([]byte, 2*ondisk.BlockSize)
+	copy(data, []byte{3, 0, 'o', 'n', 'e', 0, 0xFF, 0xFF})
+	copy(data[ondisk.BlockSize:], []byte{3, 0, 't', 'w', 'o', 0})
+
+	f := newTestFile(t, odstest.FileHeaderFixture{
+		Format:         ondisk.RecordFormatVariable,
+		EndOfFileBlock: 2,
+		FirstFreeByte:  6,
+	}, data)
+
+	r, err := NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := r.Next()
+	if err != nil || string(first) != "one" {
+		t.Fatalf("first record %q, %v", first, err)
+	}
+
+	second, err := r.Next()
+	if err != nil || string(second) != "two" || r.RecordOffset() != ondisk.BlockSize {
+		t.Fatalf("second record %q at %d, %v; want \"two\" at 512", second, r.RecordOffset(), err)
+	}
+
+	if _, err := r.Next(); !errors.Is(err, io.EOF) {
+		t.Errorf("after the last record: %v, want io.EOF", err)
 	}
 }

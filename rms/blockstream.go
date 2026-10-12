@@ -75,6 +75,16 @@ func (s *blockStream) fill(n int) error {
 	return nil
 }
 
+// peek returns the next n bytes without consuming them, or nil if the
+// file ends before n bytes.
+func (s *blockStream) peek(n int) []byte {
+	if s.fill(n) != nil {
+		return nil
+	}
+
+	return s.buf[s.bufOff : s.bufOff+n]
+}
+
 // seek drops whatever s has buffered and starts it at byte offset off.
 func (s *blockStream) seek(off int64) {
 	s.buf, s.bufOff, s.fetched = nil, 0, off

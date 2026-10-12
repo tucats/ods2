@@ -120,6 +120,10 @@ func FileByteLength(attr ondisk.RecAttr) int64 {
 // read; see ErrCorruptRecord for how a truncated or corrupt trailing
 // record is reported instead.
 func (r *Reader) Next() ([]byte, error) {
+	if r.format == ondisk.RecordFormatVariable || r.format == ondisk.RecordFormatVFC {
+		r.skipEndOfRecords()
+	}
+
 	start := r.stream.offset()
 
 	rec, err := r.next()
@@ -181,6 +185,22 @@ func (r *Reader) nextFixed() ([]byte, error) {
 // VFC's leading carriage-control bytes are simply part of the record's
 // declared length, from this function's point of view; splitting them
 // out is left to the caller.
+// skipEndOfRecords passes over each endOfRecords length word ahead: it
+// says the block holds no more records, so the next one starts at the
+// next block (a file written with FAB$M_BLK, whose records don't span
+// blocks, or the end of a block RMS stopped writing in). Anything else
+// is left to be read.
+func (r *Reader) skipEndOfRecords() {
+	for {
+		word := r.stream.peek(2)
+		if word == nil || binary.LittleEndian.Uint16(word) != endOfRecords {
+			return
+		}
+
+		r.stream.seek((r.stream.offset()/ondisk.BlockSize + 1) * ondisk.BlockSize)
+	}
+}
+
 func (r *Reader) nextVariable() ([]byte, error) {
 	lengthBytes, err := r.stream.ReadFull(2)
 	if err != nil {
