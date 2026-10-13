@@ -346,7 +346,15 @@ func Extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32) error
 		}
 
 		grown += e.Count
-		f.Extents = append(f.Extents, ExtentLocation{Extent: e, Rvn: dev.Rvn})
+
+		// The in-memory extent list follows the header: an extent
+		// contiguous with the last one on the same volume grows it.
+		if n := len(f.Extents); n > 0 && fits && f.Extents[n-1].Rvn == dev.Rvn &&
+			f.Extents[n-1].StartLBN+f.Extents[n-1].Count == e.StartLBN {
+			f.Extents[n-1].Count += e.Count
+		} else {
+			f.Extents = append(f.Extents, ExtentLocation{Extent: e, Rvn: dev.Rvn})
+		}
 	}
 
 	// HighestBlock lives on the primary header, and needs recording even
@@ -465,6 +473,30 @@ func existingAreas(header ondisk.FileHeader) (ondisk.FileHeaderAreas, error) {
 	return ondisk.FileHeaderAreas{Ident: ident, MapBytes: mapBytes}, nil
 }
 
+// addExtent returns extents with extent added at the end. When extent
+// starts at the very next LBN after the last one ends (the file grew into
+// the space right behind it, as it does whenever a file is written a
+// little at a time onto a volume with free space after it), the last
+// extent simply grows to cover it, as VMS records contiguous space: one
+// retrieval pointer, its count larger, rather than one pointer per
+// allocation. (A file written a block at a time used to get a pointer
+// per block, filling its header with them and spilling into extension
+// headers long before it needed to.) EncodeRetrievalPointers picks a wider
+// pointer format if the grown count needs one.
+func addExtent(extents []ondisk.Extent, extent ondisk.Extent) []ondisk.Extent {
+	if n := len(extents); n > 0 {
+		last := extents[n-1]
+		if last.StartLBN+last.Count == extent.StartLBN {
+			grown := append([]ondisk.Extent(nil), extents...)
+			grown[n-1].Count += extent.Count
+
+			return grown
+		}
+	}
+
+	return append(extents, extent)
+}
+
 // appendExtent tries to add extent to header's own retrieval-pointer map
 // and write the result back to header's on-disk slot. fits is false (with
 // no error) when the map area doesn't have room for one more entry -- the
@@ -483,7 +515,7 @@ func appendExtent(dev *Device, container diskimage.WritableContainer, header ond
 		return ondisk.FileHeader{}, false, fmt.Errorf("decoding existing retrieval pointers: %w", err)
 	}
 
-	mapBytes, err := ondisk.EncodeRetrievalPointers(append(extents, extent))
+	mapBytes, err := ondisk.EncodeRetrievalPointers(addExtent(extents, extent))
 	if err != nil {
 		return ondisk.FileHeader{}, false, fmt.Errorf("encoding retrieval pointers: %w", err)
 	}

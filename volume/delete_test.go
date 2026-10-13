@@ -118,12 +118,16 @@ func TestFreeFileStorageReclaimsMultiSegmentFile(t *testing.T) {
 	// primary header's map to fill up and a second header segment to be
 	// allocated -- freeFileStorage needs a real multi-segment file to prove
 	// it walks the WHOLE chain, not just the primary.
-	const calls = 150
+	const calls = 110
+
+	var gaps []ondisk.Extent
 
 	for i := 0; i < calls; i++ {
 		if err := Extend(f, bm, ib, 1); err != nil {
 			t.Fatalf("Extend #%d: %v", i, err)
 		}
+
+		gaps = append(gaps, fragment(t, bm))
 	}
 
 	if f.Header.ExtensionFid.IsZero() {
@@ -144,6 +148,8 @@ func TestFreeFileStorageReclaimsMultiSegmentFile(t *testing.T) {
 	if err := ib.Flush(); err != nil {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
+
+	unfragment(t, bm, gaps)
 
 	bm2, err := OpenBitmap(dev)
 	if err != nil {
@@ -334,12 +340,16 @@ func TestDeleteFileEndToEndMultiSegment(t *testing.T) {
 		t.Fatalf("CreateFile: %v", err)
 	}
 
-	const calls = 150
+	const calls = 110
+
+	var gaps []ondisk.Extent
 
 	for i := 0; i < calls; i++ {
 		if err := f.WriteBlock(uint32(i+1), blockOf(byte(i))); err != nil {
 			t.Fatalf("WriteBlock #%d: %v", i, err)
 		}
+
+		gaps = append(gaps, fragment(t, bm)) // so each block needs a retrieval pointer of its own
 	}
 
 	if err := f.Close(); err != nil {
@@ -392,6 +402,8 @@ func TestDeleteFileEndToEndMultiSegment(t *testing.T) {
 		t.Errorf("free slots after DeleteFile = {%d, %d}, want both %d (primary) and %d (extension)",
 			first, second, primaryFileNumber, extensionFileNumber)
 	}
+
+	unfragment(t, bm, gaps)
 
 	bm2, err := OpenBitmap(dev)
 	if err != nil {

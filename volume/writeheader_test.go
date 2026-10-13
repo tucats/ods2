@@ -486,20 +486,24 @@ func TestExtendAllocatesExtensionHeaderSegmentWhenMapIsFull(t *testing.T) {
 		t.Fatalf("CreateHeader: %v", err)
 	}
 
-	// Extend one block at a time, deliberately never merged into the
-	// previous extent by design (appendExtent always adds a new map entry,
-	// never coalesces -- see its own doc comment), so each call consumes
-	// map-area room until the primary header's map genuinely runs out and
-	// Extend has to fall back to an extension segment. A single header has
-	// room for on the order of 100 compact (format 1) entries; 150 calls
-	// comfortably forces the fallback at least once regardless of exactly
-	// how much room CreateHeader's own IDENT area left.
-	const calls = 150
+	// Extend one block at a time, with a used block left between each
+	// allocation and the next (fragment), so no extent is contiguous with
+	// the one before it and each call consumes map-area room (contiguous
+	// space would just grow the last pointer; see addExtent) until the
+	// primary header's map genuinely runs out and Extend has to fall back
+	// to an extension segment. A single header has room for on the order
+	// of 75 compact (format 1) entries; 110 calls comfortably forces the
+	// fallback at least once regardless of exactly how much room
+	// CreateHeader's own IDENT area left (and, with the gaps, fits the
+	// test volume).
+	const calls = 110
 
 	for i := 0; i < calls; i++ {
 		if err := Extend(f, bm, ib, 1); err != nil {
 			t.Fatalf("Extend #%d: %v", i, err)
 		}
+
+		fragment(t, bm)
 	}
 
 	if f.Blocks() != calls {
@@ -549,5 +553,101 @@ func TestExtendAllocatesExtensionHeaderSegmentWhenMapIsFull(t *testing.T) {
 
 	if segHeader.SegmentNumber != reopened.Header.SegmentNumber+1 {
 		t.Errorf("extension segment SegmentNumber = %d, want %d", segHeader.SegmentNumber, reopened.Header.SegmentNumber+1)
+	}
+}
+
+// fragment marks the volume's first free cluster used, so the next
+// allocation can't be contiguous with the last: how the tests make a
+// fragmented file, whose every extent needs a retrieval pointer of its own.
+// It returns the cluster, for a test that frees it again.
+func fragment(t *testing.T, bm *Bitmap) ondisk.Extent {
+	t.Helper()
+
+	e, err := bm.FindFree(1)
+	if err != nil {
+		t.Fatalf("FindFree: %v", err)
+	}
+
+	if err := bm.MarkAllocated(e); err != nil {
+		t.Fatalf("MarkAllocated: %v", err)
+	}
+
+	return e
+}
+
+// unfragment frees the clusters fragment took and writes the bitmap.
+func unfragment(t *testing.T, bm *Bitmap, gaps []ondisk.Extent) {
+	t.Helper()
+
+	for _, e := range gaps {
+		if err := bm.MarkFree(e); err != nil {
+			t.Fatalf("MarkFree: %v", err)
+		}
+	}
+
+	if err := bm.Flush(); err != nil {
+		t.Fatalf("Bitmap.Flush: %v", err)
+	}
+}
+
+// TestExtendMergesContiguousSpace: extending a file into the space right
+// after its last extent grows that extent, so a file written a block at a
+// time onto free space has one retrieval pointer, not one per block, and
+// needs no extension header.
+func TestExtendMergesContiguousSpace(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	f, err := CreateHeader(dev, ib, NewFileHeader{Name: "BIG.DAT", Directory: ondisk.Fid{Num: 4, Seq: 4}})
+	if err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+
+	const calls = 260 // past format 1's 256-block count
+
+	for i := 0; i < calls; i++ {
+		if err := Extend(f, bm, ib, 1); err != nil {
+			t.Fatalf("Extend #%d: %v", i, err)
+		}
+	}
+
+	if !f.Header.ExtensionFid.IsZero() {
+		t.Error("a contiguous file got an extension header")
+	}
+
+	pointers, err := f.Header.RetrievalPointers()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pointers) != 1 || pointers[0].Count != calls || len(f.Extents) != 1 || f.Extents[0].Count != calls {
+		t.Errorf("retrieval pointers %+v, in memory %+v; want one extent of %d blocks", pointers, f.Extents, calls)
+	}
+
+	// 260 blocks is past format 1's count: the pointer is format 2.
+	if words := f.Header.MapWordsInUse; words != 3 {
+		t.Errorf("map words in use = %d, want 3 (one format 2 pointer)", words)
+	}
+
+	// A gap starts a new extent.
+	fragment(t, bm)
+
+	if err := Extend(f, bm, ib, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	if pointers, _ := f.Header.RetrievalPointers(); len(pointers) != 2 || len(f.Extents) != 2 {
+		t.Errorf("after a gap: pointers %+v, in memory %+v; want two extents", pointers, f.Extents)
 	}
 }
