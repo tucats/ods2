@@ -3,6 +3,7 @@ package filespec
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -129,7 +130,7 @@ func TestParseExplicitRoot(t *testing.T) {
 	}
 }
 
-func TestParseEmptyBracketsIsRoot(t *testing.T) {
+func TestParseEmptyBracketsIsDefault(t *testing.T) {
 	def := Spec{Dirs: []string{"A", "B"}}
 
 	got, err := Parse("[]FOO.TXT", def)
@@ -137,8 +138,8 @@ func TestParseEmptyBracketsIsRoot(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if len(got.Dirs) != 0 {
-		t.Errorf("Dirs = %v, want empty (the master file directory)", got.Dirs)
+	if strings.Join(got.Dirs, ".") != "A.B" {
+		t.Errorf("Dirs = %v, want the default's [A.B]", got.Dirs)
 	}
 }
 

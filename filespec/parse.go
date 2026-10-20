@@ -29,7 +29,10 @@ var ErrAboveMFD = errors.New("goes above the master file directory")
 //   - "[-.BAR]" moves up one level, then descends into BAR.
 //   - "[--.BAR]" moves up two levels, then descends into BAR — and so on:
 //     each additional leading '-' means one more level up.
-//   - "[000000]" and "[]" both mean the master file directory itself.
+//   - "[000000]" means the master file directory itself.
+//   - "[]" means def's directory, as no directory at all does: VMS's
+//     "current default directory" (a BACKUP restore to "[]" on VMS V7.1
+//     went to the default directory).
 //
 // Moving up past the master file directory is an error.
 func Parse(raw string, def Spec) (Spec, error) {
@@ -107,9 +110,9 @@ func splitDevice(raw string) (device, rest string, err error) {
 }
 
 // splitDirectory splits a leading "[...]" or "<...>" off rest, if present.
-// hadBrackets distinguishes "no directory was written at all" (inherit the
-// default entirely) from "an empty directory was written" ("[]", treated
-// as the master file directory — see resolveDirectory).
+// hadBrackets distinguishes "no directory was written at all" from "an
+// empty directory was written" ("[]"); both take def's directory (see
+// resolveDirectory).
 func splitDirectory(rest string) (dirText string, hadBrackets bool, remainder string, err error) {
 	if rest == "" || (rest[0] != '[' && rest[0] != '<') {
 		return "", false, rest, nil
@@ -169,7 +172,8 @@ func resolveDirectory(dirText string, defDirs []string) (dirs []string, recursiv
 			return defDirs, true, nil
 		}
 
-		return nil, false, nil
+		// "[]" is the default directory itself.
+		return defDirs, false, nil
 	}
 
 	if dirText == "000000" {
@@ -195,7 +199,7 @@ func resolveDirectory(dirText string, defDirs []string) (dirs []string, recursiv
 
 	base := append([]string{}, defDirs[:len(defDirs)-ups]...)
 	remainder := dirText[i:]
-	
+
 	switch {
 	case remainder == "":
 		// Just "-", "--", etc.: move up and stop there.
