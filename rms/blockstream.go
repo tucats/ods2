@@ -1,13 +1,41 @@
 package rms
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/tucats/ods2/ondisk"
-	"github.com/tucats/ods2/volume"
 )
 
-// blockStream reads a volume.File's data as one continuous byte stream,
+// BlockSource is what a Reader reads a file's data from: its virtual
+// blocks, numbered from 1, each ondisk.BlockSize bytes. A *volume.File is
+// one; BytesSource is another, for a file's data held in memory (a file
+// read out of a BACKUP save set, say) that no volume holds.
+type BlockSource interface {
+	ReadBlock(vbn uint32, buf []byte) error
+}
+
+// BytesSource is a file's data in memory as a BlockSource: block 1 is its
+// first 512 bytes, and bytes past its end read as zeros.
+type BytesSource []byte
+
+// ReadBlock copies virtual block vbn into buf, which must be
+// ondisk.BlockSize bytes.
+func (b BytesSource) ReadBlock(vbn uint32, buf []byte) error {
+	if vbn == 0 {
+		return fmt.Errorf("rms: virtual block numbers start at 1")
+	}
+
+	clear(buf)
+
+	if off := int64(vbn-1) * ondisk.BlockSize; off < int64(len(b)) {
+		copy(buf, b[off:])
+	}
+
+	return nil
+}
+
+// blockStream reads a file's data as one continuous byte stream,
 // ignoring the underlying 512-byte block boundaries. This is necessary
 // because RMS record framing (a VAR/VFC record's length prefix, or a
 // stream file's delimiter-terminated lines) doesn't respect block
@@ -27,7 +55,7 @@ import (
 // and the reader then sees what was appended, even within the block that
 // was its last.
 type blockStream struct {
-	file  *volume.File
+	file  BlockSource
 	limit func() int64 // the file's valid length in bytes, now
 
 	buf     []byte // bytes fetched but not yet consumed
@@ -37,7 +65,7 @@ type blockStream struct {
 
 // newBlockStream creates a blockStream over f, whose valid length limit
 // reports, reading from its first byte.
-func newBlockStream(f *volume.File, limit func() int64) *blockStream {
+func newBlockStream(f BlockSource, limit func() int64) *blockStream {
 	return &blockStream{file: f, limit: limit}
 }
 

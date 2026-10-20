@@ -159,3 +159,70 @@ func TestFileHeaderRawIsTheDiskBlock(t *testing.T) {
 		t.Error("Raw returned the header's own bytes, not a copy")
 	}
 }
+
+// TestSetACL gives a file an access control list, checks that it reaches
+// the disk, that later header rewrites (UpdateHeader, Extend, Close)
+// keep it, and that SetACL(nil) takes it away.
+func TestSetACL(t *testing.T) {
+	vol, f := updateHeaderFixture(t)
+
+	// Two identifier ACEs: [1,4] read and write, [200,201] read.
+	acl := []byte{
+		12, 1, 0, 0, 3, 0, 0, 0, 4, 0, 1, 0,
+		12, 1, 0, 0, 1, 0, 0, 0, 0o201, 0, 0o200, 0,
+	}
+
+	if err := SetACL(f, acl); err != nil {
+		t.Fatalf("SetACL: %v", err)
+	}
+
+	aclOf := func() []byte {
+		t.Helper()
+
+		again, err := vol.OpenFID(f.Header.Fid)
+		if err != nil {
+			t.Fatalf("OpenFID: %v", err)
+		}
+
+		got, err := again.Header.ACL()
+		if err != nil {
+			t.Fatalf("ACL: %v", err)
+		}
+
+		return got
+	}
+
+	if got := aclOf(); !bytes.Equal(got, acl) {
+		t.Fatalf("ACL on disk = % x, want % x", got, acl)
+	}
+
+	if err := UpdateHeader(f, func(h *ondisk.FileHeader, _ *ondisk.Ident) { h.FileProtection = 0xFA00 }); err != nil {
+		t.Fatalf("UpdateHeader: %v", err)
+	}
+
+	bm, err := OpenBitmap(f.Device)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	ib, err := OpenIndexBitmap(f.Device)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+
+	if err := Extend(f, bm, ib, 4); err != nil {
+		t.Fatalf("Extend: %v", err)
+	}
+
+	if got := aclOf(); !bytes.Equal(got, acl) {
+		t.Errorf("ACL after UpdateHeader and Extend = % x, want % x", got, acl)
+	}
+
+	if err := SetACL(f, nil); err != nil {
+		t.Fatalf("SetACL(nil): %v", err)
+	}
+
+	if got := aclOf(); got != nil {
+		t.Errorf("ACL after SetACL(nil) = % x, want none", got)
+	}
+}

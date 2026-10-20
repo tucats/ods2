@@ -72,8 +72,24 @@ func (r *Reader) SeekTo(off int64) {
 // NewReader creates a Reader over f's contents, starting at its first
 // record.
 func NewReader(f *volume.File) (*Reader, error) {
-	attr := f.Header.RecordAttributes
+	return newReader(f, f.Header.RecordAttributes, func() int64 { return FileByteLength(f.Header.RecordAttributes) })
+}
 
+// NewReaderFrom creates a Reader over the data in src, a file whose record
+// attributes are attr, starting at its first record: the records of a
+// file no volume holds, such as one saved in a BACKUP save set
+// (BytesSource). attr's end of file (FileByteLength) is where the data
+// ends.
+func NewReaderFrom(src BlockSource, attr ondisk.RecAttr) (*Reader, error) {
+	length := FileByteLength(attr)
+
+	return newReader(src, attr, func() int64 { return length })
+}
+
+// newReader is NewReader and NewReaderFrom: a Reader of src, whose data
+// is attr's format and ends where limit says, read again each time the
+// Reader reaches it.
+func newReader(src BlockSource, attr ondisk.RecAttr, limit func() int64) (*Reader, error) {
 	switch attr.Format {
 	case ondisk.RecordFormatFixed, ondisk.RecordFormatUndefined,
 		ondisk.RecordFormatVariable, ondisk.RecordFormatVFC,
@@ -85,7 +101,7 @@ func NewReader(f *volume.File) (*Reader, error) {
 	}
 
 	return &Reader{
-		stream:    newBlockStream(f, func() int64 { return FileByteLength(f.Header.RecordAttributes) }),
+		stream:    newBlockStream(src, limit),
 		format:    attr.Format,
 		fixedSize: int(attr.MaxRecordSize),
 	}, nil

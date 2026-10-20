@@ -84,3 +84,33 @@ func UpdateHeader(f *File, change func(h *ondisk.FileHeader, id *ondisk.Ident)) 
 
 	return nil
 }
+
+// SetACL replaces f's access control list (see ondisk.FileHeader.ACL)
+// with acl, the access control entries packed as the header holds them;
+// nil or empty removes it. Like UpdateHeader, it rewrites f's primary
+// header at once and leaves f.Header the header as written. An ACL too
+// large to fit in the header beside its name and retrieval pointers is an
+// error, and the header is left as it was (VMS would move such a list
+// into an extension header, which this package doesn't do).
+func SetACL(f *File, acl []byte) error {
+	container, ok := f.Device.Container.(diskimage.WritableContainer)
+	if !ok {
+		return fmt.Errorf("volume: setting the ACL of file %v: device is not open for write", f.Header.Fid)
+	}
+
+	areas, err := existingAreas(f.Header)
+	if err != nil {
+		return fmt.Errorf("volume: setting the ACL of file %v: %w", f.Header.Fid, err)
+	}
+
+	areas.AclBytes = ondisk.ACLArea(acl)
+
+	decoded, err := writeHeader(f.Device, container, f.Header.Fid.Number(), f.Header, areas)
+	if err != nil {
+		return fmt.Errorf("volume: setting the ACL of file %v: %w", f.Header.Fid, err)
+	}
+
+	f.Header = decoded
+
+	return nil
+}

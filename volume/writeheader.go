@@ -470,7 +470,15 @@ func existingAreas(header ondisk.FileHeader) (ondisk.FileHeaderAreas, error) {
 		return ondisk.FileHeaderAreas{}, fmt.Errorf("re-encoding existing retrieval pointers: %w", err)
 	}
 
-	return ondisk.FileHeaderAreas{Ident: ident, MapBytes: mapBytes}, nil
+	// The access control list goes with the header: a rewrite that
+	// dropped it (as every rewrite here once did) would take away the
+	// access it grants or denies.
+	acl, err := header.ACL()
+	if err != nil {
+		return ondisk.FileHeaderAreas{}, fmt.Errorf("decoding existing access control list: %w", err)
+	}
+
+	return ondisk.FileHeaderAreas{Ident: ident, MapBytes: mapBytes, AclBytes: ondisk.ACLArea(acl)}, nil
 }
 
 // addExtent returns extents with extent added at the end. When extent
