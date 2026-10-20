@@ -259,6 +259,57 @@ func (d *Directory) insert(name string, version uint16, fid ondisk.Fid, newNameL
 	return nil
 }
 
+// SetNameVersionLimit sets the version limit in name's record in d, which
+// every version of name shares; 0 means no limit, written as
+// ondisk.NoVersionLimit. VMS reads a file's version limit from this
+// record (DIRECTORY/FULL, BACKUP): a header's own RecordAttributes.
+// VersionLimit, which this package enforces (SetVersionLimit), is 0 for a
+// file on a VMS volume. A restore that gives a file its saved limit sets
+// both. The limit is a fixed-size field, so the directory's blocks keep
+// their layout.
+func (d *Directory) SetNameVersionLimit(name string, limit uint16) error {
+	container, ok := d.Device.Container.(diskimage.WritableContainer)
+	if !ok {
+		return fmt.Errorf("volume: setting %s's version limit: device is not open for write", name)
+	}
+
+	entries, err := d.List()
+	if err != nil {
+		return fmt.Errorf("volume: setting %s's version limit: %w", name, err)
+	}
+
+	found := false
+
+	for i := range entries {
+		if strings.EqualFold(entries[i].Name, name) {
+			entries[i].VersionLimit = limit
+			found = true
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("volume: setting %s's version limit: %w", name, ErrNotFound)
+	}
+
+	blocks, err := packDirectoryBlocks(entries)
+	if err != nil {
+		return fmt.Errorf("volume: setting %s's version limit: %w", name, err)
+	}
+
+	for i, block := range blocks {
+		lbn, err := resolveExtentLBN(d.Extents, uint32(i+1))
+		if err != nil {
+			return fmt.Errorf("volume: setting %s's version limit: locating directory block %d: %w", name, i+1, err)
+		}
+
+		if err := container.WriteBlock(lbn, block); err != nil {
+			return fmt.Errorf("volume: setting %s's version limit: writing directory block %d: %w", name, i+1, err)
+		}
+	}
+
+	return nil
+}
+
 // relocate gives the directory a new, contiguous allocation of at least
 // blocks blocks, and frees its old one. VMS keeps every directory in one
 // contiguous run (a directory's header has FCH$V_CONTIG, and the file

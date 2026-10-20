@@ -337,6 +337,61 @@ func TestDirectoryInsertSecondVersionAndNextVersion(t *testing.T) {
 	}
 }
 
+// TestDirectorySetNameVersionLimit sets the limit in one name's record,
+// which both its versions share, and leaves another name's alone; a name
+// that isn't there is ErrNotFound.
+func TestDirectorySetNameVersionLimit(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "LIMIT.DIR")
+
+	fid1, fid2, fid3 := ondisk.Fid{Num: 50, Seq: 1}, ondisk.Fid{Num: 51, Seq: 1}, ondisk.Fid{Num: 52, Seq: 1}
+	for _, e := range []struct {
+		name    string
+		version uint16
+		fid     ondisk.Fid
+	}{{"A.TXT", 1, fid1}, {"A.TXT", 2, fid2}, {"B.TXT", 1, fid3}} {
+		if err := dir.Insert(e.name, e.version, e.fid, bm, ib); err != nil {
+			t.Fatalf("Insert %s;%d: %v", e.name, e.version, err)
+		}
+	}
+
+	if err := dir.SetNameVersionLimit("a.txt", 3); err != nil {
+		t.Fatalf("SetNameVersionLimit: %v", err)
+	}
+
+	want := []ondisk.DirEntry{
+		{Name: "A.TXT", Version: 2, Fid: fid2, VersionLimit: 3},
+		{Name: "A.TXT", Version: 1, Fid: fid1, VersionLimit: 3},
+		{Name: "B.TXT", Version: 1, Fid: fid3, VersionLimit: ondisk.NoVersionLimit},
+	}
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	if !reflect.DeepEqual(entries, want) {
+		t.Errorf("List() = %+v, want %+v", entries, want)
+	}
+
+	if err := dir.SetNameVersionLimit("C.TXT", 3); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetNameVersionLimit(C.TXT) = %v, want ErrNotFound", err)
+	}
+}
+
 // TestDirectoryInsertForcesDirectoryExtension inserts enough distinctly
 // named entries that they can't all fit in the directory's first block,
 // forcing Insert to grow the directory's own allocation --
