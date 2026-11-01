@@ -2,6 +2,7 @@ package rms
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/tucats/ods2/ondisk"
@@ -27,6 +28,9 @@ type Writer struct {
 	format ondisk.RecordFormat
 
 	fixedSize int // for RecordFormatFixed/Undefined: the required size of every record
+
+	// noSpan is set when records don't cross blocks (ondisk.AttrNoSpan).
+	noSpan bool
 
 	// buf holds bytes that have been framed (length-prefixed, delimited,
 	// ...) but not yet written to disk -- always fewer than
@@ -65,6 +69,10 @@ func (w *Writer) RecordOffset() int64 {
 func NewWriter(f *volume.File) (*Writer, error) {
 	attr := f.Header.RecordAttributes
 
+	if attr.Format.Organization() != ondisk.OrganizationSequential {
+		return nil, ErrNotSequential
+	}
+
 	switch attr.Format {
 	case ondisk.RecordFormatFixed, ondisk.RecordFormatUndefined,
 		ondisk.RecordFormatVariable, ondisk.RecordFormatVFC,
@@ -79,6 +87,7 @@ func NewWriter(f *volume.File) (*Writer, error) {
 		file:      f,
 		format:    attr.Format,
 		fixedSize: int(attr.MaxRecordSize),
+		noSpan:    attr.Attributes&ondisk.AttrNoSpan != 0,
 		vbn:       1,
 	}, nil
 }
@@ -195,6 +204,10 @@ func (w *Writer) Put(record []byte) error {
 		}
 	}
 
+	if err := w.startRecord(record); err != nil {
+		return err
+	}
+
 	start := w.offset()
 
 	if err := w.put(record); err != nil {
@@ -206,6 +219,45 @@ func (w *Writer) Put(record []byte) error {
 	if w.shared {
 		return w.flush()
 	}
+
+	return nil
+}
+
+// ErrSpansBlock is what Put returns for a record that doesn't fit in a block,
+// in a file whose records don't cross blocks.
+var ErrSpansBlock = errors.New("rms: record longer than a block in a file whose records don't span blocks")
+
+// startRecord moves a no-span Writer to the next block if record won't fit in
+// this one. A fixed-length file's size was its create's business, and a record
+// longer than a block starts where it is. The rest of the block is what
+// finalBlock leaves there.
+func (w *Writer) startRecord(record []byte) error {
+	var need int
+
+	switch w.format {
+	case ondisk.RecordFormatVariable, ondisk.RecordFormatVFC:
+		need = 2 + FixedRecordSpace(len(record))
+		if w.noSpan && need > ondisk.BlockSize {
+			return ErrSpansBlock
+		}
+	case ondisk.RecordFormatFixed:
+		if need = FixedRecordSpace(len(record)); need > ondisk.BlockSize {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	if !w.noSpan || len(w.buf) == 0 || len(w.buf)+need <= ondisk.BlockSize {
+		return nil
+	}
+
+	if err := w.file.WriteBlock(w.vbn, w.finalBlock()); err != nil {
+		return fmt.Errorf("rms: writing virtual block %d: %w", w.vbn, err)
+	}
+
+	w.vbn++
+	w.buf = w.buf[:0]
 
 	return nil
 }
@@ -255,8 +307,8 @@ func (w *Writer) finalBlock() []byte {
 }
 
 // putFixed writes one Fixed/Undefined-format record: exactly fixedSize
-// bytes, with no framing at all, matching how Reader.nextFixed reads a
-// record back.
+// bytes, and for Fixed a pad byte after an odd number of them, as
+// Reader.nextFixed reads a record back.
 func (w *Writer) putFixed(record []byte) error {
 	if w.fixedSize <= 0 {
 		return fmt.Errorf("rms: file's record attributes don't define a usable fixed record size (MaxRecordSize %d)", w.fixedSize)
@@ -266,7 +318,15 @@ func (w *Writer) putFixed(record []byte) error {
 		return fmt.Errorf("rms: fixed-format record must be exactly %d bytes, got %d", w.fixedSize, len(record))
 	}
 
-	return w.append(record)
+	if err := w.append(record); err != nil {
+		return err
+	}
+
+	if w.format == ondisk.RecordFormatFixed && len(record)%2 != 0 {
+		return w.append([]byte{0})
+	}
+
+	return nil
 }
 
 // putVariable writes one Variable or VFC record: a 2-byte little-endian

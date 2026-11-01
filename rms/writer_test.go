@@ -656,3 +656,118 @@ func TestReaderSkipsEndOfRecords(t *testing.T) {
 		t.Errorf("after the last record: %v, want io.EOF", err)
 	}
 }
+
+// TestWriterFixedOdd: odd-length records get a pad byte, counted in the end
+// of file, and a Reader reads them back.
+func TestWriterFixedOdd(t *testing.T) {
+	vol := newWritableTestVolume(t)
+	f := newWritableTestFile(t, vol, "ODD.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed, MaxRecordSize: 5})
+
+	w, err := NewWriter(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	offsets := []int64{0, 6, 12}
+
+	for _, off := range offsets {
+		if err := w.Put([]byte("ABCDE")); err != nil {
+			t.Fatal(err)
+		}
+
+		if w.RecordOffset() != off {
+			t.Errorf("record at %d, want %d", w.RecordOffset(), off)
+		}
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := FileByteLength(f.Header.RecordAttributes); got != 18 {
+		t.Errorf("file length %d, want 18", got)
+	}
+
+	r, err := NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for range offsets {
+		if rec, err := r.Next(); err != nil || string(rec) != "ABCDE" {
+			t.Fatalf("Next() = %q, %v", rec, err)
+		}
+	}
+
+	if _, err := r.Next(); err != io.EOF {
+		t.Fatalf("Next() at the end: %v", err)
+	}
+}
+
+// TestWriterNoSpan: with AttrNoSpan a record that won't fit goes to the next
+// block, for fixed and variable records, and one longer than a block is
+// refused for variable records.
+func TestWriterNoSpan(t *testing.T) {
+	cases := []struct {
+		name   string
+		format ondisk.RecordFormat
+		size   uint16
+	}{
+		{"FIX.DAT", ondisk.RecordFormatFixed, 300},
+		{"VAR.DAT", ondisk.RecordFormatVariable, 0},
+	}
+
+	for _, c := range cases {
+		vol := newWritableTestVolume(t)
+		f := newWritableTestFile(t, vol, c.name, ondisk.RecAttr{Format: c.format, MaxRecordSize: c.size, Attributes: ondisk.AttrNoSpan})
+
+		w, err := NewWriter(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rec := bytes.Repeat([]byte{7}, 300)
+
+		for i, off := range []int64{0, 512} {
+			if err := w.Put(rec); err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+
+			if w.RecordOffset() != off {
+				t.Errorf("%s: record %d at %d, want %d", c.name, i, w.RecordOffset(), off)
+			}
+		}
+
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		r, err := NewReader(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for range 2 {
+			got, err := r.Next()
+			if err != nil || !bytes.Equal(got, rec) {
+				t.Fatalf("%s: Next() = %d bytes, %v", c.name, len(got), err)
+			}
+		}
+
+		if _, err := r.Next(); err != io.EOF {
+			t.Fatalf("%s: Next() at the end: %v", c.name, err)
+		}
+	}
+
+	vol := newWritableTestVolume(t)
+	f := newWritableTestFile(t, vol, "LONG.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatVariable, Attributes: ondisk.AttrNoSpan})
+
+	w, err := NewWriter(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.Put(make([]byte, 600)); !errors.Is(err, ErrSpansBlock) {
+		t.Fatalf("a 600-byte record: %v, want ErrSpansBlock", err)
+	}
+}

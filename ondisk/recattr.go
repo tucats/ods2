@@ -67,6 +67,28 @@ func (f RecordFormat) String() string {
 	}
 }
 
+// Organization is a file's organization, the high nibble of the byte
+// RecAttr.Format holds (FAT$B_RTYPE on disk): its low nibble is the record
+// format. Each value is the same as RMS's FAB$C_SEQ, FAB$C_REL, and FAB$C_IDX.
+type Organization uint8
+
+const (
+	OrganizationSequential Organization = 0x00
+	OrganizationRelative   Organization = 0x10
+	OrganizationIndexed    Organization = 0x20
+	OrganizationDirect     Organization = 0x30
+)
+
+// Organization is the file organization in f's byte.
+func (f RecordFormat) Organization() Organization {
+	return Organization(f & 0xF0)
+}
+
+// Record is f's byte without its organization: the record format alone.
+func (f RecordFormat) Record() RecordFormat {
+	return f & 0x0F
+}
+
 // Record attribute bit flags, found in RecAttr.Attributes. These describe
 // how a record's carriage control should be interpreted when the file is
 // treated as text (see package rms for where these actually get used).

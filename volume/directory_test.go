@@ -824,3 +824,44 @@ func TestDirectoryRemoveNonexistentEntryErrors(t *testing.T) {
 		t.Errorf("List() after failed Remove calls = %+v, want unchanged %+v", after, before)
 	}
 }
+
+// TestPackDirectoryBlocksSplitsAName: a name with more versions than a block
+// holds goes on in the next block, highest version first, and reads back whole.
+func TestPackDirectoryBlocksSplitsAName(t *testing.T) {
+	var in []ondisk.DirEntry
+	for v := uint16(1); v <= 200; v++ {
+		in = append(in, ondisk.DirEntry{Name: "BIG.DAT", Version: v, Fid: ondisk.Fid{Num: 1, Seq: v}})
+	}
+
+	in = append(in, ondisk.DirEntry{Name: "A.DAT", Version: 1, Fid: ondisk.Fid{Num: 2, Seq: 1}})
+
+	blocks, err := packDirectoryBlocks(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(blocks) < 4 {
+		t.Fatalf("%d blocks", len(blocks))
+	}
+
+	var got []ondisk.DirEntry
+
+	for _, block := range blocks {
+		entries, err := ondisk.DecodeDirectoryBlock(block)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got = append(got, entries...)
+	}
+
+	if len(got) != len(in) || got[0].Name != "A.DAT" {
+		t.Fatalf("%d entries, the first %q", len(got), got[0].Name)
+	}
+
+	for i, e := range got[1:] {
+		if e.Version != uint16(200-i) {
+			t.Fatalf("entry %d is version %d", i+1, e.Version)
+		}
+	}
+}

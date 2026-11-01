@@ -528,13 +528,11 @@ func (d *Directory) recordUsedBlocks(container diskimage.WritableContainer, used
 // EncodeDirectoryBlock's own doc comment describes ("volume [decides] which
 // entries go in which block, and what to do when they don't fit").
 //
-// All versions of a single name are always kept together in one block,
-// matching how a real VMS directory groups them and how
-// DecodeDirectoryBlock (and this package's own List) read them back; a
-// single name's version list too large to fit in an empty block by itself
-// is reported as an error, since neither this function nor
-// EncodeDirectoryBlock has any way to split one name record's version
-// entries across two blocks.
+// A name's versions go in one block while they fit, highest first. A name
+// with more than a block can hold goes on in the next, under a name record
+// of its own, as a VMS directory's does; DecodeDirectoryBlock and this
+// package's List read the blocks back in order, so the versions stay
+// highest first.
 func packDirectoryBlocks(entries []ondisk.DirEntry) ([][]byte, error) {
 	byName := make(map[string][]ondisk.DirEntry, len(entries))
 	names := make([]string, 0, len(entries))
@@ -574,30 +572,23 @@ func packDirectoryBlocks(entries []ondisk.DirEntry) ([][]byte, error) {
 
 	for _, name := range names {
 		group := byName[name]
+		sort.SliceStable(group, func(i, j int) bool { return group[i].Version > group[j].Version })
 
-		candidate := make([]ondisk.DirEntry, 0, len(pending)+len(group))
-		candidate = append(candidate, pending...)
-		candidate = append(candidate, group...)
+		for len(group) > 0 {
+			n := directoryEntriesFitting(pending, group)
+			if n == 0 && len(pending) == 0 {
+				return nil, fmt.Errorf("directory entries for %q don't fit in a single %d-byte block", name, ondisk.BlockSize)
+			}
 
-		if _, err := ondisk.EncodeDirectoryBlock(candidate); err == nil {
-			pending = candidate
+			pending = append(pending, group[:n]...)
+			group = group[n:]
 
-			continue
+			if len(group) > 0 {
+				if err := flush(); err != nil {
+					return nil, err
+				}
+			}
 		}
-
-		if len(pending) == 0 {
-			return nil, fmt.Errorf("directory entries for %q don't fit in a single %d-byte block", name, ondisk.BlockSize)
-		}
-
-		if err := flush(); err != nil {
-			return nil, err
-		}
-
-		if _, err := ondisk.EncodeDirectoryBlock(group); err != nil {
-			return nil, fmt.Errorf("directory entries for %q don't fit in a single %d-byte block: %w", name, ondisk.BlockSize, err)
-		}
-
-		pending = group
 	}
 
 	if err := flush(); err != nil {
@@ -618,4 +609,17 @@ func packDirectoryBlocks(entries []ondisk.DirEntry) ([][]byte, error) {
 	}
 
 	return blocks, nil
+}
+
+// directoryEntriesFitting says how many of group's entries, from its start,
+// fit in one block after pending's.
+func directoryEntriesFitting(pending, group []ondisk.DirEntry) int {
+	for n := len(group); n > 0; n-- {
+		candidate := append(append([]ondisk.DirEntry{}, pending...), group[:n]...)
+		if _, err := ondisk.EncodeDirectoryBlock(candidate); err == nil {
+			return n
+		}
+	}
+
+	return 0
 }

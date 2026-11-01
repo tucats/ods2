@@ -27,6 +27,12 @@ import (
 // caller (ultimately, the `copy` command), not with this package.
 var ErrCorruptRecord = errors.New("rms: corrupt record")
 
+// ErrNotSequential is what NewReader, NewReaderFrom, and NewWriter return
+// for a file whose organization isn't sequential. A relative or indexed
+// file's blocks aren't a sequence of records: its buckets, cells, and
+// control bytes are for RMS's own code to read, by block.
+var ErrNotSequential = errors.New("rms: not a sequential file")
+
 // Reader reads successive records from an open volume.File, dispatching
 // on the file's record format (ondisk.RecordFormat) the way VMS's RMS
 // $GET service would: Fixed records are constant-size chunks with no
@@ -39,6 +45,10 @@ type Reader struct {
 	format ondisk.RecordFormat
 
 	fixedSize int // for RecordFormatFixed/Undefined: the size of every record
+
+	// noSpan is set for a fixed-length record file whose records don't
+	// cross blocks (ondisk.AttrNoSpan).
+	noSpan bool
 
 	// recordOffset is where the record Next last returned starts.
 	recordOffset int64
@@ -90,6 +100,10 @@ func NewReaderFrom(src BlockSource, attr ondisk.RecAttr) (*Reader, error) {
 // is attr's format and ends where limit says, read again each time the
 // Reader reaches it.
 func newReader(src BlockSource, attr ondisk.RecAttr, limit func() int64) (*Reader, error) {
+	if attr.Format.Organization() != ondisk.OrganizationSequential {
+		return nil, ErrNotSequential
+	}
+
 	switch attr.Format {
 	case ondisk.RecordFormatFixed, ondisk.RecordFormatUndefined,
 		ondisk.RecordFormatVariable, ondisk.RecordFormatVFC,
@@ -104,7 +118,32 @@ func newReader(src BlockSource, attr ondisk.RecAttr, limit func() int64) (*Reade
 		stream:    newBlockStream(src, limit),
 		format:    attr.Format,
 		fixedSize: int(attr.MaxRecordSize),
+		noSpan:    attr.Attributes&ondisk.AttrNoSpan != 0,
 	}, nil
+}
+
+// FixedRecordSpace is how many bytes a fixed-length record of size bytes
+// takes in a sequential file: its size, rounded up to a word. VMS 7.1's RMS
+// wrote records of 5 bytes at offsets 0, 6, and 12, its end of file after
+// the last one's pad byte (testdata/for81 in govax).
+func FixedRecordSpace(size int) int {
+	return (size + 1) &^ 1
+}
+
+// FixedRecordOffset is the byte offset of record number (the first is 1) in
+// a sequential file of fixed-length records with attributes attr: laid end to
+// end, or with ondisk.AttrNoSpan each block holding as many as fit whole.
+func FixedRecordOffset(attr ondisk.RecAttr, number uint32) int64 {
+	space := int64(FixedRecordSpace(int(attr.MaxRecordSize)))
+	index := int64(number) - 1
+
+	if attr.Attributes&ondisk.AttrNoSpan != 0 && space <= ondisk.BlockSize {
+		perBlock := ondisk.BlockSize / space
+
+		return index/perBlock*ondisk.BlockSize + index%perBlock*space
+	}
+
+	return index * space
 }
 
 // FileByteLength computes a file's exact valid length in bytes from its
@@ -136,8 +175,11 @@ func FileByteLength(attr ondisk.RecAttr) int64 {
 // read; see ErrCorruptRecord for how a truncated or corrupt trailing
 // record is reported instead.
 func (r *Reader) Next() ([]byte, error) {
-	if r.format == ondisk.RecordFormatVariable || r.format == ondisk.RecordFormatVFC {
+	switch {
+	case r.format == ondisk.RecordFormatVariable || r.format == ondisk.RecordFormatVFC:
 		r.skipEndOfRecords()
+	case r.format == ondisk.RecordFormatFixed && r.noSpan:
+		r.skipUnusedSpace()
 	}
 
 	start := r.stream.offset()
@@ -183,6 +225,14 @@ func (r *Reader) nextFixed() ([]byte, error) {
 	}
 
 	data, err := r.stream.ReadFull(r.fixedSize)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		// The end of file falls inside the last record, as VMS's own
+		// FORRTL.EXE's does (FIX 512, its end of file mid-block). What
+		// the file has of the record is the record. VMS's $GET of one is
+		// unconfirmed.
+		return r.stream.readRest(), nil
+	}
+
 	if err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
@@ -191,7 +241,27 @@ func (r *Reader) nextFixed() ([]byte, error) {
 		return nil, fmt.Errorf("%w: fixed-length record: %v", ErrCorruptRecord, err)
 	}
 
+	// A record of odd length has a pad byte, so the next starts on a word.
+	if r.format == ondisk.RecordFormatFixed && r.fixedSize%2 != 0 {
+		if _, err := r.stream.ReadFull(1); err != nil && err != io.EOF && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, fmt.Errorf("%w: alignment padding byte: %v", ErrCorruptRecord, err)
+		}
+	}
+
 	return data, nil
+}
+
+// skipUnusedSpace moves past what's left of a block too small for a
+// fixed-length record, when records don't cross blocks. A record longer
+// than a block can't be helped: it starts where it is.
+func (r *Reader) skipUnusedSpace() {
+	space := FixedRecordSpace(r.fixedSize)
+	offset := r.stream.offset()
+	used := int(offset % ondisk.BlockSize)
+
+	if space <= ondisk.BlockSize && used != 0 && used+space > ondisk.BlockSize {
+		r.stream.seek(offset - int64(used) + ondisk.BlockSize)
+	}
 }
 
 // nextVariable reads one Variable or VFC record: a 2-byte little-endian

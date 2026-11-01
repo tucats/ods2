@@ -40,11 +40,9 @@ func (b BytesSource) ReadBlock(vbn uint32, buf []byte) error {
 // because RMS record framing (a VAR/VFC record's length prefix, or a
 // stream file's delimiter-terminated lines) doesn't respect block
 // boundaries — a single record is free to start near the end of one block
-// and finish in the next. (ODS-2 does define a "no span" record attribute
-// bit for files where records are guaranteed not to cross a boundary, but
-// nothing in this project currently needs to take advantage of that as an
-// optimization; reading everything as a plain stream is correct either
-// way.)
+// and finish in the next. (With ODS-2's "no span" record attribute bit
+// records don't cross a boundary, and Reader moves past the rest of a block
+// where the next record wouldn't fit; to this type it's still one stream.)
 //
 // It also knows where the file's valid data ends, which is generally NOT
 // the end of its allocated blocks, since the last allocated block is
@@ -156,4 +154,13 @@ func (s *blockStream) ReadFull(n int) ([]byte, error) {
 	s.bufOff += n
 
 	return out, nil
+}
+
+// readRest reads and consumes what ReadFull found was buffered when the file
+// ended before all it asked for.
+func (s *blockStream) readRest() []byte {
+	out := append([]byte{}, s.buf[s.bufOff:]...)
+	s.bufOff = len(s.buf)
+
+	return out
 }

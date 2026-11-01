@@ -81,6 +81,76 @@ func TestReaderFixedZeroSizeDoesNotLoopForever(t *testing.T) {
 	}
 }
 
+// TestReaderFixedOdd: odd-length records are padded to a word, the last pad
+// byte inside the end of file or not.
+func TestReaderFixedOdd(t *testing.T) {
+	for _, data := range [][]byte{[]byte("ABC\x00DEF\x00"), []byte("ABC\x00DEF")} {
+		f := newTestFile(t, odstest.FileHeaderFixture{
+			Format:         ondisk.RecordFormatFixed,
+			MaxRecordSize:  3,
+			EndOfFileBlock: 1,
+			FirstFreeByte:  uint16(len(data)),
+		}, data)
+
+		r, err := NewReader(f)
+		if err != nil {
+			t.Fatalf("NewReader: %v", err)
+		}
+
+		for i, want := range []string{"ABC", "DEF"} {
+			rec, err := r.Next()
+			if err != nil || string(rec) != want {
+				t.Fatalf("Next() #%d = %q, %v, want %q", i, rec, err, want)
+			}
+
+			if r.RecordOffset() != int64(i*4) {
+				t.Errorf("record %d's offset %d", i, r.RecordOffset())
+			}
+		}
+
+		if _, err := r.Next(); err != io.EOF {
+			t.Fatalf("Next() at the end: %v, want io.EOF", err)
+		}
+	}
+}
+
+// TestReaderRefusesOtherOrganizations: a relative file isn't read as records.
+func TestReaderRefusesOtherOrganizations(t *testing.T) {
+	f := newTestFile(t, odstest.FileHeaderFixture{
+		Format:         ondisk.RecordFormatFixed | ondisk.RecordFormat(ondisk.OrganizationRelative),
+		MaxRecordSize:  3,
+		EndOfFileBlock: 2,
+	}, make([]byte, 512))
+
+	if _, err := NewReader(f); !errors.Is(err, ErrNotSequential) {
+		t.Fatalf("NewReader of a relative file: %v, want ErrNotSequential", err)
+	}
+}
+
+func TestFixedRecordOffset(t *testing.T) {
+	cases := []struct {
+		size, attributes int
+		number           uint32
+		want             int64
+	}{
+		{16, 0, 1, 0},
+		{16, 0, 3, 32},
+		{5, 0, 3, 12},
+		{513, 0, 2, 514},
+		{300, int(ondisk.AttrNoSpan), 2, 512},
+		{300, int(ondisk.AttrNoSpan), 3, 1024},
+		{100, int(ondisk.AttrNoSpan), 6, 512},
+		{600, int(ondisk.AttrNoSpan), 2, 600},
+	}
+
+	for _, c := range cases {
+		attr := ondisk.RecAttr{MaxRecordSize: uint16(c.size), Attributes: uint8(c.attributes)}
+		if got := FixedRecordOffset(attr, c.number); got != c.want {
+			t.Errorf("size %d attributes %d record %d: %d, want %d", c.size, c.attributes, c.number, got, c.want)
+		}
+	}
+}
+
 func TestReaderFixedTruncated(t *testing.T) {
 	// 4-byte fixed records, but only 6 bytes of data: one whole record
 	// plus 2 dangling bytes of a second, incomplete one.
@@ -106,8 +176,14 @@ func TestReaderFixedTruncated(t *testing.T) {
 		t.Fatalf("Next() #1 = %q, want %q", first, "AAAA")
 	}
 
-	if _, err := r.Next(); !errors.Is(err, ErrCorruptRecord) {
-		t.Fatalf("Next() #2 (truncated) err = %v, want ErrCorruptRecord", err)
+	// What the file has of the last record is the record.
+	second, err := r.Next()
+	if err != nil || !bytes.Equal(second, []byte("BB")) {
+		t.Fatalf("Next() #2 (cut short) = %q, %v, want %q", second, err, "BB")
+	}
+
+	if _, err := r.Next(); err != io.EOF {
+		t.Fatalf("Next() #3 err = %v, want io.EOF", err)
 	}
 }
 
