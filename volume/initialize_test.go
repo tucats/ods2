@@ -514,3 +514,129 @@ func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 		}
 	}
 }
+
+// TestIndexFileGrowsIntoExtensionHeaders creates files until INDEXF.SYS
+// has grown more times than its own header has room for: each growth is a
+// retrieval pointer of its own, since the files' data lands between them,
+// so the index file needs an extension header. That header must be in a
+// slot the index file already mapped (ensureHeaderSlot), or the chain
+// can't be followed: an independent re-mount must find every file. (The
+// header once went in the space it was to describe, and the volume could
+// no longer be mounted.)
+func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
+	if testing.Short() {
+		t.Skip("creates 3,600 files")
+	}
+
+	path := filepath.Join(t.TempDir(), "extend.dsk")
+
+	c, err := diskimage.Create(path, 16000)
+	if err != nil {
+		t.Fatalf("diskimage.Create: %v", err)
+	}
+
+	defer func() { _ = c.Close() }()
+
+	headers := uint32(ondisk.ReservedFileCount + 2)
+	if err := Initialize(c, InitializeOptions{Label: "EXTEND", MaxFiles: 6000, Headers: headers}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	vol, err := Mount(c)
+	if err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+
+	dev := vol.Devices[0]
+
+	dir, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
+	if err != nil {
+		t.Fatalf("OpenDirectory: %v", err)
+	}
+
+	bm, err := dev.Bitmap()
+	if err != nil {
+		t.Fatalf("Bitmap: %v", err)
+	}
+
+	ib, err := dev.IndexBitmap()
+	if err != nil {
+		t.Fatalf("IndexBitmap: %v", err)
+	}
+
+	const files = 3600
+
+	block := func(i int) []byte {
+		b := make([]byte, ondisk.BlockSize)
+		b[0], b[1], b[ondisk.BlockSize-1] = byte(i), byte(i>>8), byte(i)
+
+		return b
+	}
+
+	for i := range files {
+		name := fmt.Sprintf("F%04d.DAT", i)
+
+		f, err := vol.CreateFile(dir, name, ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+		if err != nil {
+			t.Fatalf("CreateFile(%s): %v", name, err)
+		}
+
+		if err := f.WriteBlock(1, block(i)); err != nil {
+			t.Fatalf("WriteBlock(%s): %v", name, err)
+		}
+
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close(%s): %v", name, err)
+		}
+	}
+
+	chain, err := fileHeaderChain(dev, dev.IndexFile.Header)
+	if err != nil {
+		t.Fatalf("fileHeaderChain: %v", err)
+	}
+
+	if len(chain) < 3 {
+		t.Fatalf("INDEXF.SYS has %d extension headers after %d files, want 2 or more: the test no longer tests them", len(chain)-1, files)
+	}
+
+	if err := vol.Dismount(); err != nil {
+		t.Fatalf("Dismount: %v", err)
+	}
+
+	reopened, err := diskimage.Open(path)
+	if err != nil {
+		t.Fatalf("diskimage.Open: %v", err)
+	}
+
+	defer func() { _ = reopened.Close() }()
+
+	vol2, err := Mount(reopened)
+	if err != nil {
+		t.Fatalf("Mount (reopened): %v", err)
+	}
+
+	dir2, err := vol2.OpenDirectory(ondisk.MasterFileDirectoryFid)
+	if err != nil {
+		t.Fatalf("OpenDirectory (reopened): %v", err)
+	}
+
+	buf := make([]byte, ondisk.BlockSize)
+
+	for i := range files {
+		name := fmt.Sprintf("F%04d.DAT", i)
+
+		e, err := dir2.Lookup(name, 0)
+		if err != nil {
+			t.Fatalf("Lookup(%s): %v", name, err)
+		}
+
+		f, err := vol2.OpenFID(e.Fid)
+		if err != nil {
+			t.Fatalf("OpenFID(%s): %v", name, err)
+		}
+
+		if err := f.ReadBlock(1, buf); err != nil || !bytes.Equal(buf, block(i)) {
+			t.Fatalf("%s doesn't read back what was written: %v", name, err)
+		}
+	}
+}

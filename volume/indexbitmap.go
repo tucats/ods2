@@ -182,6 +182,44 @@ func (ib *IndexBitmap) FindFreeSlot() (uint32, error) {
 		ib.totalSlots, ib.reservedSlots)
 }
 
+// FindFreeSlotWithin is FindFreeSlot limited to the slots INDEXF.SYS
+// already maps: the lowest free one whose header block is at or below
+// lastVBN. It's where an extension header of the index file itself goes
+// (see ensureHeaderSlot): a block past the index file's end has no LBN
+// until that very header records it, so neither a later mount nor VMS
+// could find the header there.
+func (ib *IndexBitmap) FindFreeSlotWithin(lastVBN uint32) (uint32, error) {
+	buf := make([]byte, ondisk.BlockSize)
+
+	for slot := ib.reservedSlots; slot < ib.totalSlots; slot++ {
+		fileNumber := slot + 1
+
+		vbn := ib.headerVBN(fileNumber)
+		if vbn > lastVBN {
+			break
+		}
+
+		if ondisk.BitmapTest(ib.bits, slot) {
+			continue
+		}
+
+		if err := ib.dev.IndexFile.ReadBlock(vbn, buf); err != nil {
+			return 0, fmt.Errorf("volume: FindFreeSlotWithin: reading header slot for file %d (VBN %d): %w", fileNumber, vbn, err)
+		}
+
+		header, _ := ondisk.DecodeFileHeader(buf)
+		if header.Checksum != 0 || header.Fid.Number() != 0 {
+			return 0, fmt.Errorf(
+				"volume: FindFreeSlotWithin: index-file bitmap inconsistency: slot for file %d is marked free but its header does not look unused (checksum %#04x, file number %d)",
+				fileNumber, header.Checksum, header.Fid.Number())
+		}
+
+		return fileNumber, nil
+	}
+
+	return 0, fmt.Errorf("volume: FindFreeSlotWithin: no free header slot at or below VBN %d", lastVBN)
+}
+
 // slotRange validates fileNumber (1-based) and returns its 0-based bit
 // index within bits.
 func (ib *IndexBitmap) slotRange(fileNumber uint32) (uint32, error) {
