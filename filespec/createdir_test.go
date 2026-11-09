@@ -202,18 +202,19 @@ func TestCreateDirectoryPathFullDisk(t *testing.T) {
 	}
 }
 
-// TestCreateDirectoryPathLimits: VMS 7.3 makes eight levels, and refuses a
-// ninth or a 40-character name with RMS$_DIR, making none of the path.
+// TestCreateDirectoryPathLimits: VMS makes fifteen levels (a root of seven
+// and a directory of eight; VMS 7.1), and refuses a sixteenth or a
+// 40-character name with RMS$_DIR, making none of the path.
 func TestCreateDirectoryPathLimits(t *testing.T) {
 	vol, bm, ib := newCreateDirVolume(t, 2000)
 
-	eight := []string{"L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"}
-	if _, err := CreateDirectoryPath(vol, eight, nil, bm, ib); err != nil {
-		t.Fatalf("eight levels: %v", err)
+	deepest := []string{"L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10", "L11", "L12", "L13", "L14", "L15"}
+	if _, err := CreateDirectoryPath(vol, deepest, nil, bm, ib); err != nil {
+		t.Fatalf("fifteen levels: %v", err)
 	}
 
 	for _, dirs := range [][]string{
-		append(append([]string{}, eight...), "L9"),
+		append(append([]string{}, deepest...), "L16"),
 		{"NEW", strings.Repeat("X", volume.MaxDirectoryNameLength+1)},
 	} {
 		levels, err := CreateDirectoryPath(vol, dirs, nil, bm, ib)

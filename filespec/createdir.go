@@ -10,9 +10,12 @@ import (
 )
 
 // MaxDirectoryDepth is how many levels below the MFD an ODS-2 directory
-// path can have: VMS 7.3 makes [L1.L2.L3.L4.L5.L6.L7.L8] but refuses a
-// ninth level with RMS$_DIR.
-const MaxDirectoryDepth = 8
+// path can have. VMS refuses a ninth level in a directory specification
+// with RMS$_DIR, but a rooted logical name may add a root of up to seven
+// levels before it, and VMS 7.1 makes such a path: fifteen levels on the
+// disk. The limit of eight is a file name's, for the name processor above
+// this package to apply.
+const MaxDirectoryDepth = 15
 
 // CreatedDirectory reports one level of a CreateDirectoryPath walk.
 type CreatedDirectory struct {
