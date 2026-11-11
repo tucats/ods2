@@ -53,7 +53,8 @@ import (
 // USE (not free), and BitmapClear marks it free (not allocated).
 //
 // Like Bitmap, IndexBitmap is loaded once and mutated purely in memory —
-// nothing is written back to the device until Flush is called (see
+// nothing is written back to the device until Flush is called, which is
+// the caller's choice, or Volume.Dismount (see Bitmap's doc comment and
 // docs/PHASE-02.md's "Caching strategy").
 type IndexBitmap struct {
 	dev       *Device

@@ -31,12 +31,15 @@ import (
 //
 // OpenBitmap reads all of this into memory once. FindFree/MarkAllocated/
 // MarkFree then operate purely in memory — nothing is written back to the
-// device until Flush is called. This matches this project's whole-phase
-// caching strategy (see docs/PHASE-02.md's "Caching strategy" section):
-// unlike the reference implementation's implicit, LRU-eviction-driven
-// write-back, every mutating operation in this project flushes its own
-// dirty bitmap state before returning, so nothing is ever left dirty in
-// memory hoping a later operation picks it up.
+// device until Flush is called. When to call it is the caller's choice
+// (see docs/PHASE-02.md's "Caching strategy" section): this package's
+// own operations (CreateFile, Extend, DeleteFile, ...) never flush, and
+// Volume.Dismount flushes every device's bitmaps as its first step. The
+// cmd/ods2 tool flushes after each command that allocates or frees, so
+// nothing it does is left dirty in memory; a long-lived caller that
+// leaves flushing to Dismount (an emulator keeping a volume mounted for a
+// whole session, say) loses its allocations' record if the process ends
+// without dismounting.
 type Bitmap struct {
 	dev       *Device
 	file      *File
