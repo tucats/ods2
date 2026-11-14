@@ -357,6 +357,12 @@ func (vol *Volume) CreateFileVersionWith(dir *Directory, name string, version ui
 // explicit version (CreateFileVersion) it's whichever version is highest,
 // above or below the new one; version itself only matters for the error
 // text.
+//
+// The name's directory record comes first: it is where VMS keeps a name's
+// version limit (SET FILE/VERSION_LIMIT sets it there, and a VMS volume's
+// headers carry none), and every version of the name shares it. A record
+// with no limit (ondisk.NoVersionLimit, or 0) leaves it to the previous
+// version's header, which this package writes.
 func resolveVersionLimit(dir *Directory, name string, version uint16) (uint16, error) {
 	entry, err := dir.Lookup(name, 0)
 	if errors.Is(err, ErrNotFound) {
@@ -365,6 +371,10 @@ func resolveVersionLimit(dir *Directory, name string, version uint16) (uint16, e
 
 	if err != nil {
 		return 0, fmt.Errorf("resolving version limit for %s;%d: %w", name, version, err)
+	}
+
+	if limit := entry.VersionLimit; limit != 0 && limit < ondisk.NoVersionLimit {
+		return limit, nil
 	}
 
 	previous, err := readFileHeaderViaIndex(dir.Device, dir.Device.IndexFile.Extents, entry.Fid)

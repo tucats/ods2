@@ -1030,3 +1030,68 @@ func TestFileWriteBlockReadsBackBeforeClose(t *testing.T) {
 		t.Errorf("block 2 read back as % x..., want the block written", buf[:4])
 	}
 }
+
+// TestCreateFileHonorsDirectoryRecordVersionLimit: a limit kept only in
+// the name's directory record, as on a volume VMS wrote (SET
+// FILE/VERSION_LIMIT; the headers there carry none), is the one a new
+// version is created under: the oldest versions past it go, and the new
+// version's entry keeps the record's limit.
+func TestCreateFileHonorsDirectoryRecordVersionLimit(t *testing.T) {
+	dev, container := newWritableHeaderTestVolume(t)
+	setIndexBitmapBits(t, container, []uint32{1, 2, 3})
+	installWideTestBitmap(t, container)
+
+	ib, err := OpenIndexBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenIndexBitmap: %v", err)
+	}
+
+	bm, err := OpenBitmap(dev)
+	if err != nil {
+		t.Fatalf("OpenBitmap: %v", err)
+	}
+
+	dir := newWritableTestDirectory(t, dev, ib, "VMSLIM.DIR")
+	vol := &Volume{Devices: []*Device{dev}}
+
+	create := func() {
+		t.Helper()
+
+		f, err := vol.CreateFile(dir, "L.DAT", ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+		if err != nil {
+			t.Fatalf("CreateFile: %v", err)
+		}
+
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}
+
+	create()
+
+	if err := dir.SetNameVersionLimit("L.DAT", 2); err != nil {
+		t.Fatalf("SetNameVersionLimit: %v", err)
+	}
+
+	create()
+	create()
+
+	entries, err := dir.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	var versions []uint16
+
+	for _, e := range entries {
+		versions = append(versions, e.Version)
+
+		if e.VersionLimit != 2 {
+			t.Errorf("L.DAT;%d's record limit %d, want 2", e.Version, e.VersionLimit)
+		}
+	}
+
+	if len(versions) != 2 || versions[0] != 3 || versions[1] != 2 {
+		t.Errorf("versions %v, want [3 2]", versions)
+	}
+}
