@@ -1,6 +1,7 @@
 package volume
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -277,5 +278,39 @@ func TestInheritedDirectoryOptions(t *testing.T) {
 	if h.Owner != owner || h.RecordAttributes.VersionLimit != 4 || h.FileProtection != ondisk.ProtectionNoDeleteAll {
 		t.Errorf("owner %v, limit %d, protection %#x; want %v, 4, %#x",
 			h.Owner, h.RecordAttributes.VersionLimit, h.FileProtection, owner, ondisk.ProtectionNoDeleteAll)
+	}
+}
+
+// TestInheritedDirectoryOptionsACL: a new directory takes its parent's ACL
+// but the NOPROPAGATE entries, and the DEFAULT ones keep DEFAULT.
+func TestInheritedDirectoryOptionsACL(t *testing.T) {
+	vol, parent, bm, ib, _ := createDirFixture(t)
+
+	a := ondisk.UicIdentifier(ondisk.Uic{Group: 0o200, Member: 1})
+	b := ondisk.UicIdentifier(ondisk.Uic{Group: 0o200, Member: 2})
+	acl := ondisk.EncodeACL([]ondisk.ACE{
+		ondisk.NewDefaultProtectionACE(0xFA00, 0),
+		ondisk.NewIdentifierACE([]ondisk.Identifier{a}, ondisk.ACEAccessRead, ondisk.ACEOptionDefault),
+		ondisk.NewIdentifierACE([]ondisk.Identifier{b}, ondisk.ACEAccessRead, ondisk.ACEOptionNoPropagate),
+	})
+
+	withACL, err := vol.CreateDirectory(parent, "ACL.DIR", DirectoryOptions{ACL: acl}, bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, _ := withACL.Header.ACL(); !bytes.Equal(got, acl) {
+		t.Fatalf("the directory's ACL: % X", got)
+	}
+
+	child, err := vol.CreateDirectory(withACL, "CHILD.DIR", InheritedDirectoryOptions(withACL), bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	aces, err := child.Header.ACEs()
+	if err != nil || len(aces) != 2 || aces[0].Type != ondisk.ACETypeDefaultProtection ||
+		!aces[1].Has(ondisk.ACEOptionDefault) || aces[1].Identifiers[0] != a {
+		t.Errorf("the child's ACL: %+v, %v", aces, err)
 	}
 }

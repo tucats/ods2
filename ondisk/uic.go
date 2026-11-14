@@ -13,18 +13,30 @@ const UicSize = 4
 // Uic is a VMS User Identification Code: the (group, member) pair that
 // identifies an account, similar in spirit to a Unix (uid, gid) pair. It
 // appears in a volume's home block (the volume's owner) and in a file
-// header (the file's owner), and is used to evaluate protection checks —
-// though this project, being read-only, never needs to enforce those
-// checks itself; it only decodes and reports the UIC values it finds.
+// header (the file's owner), and in identifier ACEs (see ace.go), and is
+// what VMS evaluates protection checks against. This package knows nothing
+// of the processes asking for access, so it never checks protection
+// itself; it decodes, encodes, and reports UICs for a caller that does.
 type Uic struct {
 	Member uint16
 	Group  uint16
 }
 
 // String renders a Uic the way VMS conventionally displays one: as
-// "[group,member]" with both numbers in octal, e.g. "[360,4]".
+// "[group,member]" with both numbers in octal, e.g. "[360,4]". A wildcard
+// group or member (see WildGroup) is "*", as in "[200,*]".
 func (u Uic) String() string {
-	return fmt.Sprintf("[%o,%o]", u.Group, u.Member)
+	group, member := fmt.Sprintf("%o", u.Group), fmt.Sprintf("%o", u.Member)
+
+	if u.Group == WildGroup {
+		group = "*"
+	}
+
+	if u.Member == WildMember {
+		member = "*"
+	}
+
+	return "[" + group + "," + member + "]"
 }
 
 // DecodeUic decodes a Uic from its 4-byte on-disk representation. b must be
@@ -58,6 +70,27 @@ const (
 	MaxUicMember = 0o177776
 )
 
+// WildGroup and WildMember are the wildcard group and member: a UIC with
+// one of them stands for every group or every member, as an identifier
+// ACE's UIC may ("[200,*]", the whole of group 200; "[*,*]", everyone).
+// A file's owner is never a wildcard.
+const (
+	WildGroup  = MaxUicGroup + 1
+	WildMember = MaxUicMember + 1
+)
+
+// IsWildcard reports whether u's group or member is a wildcard.
+func (u Uic) IsWildcard() bool {
+	return u.Group == WildGroup || u.Member == WildMember
+}
+
+// Matches reports whether the UIC other is one of those u stands for: u
+// itself, or with u's wildcards, any group or member in their place.
+func (u Uic) Matches(other Uic) bool {
+	return (u.Group == WildGroup || u.Group == other.Group) &&
+		(u.Member == WildMember || u.Member == other.Member)
+}
+
 // ParseUic reads a UIC as VMS writes one: "[group,member]", both numbers
 // in octal, e.g. "[1,4]" or "[360,4]". Angle brackets ("<1,4>") are
 // accepted too, as DCL accepts them, and spaces are ignored. Only the
@@ -65,6 +98,18 @@ const (
 // name ("[SYSTEM]"), but translating a name needs the system's rights
 // database, which a disk image doesn't carry.
 func ParseUic(text string) (Uic, error) {
+	return parseUic(text, false)
+}
+
+// ParseUicPattern is ParseUic allowing "*" for the group or the member, a
+// wildcard (WildGroup, WildMember), as an identifier ACE's UIC may be
+// written: "[200,*]", "[*,*]".
+func ParseUicPattern(text string) (Uic, error) {
+	return parseUic(text, true)
+}
+
+// parseUic is ParseUic, and with wild ParseUicPattern.
+func parseUic(text string, wild bool) (Uic, error) {
 	s := strings.ReplaceAll(strings.TrimSpace(text), " ", "")
 
 	var inner string
@@ -82,15 +127,29 @@ func ParseUic(text string) (Uic, error) {
 		return Uic{}, fmt.Errorf("ondisk: UIC %q: want [group,member]", text)
 	}
 
-	group, err := strconv.ParseUint(groupText, 8, 32)
-	if err != nil || group > MaxUicGroup {
-		return Uic{}, fmt.Errorf("ondisk: UIC %q: group must be an octal number from 0 to %o", text, MaxUicGroup)
+	var u Uic
+
+	if wild && groupText == "*" {
+		u.Group = WildGroup
+	} else {
+		group, err := strconv.ParseUint(groupText, 8, 32)
+		if err != nil || group > MaxUicGroup {
+			return Uic{}, fmt.Errorf("ondisk: UIC %q: group must be an octal number from 0 to %o", text, MaxUicGroup)
+		}
+
+		u.Group = uint16(group)
 	}
 
-	member, err := strconv.ParseUint(memberText, 8, 32)
-	if err != nil || member > MaxUicMember {
-		return Uic{}, fmt.Errorf("ondisk: UIC %q: member must be an octal number from 0 to %o", text, MaxUicMember)
+	if wild && memberText == "*" {
+		u.Member = WildMember
+	} else {
+		member, err := strconv.ParseUint(memberText, 8, 32)
+		if err != nil || member > MaxUicMember {
+			return Uic{}, fmt.Errorf("ondisk: UIC %q: member must be an octal number from 0 to %o", text, MaxUicMember)
+		}
+
+		u.Member = uint16(member)
 	}
 
-	return Uic{Group: uint16(group), Member: uint16(member)}, nil
+	return u, nil
 }

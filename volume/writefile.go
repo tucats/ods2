@@ -257,7 +257,42 @@ func (vol *Volume) CreateFile(dir *Directory, name string, recAttr ondisk.RecAtt
 //
 // The new version's VersionLimit is resolved and enforced exactly as
 // CreateFile's: see resolveVersionLimit and enforceVersionLimit.
+//
+// The file's owner and protection are the volume's defaults (see
+// CreateHeader), and it has no ACL; CreateFileVersionWith is told them.
 func (vol *Volume) CreateFileVersion(dir *Directory, name string, version uint16, recAttr ondisk.RecAttr, bm *Bitmap, ib *IndexBitmap) (*File, error) {
+	return vol.CreateFileVersionWith(dir, name, version, recAttr, nil, bm, ib)
+}
+
+// NewFileProfile is what CreateFileVersionWith is told of a new file's
+// security: its owner, protection, and access control list, together its
+// "security profile" in VMS's words. Choosing them is the caller's: VMS
+// works them out from who is creating the file, the previous version, and
+// the directory (an explicit protection, then the previous version's, then
+// the directory's default protection ACE, then the process's default), and
+// this package knows nothing of processes. ondisk.ACLForNewVersion and
+// ondisk.ACLFromDirectoryDefaults are VMS's rules for the ACL.
+type NewFileProfile struct {
+	// Owner is the file's owner UIC; nil for the volume's default owner.
+	Owner *ondisk.Uic
+
+	// Protection is the file's protection mask (a set bit denies); nil
+	// for the volume's default.
+	Protection *uint16
+
+	// ACL is the file's access control list, its entries packed as a
+	// header holds them (ondisk.EncodeACL); nil for none.
+	ACL []byte
+}
+
+// CreateFileVersionWith is CreateFileVersion giving the new file the owner,
+// protection, and ACL in profile. A nil profile, or a nil field of one,
+// leaves that part as CreateFileVersion gives it.
+func (vol *Volume) CreateFileVersionWith(dir *Directory, name string, version uint16, recAttr ondisk.RecAttr, profile *NewFileProfile, bm *Bitmap, ib *IndexBitmap) (*File, error) {
+	if profile == nil {
+		profile = &NewFileProfile{}
+	}
+
 	if version == 0 {
 		next, err := dir.NextVersion(name)
 		if err != nil {
@@ -283,6 +318,9 @@ func (vol *Volume) CreateFileVersion(dir *Directory, name string, version uint16
 		Version:          version,
 		Directory:        dir.Header.Fid,
 		RecordAttributes: recAttr,
+		Owner:            profile.Owner,
+		Protection:       profile.Protection,
+		ACL:              profile.ACL,
 	})
 
 	if err != nil {

@@ -61,6 +61,11 @@ type NewFileHeader struct {
 	// delete access in that order). nil means the volume's default for new
 	// files, HomeBlock.FileProtection.
 	Protection *uint16
+
+	// ACL is the new file's access control list, its entries packed as a
+	// header holds them (ondisk.EncodeACL); nil for none. A list too long
+	// to fit in the header beside the file's name is an error.
+	ACL []byte
 }
 
 // CreateHeader allocates a free header slot from ib (see
@@ -69,7 +74,7 @@ type NewFileHeader struct {
 // Extents is empty, since nothing has been allocated to the file yet (see
 // Extend for growing it).
 //
-// Unless opts says otherwise (Owner, Protection), the new header's owner and
+// Unless opts says otherwise (Owner, Protection, ACL), the new header's owner and
 // protection come from the volume's own home block
 // (HomeBlock.VolumeOwner/FileProtection), not a hardcoded UIC --
 // unlike the reference implementation's update_addhead(), which hardcodes
@@ -154,6 +159,7 @@ func CreateHeader(dev *Device, ib *IndexBitmap, opts NewFileHeader) (*File, erro
 			CreationDate:      now,
 			RevisionDate:      now,
 		},
+		AclBytes: ondisk.ACLArea(opts.ACL),
 	}
 
 	decoded, err := writeHeader(dev, container, fid.Number(), h, areas)

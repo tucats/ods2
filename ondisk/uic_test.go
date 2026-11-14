@@ -2,6 +2,7 @@ package ondisk
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -74,5 +75,61 @@ func TestParseUic(t *testing.T) {
 		if got, err := ParseUic(text); err == nil {
 			t.Errorf("ParseUic(%q) = %v, want an error", text, got)
 		}
+	}
+}
+
+func TestParseUicPattern(t *testing.T) {
+	for text, want := range map[string]Uic{
+		"[200,1]": {Group: 0o200, Member: 1},
+		"[200,*]": {Group: 0o200, Member: WildMember},
+		"[*,4]":   {Group: WildGroup, Member: 4},
+		"<*,*>":   {Group: WildGroup, Member: WildMember},
+	} {
+		got, err := ParseUicPattern(text)
+		if err != nil || got != want {
+			t.Errorf("ParseUicPattern(%q) = %v, %v, want %v", text, got, err, want)
+		}
+
+		if got.String() != strings.ReplaceAll(strings.ReplaceAll(text, "<", "["), ">", "]") {
+			t.Errorf("%q reads back as %q", text, got.String())
+		}
+	}
+
+	// A wildcard is only ParseUicPattern's.
+	if got, err := ParseUic("[200,*]"); err == nil {
+		t.Errorf("ParseUic([200,*]) = %v, want an error", got)
+	}
+
+	for _, text := range []string{"[**,1]", "[*]", "[1,*x]"} {
+		if got, err := ParseUicPattern(text); err == nil {
+			t.Errorf("ParseUicPattern(%q) = %v, want an error", text, got)
+		}
+	}
+}
+
+func TestUicMatches(t *testing.T) {
+	a := Uic{Group: 0o200, Member: 1}
+	b := Uic{Group: 0o200, Member: 2}
+	c := Uic{Group: 0o300, Member: 1}
+
+	for _, x := range []struct {
+		pattern Uic
+		other   Uic
+		want    bool
+	}{
+		{a, a, true},
+		{a, b, false},
+		{Uic{Group: 0o200, Member: WildMember}, b, true},
+		{Uic{Group: 0o200, Member: WildMember}, c, false},
+		{Uic{Group: WildGroup, Member: 1}, c, true},
+		{Uic{Group: WildGroup, Member: WildMember}, b, true},
+	} {
+		if got := x.pattern.Matches(x.other); got != x.want {
+			t.Errorf("%v.Matches(%v) = %v", x.pattern, x.other, got)
+		}
+	}
+
+	if a.IsWildcard() || !(Uic{Group: WildGroup}).IsWildcard() {
+		t.Error("IsWildcard")
 	}
 }

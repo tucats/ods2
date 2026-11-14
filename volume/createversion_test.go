@@ -1,6 +1,7 @@
 package volume
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -113,5 +114,51 @@ func TestDirectoryInsertRefusesDuplicate(t *testing.T) {
 
 	if entries, _ := dir.List(); len(entries) != 2 {
 		t.Errorf("entries %+v, want two", entries)
+	}
+}
+
+// TestCreateFileVersionWithProfile: the owner, protection, and ACL a
+// profile names are the new header's; a nil profile gives the volume's
+// defaults and no ACL.
+func TestCreateFileVersionWithProfile(t *testing.T) {
+	vol, dir, bm, ib := createVersionFixture(t)
+
+	owner := ondisk.Uic{Group: 0o200, Member: 1}
+	protection := uint16(0xFF00)
+	acl := ondisk.EncodeACL([]ondisk.ACE{
+		ondisk.NewIdentifierACE([]ondisk.Identifier{ondisk.UicIdentifier(ondisk.Uic{Group: 0o200, Member: 2})}, ondisk.ACEAccessRead, 0),
+	})
+
+	f, err := vol.CreateFileVersionWith(dir, "P.DAT", 0, ondisk.RecAttr{}, &NewFileProfile{Owner: &owner, Protection: &protection, ACL: acl}, bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.WriteBlock(1, make([]byte, ondisk.BlockSize)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reread, err := vol.OpenFID(f.Header.Fid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := reread.Header
+	if got, _ := h.ACL(); h.Owner != owner || h.FileProtection != protection || !bytes.Equal(got, acl) {
+		t.Errorf("owner %v, protection %#x, ACL % X; want %v, %#x, % X", h.Owner, h.FileProtection, got, owner, protection, acl)
+	}
+
+	plain, err := vol.CreateFileVersionWith(dir, "P.DAT", 0, ondisk.RecAttr{}, nil, bm, ib)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h = plain.Header
+	if got, _ := h.ACL(); h.Owner != dir.Device.Home.VolumeOwner || h.FileProtection != dir.Device.Home.FileProtection || got != nil {
+		t.Errorf("no profile: owner %v, protection %#x, ACL % X", h.Owner, h.FileProtection, got)
 	}
 }

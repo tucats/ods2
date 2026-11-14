@@ -43,6 +43,10 @@ type DirectoryOptions struct {
 	// volume's default (see NewFileHeader.Protection).
 	Protection *uint16
 
+	// ACL is the new directory's access control list (see
+	// NewFileHeader.ACL); nil for none.
+	ACL []byte
+
 	// Allocation is how many blocks to give the directory at once, rounded
 	// up to the volume's cluster size; 0 means 1, VMS's /ALLOCATION default.
 	Allocation uint32
@@ -118,6 +122,7 @@ func (vol *Volume) CreateDirectory(parent *Directory, name string, opts Director
 		},
 		Owner:      opts.Owner,
 		Protection: opts.Protection,
+		ACL:        opts.ACL,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("volume: creating directory %s;%d: %w", name, version, err)
@@ -197,13 +202,24 @@ func (d *Directory) initialize(container diskimage.WritableContainer, bm *Bitmap
 // documents for an omitted owner. (VMS gives an unprivileged user's new
 // directory that user's UIC instead; this package has no notion of who's
 // asking.)
+//
+// The ACL is parent's but its NOPROPAGATE entries
+// (ondisk.ACLForSubdirectory), as VMS V7.1 gave one: the DEFAULT entries
+// keep DEFAULT, so they reach the files made in the new directory too. A
+// parent whose ACL can't be read gives none.
 func InheritedDirectoryOptions(parent *Directory) DirectoryOptions {
 	protection := parent.Header.FileProtection | ondisk.ProtectionNoDeleteAll
 	owner := parent.Header.Owner
+
+	var acl []byte
+	if parentACL, err := parent.Header.ACL(); err == nil {
+		acl, _ = ondisk.ACLForSubdirectory(parentACL)
+	}
 
 	return DirectoryOptions{
 		VersionLimit: parent.Header.RecordAttributes.VersionLimit,
 		Owner:        &owner,
 		Protection:   &protection,
+		ACL:          acl,
 	}
 }
