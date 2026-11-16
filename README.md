@@ -20,8 +20,9 @@ via Hunter Goatley and crwolff) — not a line-by-line translation.
 ```text
 github.com/tucats/ods2/
   vmstime/            VMS quadword time <-> time.Time
-  diskimage/          container abstraction: plain image / raw-CD sector image,
-                      exposed as 512-byte logical block access
+  diskimage/          container abstraction: plain image / raw-CD sector image /
+                      in-memory image (a RAM disk), exposed as 512-byte
+                      logical block access
   ondisk/             byte-exact ODS-2 on-disk structures + decoders
   volume/             mount + file/directory access built on ondisk + diskimage
   filespec/           VMS file-spec parsing + wildcard matching/glob
