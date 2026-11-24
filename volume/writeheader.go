@@ -723,10 +723,54 @@ func allocateExtents(bm *Bitmap, blocks uint32) (extents []ondisk.Extent, err er
 	return extents, nil
 }
 
-// indexFileExtendBlocks is the least INDEXF.SYS grows by when a new file
-// needs a header slot beyond its end, so the index file isn't extended
-// (and its map fragmented) one block per new file.
-const indexFileExtendBlocks = 16
+// indexFileGrowthPercent is how much of the room left in INDEXF.SYS
+// (the header slots MaxFiles allows that it doesn't yet map) the index file
+// grows by when a new file needs a slot past its end (indexFileGrowth).
+//
+// This is VMS 7.1's rule, read from its own volume (govax's
+// testdata/err113, the INDEX section: an RD51 initialized /HEADERS=16,
+// MaxFiles 5,400, and 3,000 files made): the index file grew by 807, 686,
+// 583, 496, 421, and 358 blocks, each 15% of the slots then left (5,383,
+// 4,576, 3,890, 3,307, 2,811, and 2,390), the fraction dropped. So the index
+// file grows in a few large pieces, each a single retrieval pointer, and its
+// header doesn't fill.
+const indexFileGrowthPercent = 15
+
+// indexFileGrowth is how many blocks INDEXF.SYS grows by, given that it
+// maps have blocks now and needs at least needed more for the new header's
+// slot: indexFileGrowthPercent of the slots left, or needed if that's more,
+// in one piece if the volume has a free run that long, else as long as its
+// longest free run, else needed (which allocateExtents may then find in
+// pieces).
+//
+// VMS's volume showed the first and last of these: each growth was one
+// contiguous extent, and on a volume with a single free block the index file
+// grew by that one block, where 15% of the slots left was 807. Where VMS puts
+// the piece (it isn't always the first free run that fits) isn't followed:
+// ods2 takes the first, as for any file.
+func indexFileGrowth(home ondisk.HomeBlock, bm *Bitmap, have, needed uint32) uint32 {
+	// The blocks before the first header slot: the boot and home blocks,
+	// the backup header, and the index file bitmap (fileHeaderVBN).
+	overhead := uint32(home.IndexBitmapVBN) + uint32(home.IndexBitmapSize) - 1
+
+	var slots uint32
+	if have > overhead {
+		slots = have - overhead
+	}
+
+	var want uint32
+	if home.MaxFiles > slots {
+		want = (home.MaxFiles - slots) * indexFileGrowthPercent / 100
+	}
+
+	want = max(want, needed)
+
+	if run := bm.LargestFreeRun() * bm.clusterSize; want > run {
+		want = max(run, needed)
+	}
+
+	return want
+}
 
 // ensureHeaderSlot makes sure INDEXF.SYS is long enough to hold the header
 // slot for fileNumber, growing it if not.
@@ -790,7 +834,7 @@ func ensureHeaderSlot(dev *Device, ib *IndexBitmap, fileNumber uint32) error {
 
 	defer func() { _ = ib.MarkFree(fileNumber) }()
 
-	blocks := max(vbn-have, indexFileExtendBlocks)
+	blocks := indexFileGrowth(dev.Home, bm, have, vbn-have)
 
 	if room {
 		return growIndexFile(dev, container, bm, ib, blocks, false)
@@ -801,7 +845,12 @@ func ensureHeaderSlot(dev *Device, ib *IndexBitmap, fileNumber uint32) error {
 		return err
 	}
 
-	return growIndexFile(dev, container, bm, ib, max(blocks-first, 1), true)
+	rest := uint32(1)
+	if blocks > first {
+		rest = blocks - first
+	}
+
+	return growIndexFile(dev, container, bm, ib, rest, true)
 }
 
 // growIndexFile extends INDEXF.SYS by blocks, in a new extension header if

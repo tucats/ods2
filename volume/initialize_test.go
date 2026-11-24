@@ -516,18 +516,16 @@ func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 }
 
 // TestIndexFileGrowsIntoExtensionHeaders creates files until INDEXF.SYS
-// has grown more times than its own header has room for: each growth is a
-// retrieval pointer of its own, since the files' data lands between them,
-// so the index file needs an extension header. That header must be in a
+// has grown more times than its own header has room for, so the index file
+// needs an extension header. The index file grows in large pieces
+// (indexFileGrowth), so the test first takes every other cluster of the
+// volume: the longest free run is then one cluster, each growth is one
+// block, and each is a retrieval pointer of its own. That header must be in a
 // slot the index file already mapped (ensureHeaderSlot), or the chain
 // can't be followed: an independent re-mount must find every file. (The
 // header once went in the space it was to describe, and the volume could
 // no longer be mounted.)
 func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
-	if testing.Short() {
-		t.Skip("creates 3,600 files")
-	}
-
 	path := filepath.Join(t.TempDir(), "extend.dsk")
 
 	c, err := diskimage.Create(path, 16000)
@@ -549,11 +547,6 @@ func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
 
 	dev := vol.Devices[0]
 
-	dir, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
-	if err != nil {
-		t.Fatalf("OpenDirectory: %v", err)
-	}
-
 	bm, err := dev.Bitmap()
 	if err != nil {
 		t.Fatalf("Bitmap: %v", err)
@@ -564,7 +557,17 @@ func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
 		t.Fatalf("IndexBitmap: %v", err)
 	}
 
-	const files = 3600
+	// Take every other free cluster, leaving no run longer than one.
+	for c := uint32(0); c < bm.totalClusters; c += 2 {
+		if ondisk.BitmapTest(bm.bits, c) {
+			e := ondisk.Extent{StartLBN: c * bm.clusterSize, Count: bm.clusterSize}
+			if err := bm.MarkAllocated(e); err != nil {
+				t.Fatalf("MarkAllocated(%v): %v", e, err)
+			}
+		}
+	}
+
+	const files = 400
 
 	block := func(i int) []byte {
 		b := make([]byte, ondisk.BlockSize)
@@ -573,21 +576,37 @@ func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
 		return b
 	}
 
+	// The files have headers but no directory entries: a directory must be
+	// contiguous, and the volume has no two free clusters together.
+	fids := make([]ondisk.Fid, files)
+
 	for i := range files {
 		name := fmt.Sprintf("F%04d.DAT", i)
 
-		f, err := vol.CreateFile(dir, name, ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+		f, err := CreateHeader(dev, ib, NewFileHeader{Name: name, Version: 1,
+			RecordAttributes: ondisk.RecAttr{Format: ondisk.RecordFormatFixed}})
 		if err != nil {
-			t.Fatalf("CreateFile(%s): %v", name, err)
+			t.Fatalf("CreateHeader(%s): %v", name, err)
 		}
 
-		if err := f.WriteBlock(1, block(i)); err != nil {
+		if err := Extend(f, bm, ib, 1); err != nil {
+			t.Fatalf("Extend(%s): %v", name, err)
+		}
+
+		if err := c.WriteBlock(f.Extents[0].StartLBN, block(i)); err != nil {
 			t.Fatalf("WriteBlock(%s): %v", name, err)
 		}
 
-		if err := f.Close(); err != nil {
-			t.Fatalf("Close(%s): %v", name, err)
-		}
+		fids[i] = f.Header.Fid
+
+	}
+
+	if err := bm.Flush(); err != nil {
+		t.Fatalf("Bitmap.Flush: %v", err)
+	}
+
+	if err := ib.Flush(); err != nil {
+		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
 
 	chain, err := fileHeaderChain(dev, dev.IndexFile.Header)
@@ -615,28 +634,166 @@ func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
 		t.Fatalf("Mount (reopened): %v", err)
 	}
 
-	dir2, err := vol2.OpenDirectory(ondisk.MasterFileDirectoryFid)
-	if err != nil {
-		t.Fatalf("OpenDirectory (reopened): %v", err)
-	}
-
 	buf := make([]byte, ondisk.BlockSize)
 
-	for i := range files {
+	for i, fid := range fids {
 		name := fmt.Sprintf("F%04d.DAT", i)
 
-		e, err := dir2.Lookup(name, 0)
-		if err != nil {
-			t.Fatalf("Lookup(%s): %v", name, err)
-		}
-
-		f, err := vol2.OpenFID(e.Fid)
+		f, err := vol2.OpenFID(fid)
 		if err != nil {
 			t.Fatalf("OpenFID(%s): %v", name, err)
 		}
 
-		if err := f.ReadBlock(1, buf); err != nil || !bytes.Equal(buf, block(i)) {
+		// The block was written straight to the volume, so the file's
+		// high-water mark is 0 and ReadBlock would give zeros: read the block
+		// its map names.
+		if len(f.Extents) != 1 {
+			t.Fatalf("%s maps %v, want one block", name, f.Extents)
+		}
+
+		if err := reopened.ReadBlock(f.Extents[0].StartLBN, buf); err != nil || !bytes.Equal(buf, block(i)) {
 			t.Fatalf("%s doesn't read back what was written: %v", name, err)
 		}
+	}
+}
+
+// TestIndexFileGrowsAsVMS makes 3,000 files of a block each on a volume
+// like the RD51 VMS 7.1 grew its index file on (govax's testdata/err113,
+// the INDEX section: 21,600 blocks, MaxFiles 5,400, /HEADERS=16), and
+// checks that INDEXF.SYS grew as VMS's did: each growth one extent, 15% of
+// the header slots then left (indexFileGrowth).
+func TestIndexFileGrowsAsVMS(t *testing.T) {
+	if testing.Short() {
+		t.Skip("creates 3,000 files")
+	}
+
+	path := filepath.Join(t.TempDir(), "rd51.dsk")
+
+	c, err := diskimage.Create(path, 21600)
+	if err != nil {
+		t.Fatalf("diskimage.Create: %v", err)
+	}
+
+	defer func() { _ = c.Close() }()
+
+	if err := Initialize(c, InitializeOptions{Label: "SCR113", MaxFiles: 5400, Headers: 16}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	vol, err := Mount(c)
+	if err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+
+	dev := vol.Devices[0]
+	initial := len(dev.IndexFile.Extents)
+
+	dir, err := vol.OpenDirectory(ondisk.MasterFileDirectoryFid)
+	if err != nil {
+		t.Fatalf("OpenDirectory: %v", err)
+	}
+
+	bm, err := dev.Bitmap()
+	if err != nil {
+		t.Fatalf("Bitmap: %v", err)
+	}
+
+	ib, err := dev.IndexBitmap()
+	if err != nil {
+		t.Fatalf("IndexBitmap: %v", err)
+	}
+
+	for i := range 3000 {
+		name := fmt.Sprintf("F%d.DAT", i+1)
+
+		f, err := vol.CreateFile(dir, name, ondisk.RecAttr{Format: ondisk.RecordFormatFixed}, bm, ib)
+		if err != nil {
+			t.Fatalf("CreateFile(%s): %v", name, err)
+		}
+
+		if err := f.WriteBlock(1, make([]byte, ondisk.BlockSize)); err != nil {
+			t.Fatalf("WriteBlock(%s): %v", name, err)
+		}
+
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close(%s): %v", name, err)
+		}
+	}
+
+	var grew []uint32
+	for _, e := range dev.IndexFile.Extents[initial:] {
+		grew = append(grew, e.Count)
+	}
+
+	// VMS's run grew by one block first, on a full volume, and so had 17
+	// slots where this volume has 16; the fractions dropped come out the same.
+	want := []uint32{807, 686, 583, 496, 421, 358}
+	if fmt.Sprint(grew) != fmt.Sprint(want) {
+		t.Errorf("INDEXF.SYS grew by %v, want VMS's %v", grew, want)
+	}
+}
+
+// TestIndexFileGrowthOnAFullVolume: with one free block left, a new file's
+// header slot takes it, as VMS 7.1's index file grew by one block on a full
+// volume (govax's testdata/err113, the FULL section), where 15% of the slots
+// left would be hundreds.
+func TestIndexFileGrowthOnAFullVolume(t *testing.T) {
+	c, err := diskimage.Create(filepath.Join(t.TempDir(), "full.dsk"), 2000)
+	if err != nil {
+		t.Fatalf("diskimage.Create: %v", err)
+	}
+
+	defer func() { _ = c.Close() }()
+
+	if err := Initialize(c, InitializeOptions{Label: "FULL", MaxFiles: 500, Headers: 16}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	vol, err := Mount(c)
+	if err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+
+	dev := vol.Devices[0]
+
+	bm, err := dev.Bitmap()
+	if err != nil {
+		t.Fatalf("Bitmap: %v", err)
+	}
+
+	ib, err := dev.IndexBitmap()
+	if err != nil {
+		t.Fatalf("IndexBitmap: %v", err)
+	}
+
+	// Make the index file's mapped slots all used, so the next header needs
+	// a new one.
+	have := mappedBlocks(dev.IndexFile)
+	for n := uint32(1); fileHeaderVBN(dev.Home, n) <= have; n++ {
+		_ = ib.MarkAllocated(n)
+	}
+
+	// Fill the volume but one block.
+	for bm.FreeClusters() > 1 {
+		e, err := bm.FindFree(1)
+		if err != nil {
+			t.Fatalf("FindFree: %v", err)
+		}
+
+		if err := bm.MarkAllocated(e); err != nil {
+			t.Fatalf("MarkAllocated: %v", err)
+		}
+	}
+
+	if _, err := CreateHeader(dev, ib, NewFileHeader{Name: "MORE.TXT", Version: 1}); err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+
+	if got := mappedBlocks(dev.IndexFile); got != have+1 {
+		t.Errorf("INDEXF.SYS maps %d blocks, want %d: one more", got, have+1)
+	}
+
+	if free := bm.FreeClusters(); free != 0 {
+		t.Errorf("%d clusters still free, want none", free)
 	}
 }
