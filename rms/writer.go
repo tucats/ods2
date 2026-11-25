@@ -145,6 +145,19 @@ func (w *Writer) seek(offset int64) error {
 	return nil
 }
 
+// Reload reads again from the disk the bytes of the partly filled block the
+// Writer holds, keeping its place: what a caller does after writing in place
+// over records the Writer had already written (RMS's $UPDATE), which the
+// Writer's copy would otherwise put back at its next Flush or Close. Records
+// the Writer holds that aren't on the disk yet are lost, so Flush first.
+func (w *Writer) Reload() error {
+	if w.closed {
+		return fmt.Errorf("rms: Reload after Close")
+	}
+
+	return w.seek(w.offset())
+}
+
 // Flush writes the partly filled last block, if there is one, and sets
 // the file's end of file (in memory: volume.File.SetEndOfFile) to just
 // past the last record, without closing the Writer. RMS's $FLUSH, and
