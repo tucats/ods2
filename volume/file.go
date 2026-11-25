@@ -43,6 +43,17 @@ type File struct {
 	// comments (writefile.go) for how it's maintained and used.
 	maxWrittenVBN uint32
 
+	// ExtendQuantity is how many blocks at least WriteBlock extends the
+	// file by when a write lands past its allocation: RMS's auto extend
+	// size, which its caller works out (for a sequential file written by
+	// records, the file's default extension quantity, else the smaller of
+	// twice the multiblock count and 256, at least the volume's). 0 extends
+	// by just what the write needs. The extension is all or nothing: on a
+	// volume with less free space than the quantity it fails, though the
+	// block written would have fit (VMS 7.1 left a volume's last block free
+	// so, govax's testdata/err113, round 2's FULL2).
+	ExtendQuantity uint32
+
 	// share is the file's accessor counts, while it's accessed (see
 	// access.go): then this File is the one every accessor shares.
 	share sharing

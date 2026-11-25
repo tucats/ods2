@@ -77,7 +77,7 @@ func (f *File) WriteBlock(vbn uint32, data []byte) error {
 	}
 
 	if vbn > f.Blocks() {
-		if err := Extend(f, f.bm, f.ib, vbn-f.Blocks()); err != nil {
+		if err := Extend(f, f.bm, f.ib, max(vbn-f.Blocks(), f.ExtendQuantity)); err != nil {
 			return fmt.Errorf("volume: WriteBlock: extending file %v: %w", f.Header.Fid, err)
 		}
 	}

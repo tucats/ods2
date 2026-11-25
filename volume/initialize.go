@@ -189,6 +189,11 @@ type InitializeOptions struct {
 	// can't exceed blocks/(cluster+1).
 	MaxFiles uint32
 
+	// Extension is the volume's default extension quantity, in blocks
+	// (INITIALIZE/EXTENSION), which RMS raises a sequential file's auto
+	// extend size to. Defaults to 5.
+	Extension uint16
+
 	// Headers is how many file headers the index file gets up front
 	// (INITIALIZE/HEADERS), at least 16. The index file grows by itself
 	// when more are needed (see ensureHeaderSlot). Defaults to 16.
@@ -232,6 +237,7 @@ type initParams struct {
 	cluster     uint32
 	volumeSize  uint32 // maxBlock rounded up to a whole cluster
 	maxFiles    uint32
+	extension   uint16
 	headers     uint32
 	directories uint32
 	indexLBN    uint32
@@ -253,6 +259,7 @@ func resolveInitParams(containerBlocks uint32, opts InitializeOptions) (initPara
 		maxBlock:    opts.Blocks,
 		cluster:     uint32(opts.ClusterSize),
 		maxFiles:    opts.MaxFiles,
+		extension:   opts.Extension,
 		headers:     opts.Headers,
 		directories: opts.Directories,
 		geometry:    opts.Geometry,
@@ -298,6 +305,10 @@ func resolveInitParams(containerBlocks uint32, opts InitializeOptions) (initPara
 
 	if p.volumeSize/p.cluster < 50 {
 		return p, fmt.Errorf("a %d-block volume with cluster size %d has fewer than the 50 clusters VMS requires", p.maxBlock, p.cluster)
+	}
+
+	if p.extension == 0 {
+		p.extension = defaultExtendSize
 	}
 
 	if p.maxFiles == 0 {
@@ -656,7 +667,7 @@ func (w *initWriter) homeBlock() ondisk.HomeBlock {
 		CreationDate:            w.now,
 		WindowSize:              defaultWindowSize,
 		DirectoryPreAccessLimit: defaultAccessedDirs,
-		DefaultExtendSize:       defaultExtendSize,
+		DefaultExtendSize:       p.extension,
 		SerialNumber:            p.serial,
 		VolumeName:              p.label,
 		OwnerName:               p.ownerName,

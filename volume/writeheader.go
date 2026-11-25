@@ -106,7 +106,7 @@ func CreateHeader(dev *Device, ib *IndexBitmap, opts NewFileHeader) (*File, erro
 		return nil, fmt.Errorf("volume: creating file header: %w", err)
 	}
 
-	if err := ensureHeaderSlot(dev, ib, fileNumber); err != nil {
+	if err := ensureHeaderSlot(dev, fileNumber); err != nil {
 		return nil, fmt.Errorf("volume: creating file header: %w", err)
 	}
 
@@ -169,6 +169,10 @@ func CreateHeader(dev *Device, ib *IndexBitmap, opts NewFileHeader) (*File, erro
 
 	if err := ib.MarkAllocated(fileNumber); err != nil {
 		return nil, fmt.Errorf("volume: creating file header: %w", err)
+	}
+
+	if err := noteLastSlot(dev, container, fileNumber); err != nil {
+		return nil, fmt.Errorf("volume: creating file header: recording the index file's end: %w", err)
 	}
 
 	return &File{Device: dev, Header: decoded}, nil
@@ -298,12 +302,11 @@ func writeHeaderBytes(dev *Device, container diskimage.WritableContainer, fileNu
 // exactly the kind of inconsistency ANALYZE/DISK (a later subtask) is
 // designed to detect and, with /REPAIR, reclaim.
 func Extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32) error {
-	return extend(f, bm, ib, additionalBlocks, false)
+	return extend(f, bm, ib, additionalBlocks)
 }
 
-// extend is Extend, and with newSegment its first new extent starts a new
-// extension segment even if the last one has room (ensureHeaderSlot).
-func extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32, newSegment bool) error {
+// extend is Extend's work.
+func extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32) error {
 	dev := f.Device
 
 	container, ok := dev.Container.(diskimage.WritableContainer)
@@ -327,17 +330,15 @@ func extend(f *File, bm *Bitmap, ib *IndexBitmap, additionalBlocks uint32, newSe
 
 	var grown uint32
 
-	for i, e := range newExtents {
+	for _, e := range newExtents {
 		var (
 			updated ondisk.FileHeader
 			fits    bool
 		)
 
-		if i > 0 || !newSegment {
-			updated, fits, err = appendExtent(dev, container, tail, e)
-			if err != nil {
-				return fmt.Errorf("volume: extending file %v: %w", f.Header.Fid, err)
-			}
+		updated, fits, err = appendExtent(dev, container, tail, e)
+		if err != nil {
+			return fmt.Errorf("volume: extending file %v: %w", f.Header.Fid, err)
 		}
 
 		if !fits {
@@ -585,28 +586,20 @@ func appendExtent(dev *Device, container diskimage.WritableContainer, header ond
 // future ANALYZE/DISK-style consistency check), symmetric with how a
 // primary header's own Backlink lets it be traced back to its directory.
 func linkNewExtensionSegment(dev *Device, container diskimage.WritableContainer, ib *IndexBitmap, tail ondisk.FileHeader, extent ondisk.Extent) (relinkedTail, newSegment ondisk.FileHeader, err error) {
-	// An extension header of INDEXF.SYS itself must be in a block the
-	// index file already maps, so that it can be found by following the
-	// chain from the primary header (as a mount does, and VMS): never in
-	// the space it is about to describe. ensureHeaderSlot keeps such a
-	// slot free when the index file's last header fills. Any other file's
+	// VMS 7.1 never gives INDEXF.SYS an extension header: its header full
+	// is the end of its growth (ErrHeaderFull's comment). Any other file's
 	// segment gets a slot the usual way, growing the index file if need be.
-	var segFileNumber uint32
-
 	if tail.Fid.Number() == ondisk.IndexFileFid.Number() {
-		segFileNumber, err = ib.FindFreeSlotWithin(mappedBlocks(dev.IndexFile))
-		if err != nil {
-			return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("allocating the index file's extension header segment: %w", err)
-		}
-	} else {
-		segFileNumber, err = ib.FindFreeSlot()
-		if err != nil {
-			return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("allocating extension header segment: %w", err)
-		}
+		return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("extending the index file: %w", ErrHeaderFull)
+	}
 
-		if err := ensureHeaderSlot(dev, ib, segFileNumber); err != nil {
-			return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("allocating extension header segment: %w", err)
-		}
+	segFileNumber, err := ib.FindFreeSlot()
+	if err != nil {
+		return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("allocating extension header segment: %w", err)
+	}
+
+	if err := ensureHeaderSlot(dev, segFileNumber); err != nil {
+		return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("allocating extension header segment: %w", err)
 	}
 
 	segFid, err := nextFileFid(dev, segFileNumber)
@@ -633,6 +626,10 @@ func linkNewExtensionSegment(dev *Device, container diskimage.WritableContainer,
 
 	if err := ib.MarkAllocated(segFileNumber); err != nil {
 		return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("marking new extension header slot allocated: %w", err)
+	}
+
+	if err := noteLastSlot(dev, container, segFileNumber); err != nil {
+		return ondisk.FileHeader{}, ondisk.FileHeader{}, fmt.Errorf("recording the index file's end: %w", err)
 	}
 
 	mapBytes, err := ondisk.EncodeRetrievalPointers([]ondisk.Extent{extent})
@@ -696,14 +693,14 @@ func allocateExtents(bm *Bitmap, blocks uint32) (extents []ondisk.Extent, err er
 
 	clusters := (uint64(blocks) + uint64(bm.clusterSize) - 1) / uint64(bm.clusterSize)
 	if free := uint64(bm.FreeClusters()); free < clusters {
-		return nil, fmt.Errorf("not enough free space: %d cluster(s) needed, %d free", clusters, free)
+		return nil, fmt.Errorf("%w: %d cluster(s) needed, %d free", ErrNoSpace, clusters, free)
 	}
 
 	remaining := uint32(clusters)
 	for remaining > 0 {
 		request := min(remaining, bm.LargestFreeRun())
 		if request == 0 {
-			return extents, fmt.Errorf("not enough free space: %d cluster(s) still needed, none available", remaining)
+			return extents, fmt.Errorf("%w: %d cluster(s) still needed, none available", ErrNoSpace, remaining)
 		}
 
 		extent, findErr := bm.FindFree(request)
@@ -783,21 +780,11 @@ func indexFileGrowth(home ondisk.HomeBlock, bm *Bitmap, have, needed uint32) uin
 // INDEXF.SYS when a new file's slot lies past its end. Without that, only a
 // handful of files could ever be created on a volume VMS initialized.
 //
-// The new blocks are zeroed, since a header slot must read as all zeros
-// until a header is written to it (IndexBitmap.FindFreeSlot checks this,
-// and the space may hold leftovers of a deleted file), and INDEXF.SYS's end
-// of file and high-water mark move past them, as VMS keeps them for the
-// index file.
-//
-// Each growth is a retrieval pointer in the index file's last header, and
-// when that header fills, the next growth needs an extension header, which
-// must be in a slot the index file already maps (linkNewExtensionSegment).
-// Every mapped slot is usually in use by then, the index file growing only
-// when a new file needs a slot past its end. So when the last header has
-// room for only one more pointer, the growth goes in two steps: just
-// enough for fileNumber's slot and one more, into that last room, then the
-// rest in an extension header written in the one more.
-func ensureHeaderSlot(dev *Device, ib *IndexBitmap, fileNumber uint32) error {
+// Each growth is a retrieval pointer in the index file's header, and VMS
+// 7.1 never gives the index file an extension header: when the header's
+// map area can't take the growth's pointers, the new file can't be made,
+// ErrHeaderFull (growIndexFile).
+func ensureHeaderSlot(dev *Device, fileNumber uint32) error {
 	idx := dev.IndexFile
 	vbn := fileHeaderVBN(dev.Home, fileNumber)
 	have := mappedBlocks(idx)
@@ -816,118 +803,171 @@ func ensureHeaderSlot(dev *Device, ib *IndexBitmap, fileNumber uint32) error {
 		return fmt.Errorf("growing the index file: %w", err)
 	}
 
-	tail, err := tailHeader(dev, idx.Header)
-	if err != nil {
-		return fmt.Errorf("growing the index file: %w", err)
-	}
-
-	room, err := pointerRoom(tail, 2)
-	if err != nil {
-		return fmt.Errorf("growing the index file: %w", err)
-	}
-
-	// fileNumber's own slot isn't the extension header's: CreateHeader marks
-	// it in use only once its header is written.
-	if err := ib.MarkAllocated(fileNumber); err != nil {
-		return fmt.Errorf("growing the index file: %w", err)
-	}
-
-	defer func() { _ = ib.MarkFree(fileNumber) }()
-
-	blocks := indexFileGrowth(dev.Home, bm, have, vbn-have)
-
-	if room {
-		return growIndexFile(dev, container, bm, ib, blocks, false)
-	}
-
-	first := vbn - have + 1
-	if err := growIndexFile(dev, container, bm, ib, first, false); err != nil {
-		return err
-	}
-
-	rest := uint32(1)
-	if blocks > first {
-		rest = blocks - first
-	}
-
-	return growIndexFile(dev, container, bm, ib, rest, true)
+	return growIndexFile(dev, container, bm, indexFileGrowth(dev.Home, bm, have, vbn-have))
 }
 
-// growIndexFile extends INDEXF.SYS by blocks, in a new extension header if
-// newSegment, zeroes the new blocks, and records its new end of file
-// (ensureHeaderSlot).
-func growIndexFile(dev *Device, container diskimage.WritableContainer, bm *Bitmap, ib *IndexBitmap, blocks uint32, newSegment bool) error {
+// growIndexFile extends INDEXF.SYS by blocks: the new extents' retrieval
+// pointers added to its last header, the new blocks zeroed (a header slot
+// must read as all zeros until a header is written to it, which
+// IndexBitmap.FindFreeSlot checks, and the space may hold leftovers of a
+// deleted file), and its size, end of file, and high-water mark moved past
+// them, as VMS keeps them for the index file. The index file is marked
+// contiguous-best-try, as every index file VMS 7.1 has grown is (and none it
+// hasn't). If the header's map area can't take the new pointers, nothing is
+// allocated and the error wraps ErrHeaderFull.
+func growIndexFile(dev *Device, container diskimage.WritableContainer, bm *Bitmap, blocks uint32) error {
 	idx := dev.IndexFile
-	have := mappedBlocks(idx)
 
-	if err := extend(idx, bm, ib, blocks, newSegment); err != nil {
+	extents, err := allocateExtents(bm, blocks)
+	if err != nil {
 		return fmt.Errorf("growing the index file: %w", err)
 	}
 
-	mapped := mappedBlocks(idx)
+	release := func() {
+		for _, e := range extents {
+			_ = bm.MarkFree(e)
+		}
+	}
+
+	tail, err := tailHeader(dev, idx.Header)
+	if err != nil {
+		release()
+
+		return fmt.Errorf("growing the index file: %w", err)
+	}
+
+	isPrimary := tail.Fid.Number() == idx.Header.Fid.Number()
+
+	var grown uint32
+	for _, e := range extents {
+		grown += e.Count
+	}
+
+	mapped := mappedBlocks(idx) + grown
+
+	// The primary header's own fields change with its map, in one write
+	// when it is also the last header.
+	primary := idx.Header
+	primary.RecordAttributes.HighestBlock += grown
+	primary.RecordAttributes.EndOfFileBlock = mapped + 1
+	primary.RecordAttributes.FirstFreeByte = 0
+	primary.HighWaterMark = mapped + 1
+	primary.FileCharacteristics |= ondisk.FchContigB
+
+	if isPrimary {
+		tail = primary
+	}
+
+	pointers, err := tail.RetrievalPointers()
+	if err != nil {
+		release()
+
+		return fmt.Errorf("growing the index file: decoding its retrieval pointers: %w", err)
+	}
+
+	for _, e := range extents {
+		pointers = addExtent(pointers, e)
+	}
+
+	areas, err := existingAreas(tail)
+	if err != nil {
+		release()
+
+		return fmt.Errorf("growing the index file: %w", err)
+	}
+
+	if areas.MapBytes, err = ondisk.EncodeRetrievalPointers(pointers); err != nil {
+		release()
+
+		return fmt.Errorf("growing the index file: encoding its retrieval pointers: %w", err)
+	}
+
+	buf, err := ondisk.EncodeFileHeader(tail, areas)
+	if err != nil {
+		// No room in the map area for the new pointers.
+		release()
+
+		return fmt.Errorf("growing the index file by %d block(s): %w", blocks, ErrHeaderFull)
+	}
+
 	zero := make([]byte, ondisk.BlockSize)
 
-	for v := have + 1; v <= mapped; v++ {
-		lbn, err := resolveExtentLBN(idx.Extents, v)
+	for _, e := range extents {
+		for lbn := e.StartLBN; lbn < e.StartLBN+e.Count; lbn++ {
+			if err := container.WriteBlock(lbn, zero); err != nil {
+				release()
+
+				return fmt.Errorf("growing the index file: zeroing LBN %d: %w", lbn, err)
+			}
+		}
+	}
+
+	decoded, err := writeHeaderBytes(dev, container, tail.Fid.Number(), buf)
+	if err != nil {
+		return fmt.Errorf("growing the index file: %w", err)
+	}
+
+	if isPrimary {
+		primary = decoded
+	} else {
+		primaryAreas, err := existingAreas(primary)
 		if err != nil {
 			return fmt.Errorf("growing the index file: %w", err)
 		}
 
-		if err := container.WriteBlock(lbn, zero); err != nil {
-			return fmt.Errorf("growing the index file: zeroing VBN %d: %w", v, err)
+		if primary, err = writeHeader(dev, container, primary.Fid.Number(), primary, primaryAreas); err != nil {
+			return fmt.Errorf("growing the index file: recording its new size: %w", err)
 		}
+	}
+
+	idx.Header = primary
+
+	// The in-memory extent list follows the header: an extent contiguous
+	// with the last one grows it.
+	for _, e := range extents {
+		if n := len(idx.Extents); n > 0 && idx.Extents[n-1].Rvn == dev.Rvn &&
+			idx.Extents[n-1].StartLBN+idx.Extents[n-1].Count == e.StartLBN {
+			idx.Extents[n-1].Count += e.Count
+		} else {
+			idx.Extents = append(idx.Extents, ExtentLocation{Extent: e, Rvn: dev.Rvn})
+		}
+	}
+
+	return nil
+}
+
+// noteLastSlot moves INDEXF.SYS's end of file to its whole size when a new
+// header is written in the last block it maps, as VMS 7.1 keeps it: on its
+// volumes an index file of 22 blocks, initialized with 16 headers, read
+// end of file block 17 with 15 files and 23 with 16 (govax's testdata/err113,
+// round 2's FULL2, and the volumes in testdata/disks). The end of file
+// otherwise moves only when the index file grows (growIndexFile).
+func noteLastSlot(dev *Device, container diskimage.WritableContainer, fileNumber uint32) error {
+	idx := dev.IndexFile
+	mapped := mappedBlocks(idx)
+
+	if fileHeaderVBN(dev.Home, fileNumber) != mapped || idx.Header.RecordAttributes.EndOfFileBlock > mapped {
+		return nil
 	}
 
 	idx.Header.RecordAttributes.EndOfFileBlock = mapped + 1
 	idx.Header.RecordAttributes.FirstFreeByte = 0
-	idx.Header.HighWaterMark = mapped + 1
+	idx.Header.HighWaterMark = max(idx.Header.HighWaterMark, mapped+1)
 
 	areas, err := existingAreas(idx.Header)
 	if err != nil {
-		return fmt.Errorf("growing the index file: %w", err)
+		return err
 	}
 
 	decoded, err := writeHeader(dev, container, idx.Header.Fid.Number(), idx.Header, areas)
 	if err != nil {
-		return fmt.Errorf("growing the index file: recording its new size: %w", err)
+		return err
 	}
 
 	idx.Header = decoded
 
 	return nil
 }
-
-// pointerRoom says whether header's map area has room for n more
-// retrieval pointers of the widest format (format 3, four words).
-func pointerRoom(header ondisk.FileHeader, n int) (bool, error) {
-	areas, err := existingAreas(header)
-	if err != nil {
-		return false, err
-	}
-
-	extents, err := header.RetrievalPointers()
-	if err != nil {
-		return false, fmt.Errorf("decoding existing retrieval pointers: %w", err)
-	}
-
-	for range n {
-		extents = append(extents, ondisk.Extent{StartLBN: 1 << 30, Count: retrievalWidestCount})
-	}
-
-	mapBytes, err := ondisk.EncodeRetrievalPointers(extents)
-	if err != nil {
-		return false, fmt.Errorf("encoding retrieval pointers: %w", err)
-	}
-
-	areas.MapBytes = mapBytes
-
-	_, err = ondisk.EncodeFileHeader(header, areas)
-
-	return err == nil, nil
-}
-
-// retrievalWidestCount is a count only format 3 holds.
-const retrievalWidestCount = 1 << 20
 
 // mappedBlocks is how many virtual blocks f's retrieval pointers map: the
 // blocks that really exist on disk for it. For deciding whether a header

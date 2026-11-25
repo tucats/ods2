@@ -1,6 +1,7 @@
 package volume
 
 import (
+	"errors"
 	"bytes"
 	"fmt"
 	"path/filepath"
@@ -515,17 +516,16 @@ func TestIndexFileGrowsForNewHeaders(t *testing.T) {
 	}
 }
 
-// TestIndexFileGrowsIntoExtensionHeaders creates files until INDEXF.SYS
-// has grown more times than its own header has room for, so the index file
-// needs an extension header. The index file grows in large pieces
-// (indexFileGrowth), so the test first takes every other cluster of the
-// volume: the longest free run is then one cluster, each growth is one
-// block, and each is a retrieval pointer of its own. That header must be in a
-// slot the index file already mapped (ensureHeaderSlot), or the chain
-// can't be followed: an independent re-mount must find every file. (The
-// header once went in the space it was to describe, and the volume could
-// no longer be mounted.)
-func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
+// TestIndexFileHeaderFull creates files until INDEXF.SYS has grown more
+// times than its own header has room for. VMS 7.1 gives the index file no
+// extension header: the file whose slot needs the growth can't be made,
+// SS$_HEADERFULL (govax's testdata/err113, round 2's HDRFULL). The index
+// file grows in large pieces (indexFileGrowth), so the test first takes
+// every other cluster of the volume: the longest free run is then one
+// cluster, each growth is one block, and each is a retrieval pointer of its
+// own. The failed growth must leave nothing allocated, and an independent
+// re-mount must find every file made.
+func TestIndexFileHeaderFull(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "extend.dsk")
 
 	c, err := diskimage.Create(path, 16000)
@@ -567,8 +567,6 @@ func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
 		}
 	}
 
-	const files = 400
-
 	block := func(i int) []byte {
 		b := make([]byte, ondisk.BlockSize)
 		b[0], b[1], b[ondisk.BlockSize-1] = byte(i), byte(i>>8), byte(i)
@@ -578,15 +576,28 @@ func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
 
 	// The files have headers but no directory entries: a directory must be
 	// contiguous, and the volume has no two free clusters together.
-	fids := make([]ondisk.Fid, files)
+	var fids []ondisk.Fid
 
-	for i := range files {
+	for i := 0; ; i++ {
 		name := fmt.Sprintf("F%04d.DAT", i)
+		free := bm.FreeClusters()
 
 		f, err := CreateHeader(dev, ib, NewFileHeader{Name: name, Version: 1,
 			RecordAttributes: ondisk.RecAttr{Format: ondisk.RecordFormatFixed}})
 		if err != nil {
-			t.Fatalf("CreateHeader(%s): %v", name, err)
+			if !errors.Is(err, ErrHeaderFull) {
+				t.Fatalf("CreateHeader(%s): %v, want ErrHeaderFull", name, err)
+			}
+
+			if bm.FreeClusters() != free {
+				t.Fatalf("the failed growth left %d clusters free, want %d", bm.FreeClusters(), free)
+			}
+
+			break
+		}
+
+		if i > 1000 {
+			t.Fatal("1,000 files made and the index file's header isn't full")
 		}
 
 		if err := Extend(f, bm, ib, 1); err != nil {
@@ -597,8 +608,7 @@ func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
 			t.Fatalf("WriteBlock(%s): %v", name, err)
 		}
 
-		fids[i] = f.Header.Fid
-
+		fids = append(fids, f.Header.Fid)
 	}
 
 	if err := bm.Flush(); err != nil {
@@ -609,13 +619,17 @@ func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
 		t.Fatalf("IndexBitmap.Flush: %v", err)
 	}
 
-	chain, err := fileHeaderChain(dev, dev.IndexFile.Header)
-	if err != nil {
-		t.Fatalf("fileHeaderChain: %v", err)
+	index := dev.IndexFile.Header
+	if !index.ExtensionFid.IsZero() {
+		t.Fatalf("INDEXF.SYS has an extension header, %v", index.ExtensionFid)
 	}
 
-	if len(chain) < 3 {
-		t.Fatalf("INDEXF.SYS has %d extension headers after %d files, want 2 or more: the test no longer tests them", len(chain)-1, files)
+	if index.FileCharacteristics&ondisk.FchContigB == 0 {
+		t.Errorf("the grown INDEXF.SYS isn't marked contiguous-best-try: %08x", index.FileCharacteristics)
+	}
+
+	if mapped := mappedBlocks(dev.IndexFile); index.RecordAttributes.EndOfFileBlock != mapped+1 {
+		t.Errorf("INDEXF.SYS's end of file is block %d, want %d", index.RecordAttributes.EndOfFileBlock, mapped+1)
 	}
 
 	if err := vol.Dismount(); err != nil {
@@ -653,6 +667,61 @@ func TestIndexFileGrowsIntoExtensionHeaders(t *testing.T) {
 
 		if err := reopened.ReadBlock(f.Extents[0].StartLBN, buf); err != nil || !bytes.Equal(buf, block(i)) {
 			t.Fatalf("%s doesn't read back what was written: %v", name, err)
+		}
+	}
+}
+
+// TestIndexFileEndAtLastSlot checks that INDEXF.SYS's end of file moves to
+// its whole size when a header goes in the last block it maps, and not
+// before, as VMS 7.1's did (noteLastSlot): 22 blocks with 16 headers on an
+// RD51, end of file block 17 until the 16th file's header, then 23.
+func TestIndexFileEndAtLastSlot(t *testing.T) {
+	c, err := diskimage.Create(filepath.Join(t.TempDir(), "rd51.dsk"), 21600)
+	if err != nil {
+		t.Fatalf("diskimage.Create: %v", err)
+	}
+
+	defer func() { _ = c.Close() }()
+
+	if err := Initialize(c, InitializeOptions{Label: "SCR113", Headers: 16}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	vol, err := Mount(c)
+	if err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+
+	dev := vol.Devices[0]
+
+	ib, err := dev.IndexBitmap()
+	if err != nil {
+		t.Fatalf("IndexBitmap: %v", err)
+	}
+
+	eof := func() uint32 { return dev.IndexFile.Header.RecordAttributes.EndOfFileBlock }
+
+	for n := 1; ; n++ {
+		f, err := CreateHeader(dev, ib, NewFileHeader{Name: fmt.Sprintf("F%d.DAT", n), Version: 1})
+		if err != nil {
+			t.Fatalf("CreateHeader: %v", err)
+		}
+
+		number := f.Header.Fid.Number()
+
+		switch {
+		case number < 16 && eof() != 17:
+			t.Fatalf("with file %d made, INDEXF.SYS's end of file is block %d, want 17", number, eof())
+		case number == 16:
+			if eof() != 23 {
+				t.Fatalf("with file 16 made, INDEXF.SYS's end of file is block %d, want 23", eof())
+			}
+
+			if mappedBlocks(dev.IndexFile) != 22 {
+				t.Fatalf("INDEXF.SYS maps %d blocks, want 22", mappedBlocks(dev.IndexFile))
+			}
+
+			return
 		}
 	}
 }
