@@ -156,11 +156,28 @@ func (s *blockStream) ReadFull(n int) ([]byte, error) {
 	return out, nil
 }
 
-// readRest reads and consumes what ReadFull found was buffered when the file
-// ended before all it asked for.
-func (s *blockStream) readRest() []byte {
-	out := append([]byte{}, s.buf[s.bufOff:]...)
-	s.bufOff = len(s.buf)
+// readPastEnd reads and consumes n bytes when ReadFull found the file ended
+// before them: what was buffered, then the bytes that follow in the file's
+// blocks, past its valid length, as they are there; zeros past the last block
+// that can be read. The stream is then past the file's end.
+func (s *blockStream) readPastEnd(n int) []byte {
+	out := make([]byte, n)
+	have := copy(out, s.buf[s.bufOff:])
+	off := s.fetched
+	block := make([]byte, ondisk.BlockSize)
+
+	for have < n {
+		if s.file.ReadBlock(uint32(off/ondisk.BlockSize)+1, block) != nil {
+			break
+		}
+
+		c := copy(out[have:], block[off%ondisk.BlockSize:])
+		have += c
+		off += int64(c)
+	}
+
+	s.fetched += int64(n) - int64(len(s.buf)-s.bufOff)
+	s.buf, s.bufOff = nil, 0
 
 	return out
 }

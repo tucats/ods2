@@ -227,10 +227,11 @@ func (r *Reader) nextFixed() ([]byte, error) {
 	data, err := r.stream.ReadFull(r.fixedSize)
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		// The end of file falls inside the last record, as VMS's own
-		// FORRTL.EXE's does (FIX 512, its end of file mid-block). What
-		// the file has of the record is the record. VMS's $GET of one is
-		// unconfirmed.
-		return r.stream.readRest(), nil
+		// FORRTL.EXE's does (FIX 512, its end of file mid-block). VMS
+		// 7.1's $GET returns the whole record, the bytes past the end of
+		// file as the blocks hold them (govax's testdata/for81, round 3:
+		// FIX 24, one block, a 22nd record of 8 bytes and 16 zeros).
+		return r.stream.readPastEnd(r.fixedSize), nil
 	}
 
 	if err != nil {

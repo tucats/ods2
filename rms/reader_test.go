@@ -176,10 +176,11 @@ func TestReaderFixedTruncated(t *testing.T) {
 		t.Fatalf("Next() #1 = %q, want %q", first, "AAAA")
 	}
 
-	// What the file has of the last record is the record.
+	// The last record is whole, as VMS 7.1's $GET returns it: what the
+	// file has of it, then the bytes the block holds past the end of file.
 	second, err := r.Next()
-	if err != nil || !bytes.Equal(second, []byte("BB")) {
-		t.Fatalf("Next() #2 (cut short) = %q, %v, want %q", second, err, "BB")
+	if err != nil || !bytes.Equal(second, []byte("BB\x00\x00")) {
+		t.Fatalf("Next() #2 (cut short) = %q, %v, want %q", second, err, "BB\x00\x00")
 	}
 
 	if _, err := r.Next(); err != io.EOF {
