@@ -81,7 +81,7 @@ The Go packages in this project (and the CLI that uses them) have the following 
 - Initialize a new empty ODS-2 volume as a container file.
 - Mount a container file. By default, mounted readonly, but can be mounted
   for read/write.
-- Manager a "default directory" path.
+- Manage a "default directory" path.
 - Get a directory listing of files
 - Create directories, several levels at once, with an owner, protection,
   version limit, and allocation, laid out as VMS lays them out.
